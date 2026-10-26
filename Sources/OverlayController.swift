@@ -15,14 +15,9 @@ import ApplicationServices
 import CoreGraphics
 import SwiftUI
 
-@_silgen_name("CGSessionCopyCurrentDictionary")
-func CGSessionCopyCurrentDictionary() -> CFDictionary?
-
+/// CGSSessionScreenIsLocked 不在公开头文件里，只在锁屏时出现
 func sessionLocked() -> Bool {
-    let d = CGSessionCopyCurrentDictionary() as? [String: Any] ?? [:]
-    if let b = d["CGSSessionScreenIsLocked"] as? Bool { return b }
-    if let n = d["CGSSessionScreenIsLocked"] as? NSNumber { return n.boolValue }
-    return false
+    (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
 }
 
 /// 位于 shielding level 之上的窗口。不允许成为 key/main，避免抢走焦点。
