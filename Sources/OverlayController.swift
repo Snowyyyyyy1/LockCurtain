@@ -416,11 +416,18 @@ final class OverlayController {
     func forceHide() { hide() }
 
     // MARK: - 窗口构建
+    /// 窗口整体不透明度略低于 1，系统就不会认为遮罩挡住了下面的窗口。
+    /// 等于 1 时（实测 2026-10-26，macOS 26）：被遮罩完全盖住的窗口会从整屏截图里消失，
+    /// 遮罩显示后才打开的窗口和内容变化都截不到；app 也认为自己不可见，可能停止重绘。
+    /// 只设 isOpaque = false 不管用。0.999 透出的最多 0.255 个色阶，8 位颜色里取整为 0
+    private static let curtainAlpha: CGFloat = 0.999
+
     private func buildWindow(for screen: NSScreen) -> (NSWindow, CALayer) {
         let w = OverlayWindow(contentRect: screen.frame, styleMask: [], backing: .buffered, defer: false)
         w.animationBehavior = .none
         w.backgroundColor = .black
         w.isOpaque = true
+        w.alphaValue = Self.curtainAlpha
         w.hasShadow = false
         w.ignoresMouseEvents = true              // 鼠标穿透到下层，交给全局监听处理
         w.level = NSWindow.Level(rawValue: currentLevel)
@@ -504,6 +511,7 @@ final class OverlayController {
         w.animationBehavior = .none
         w.backgroundColor = .black
         w.isOpaque = true
+        w.alphaValue = Self.curtainAlpha
         w.hasShadow = false
         w.ignoresMouseEvents = true
         w.level = NSWindow.Level(rawValue: currentLevel)
