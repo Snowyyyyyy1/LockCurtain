@@ -18,10 +18,11 @@
 //
 // 豁免名单（严格模式下才生效）：
 //   * 可执行文件路径含 agentPathHints 里的片段（常见自动化工具）
-//   * 额外 pid：/tmp/lockcurtain-exempt-pids.txt（每行一个 pid）
+//   * 额外 pid：~/Library/Application Support/LockCurtain/exempt-pids.txt（每行一个 pid）
 //   * 环境变量 LOCKCURTAIN_EXEMPT_PIDS="123,456"
 //
-// 用 .listenOnly 的 CGEvent tap，不消费事件，事件照常传给下层窗口。
+// 用可拦截的 CGEvent tap：判为真人的输入被吞掉，不会落到 agent 正在操作的窗口上；
+// 合成输入照常放行。tap 只在遮罩显示期间存在，撤遮罩即停。
 
 import Foundation
 import CoreGraphics
@@ -72,7 +73,7 @@ final class CurtainInputFilter {
                 if let v = pid_t(part.trimmingCharacters(in: .whitespaces)) { s.insert(v) }
             }
         }
-        if let txt = try? String(contentsOfFile: "/tmp/lockcurtain-exempt-pids.txt", encoding: .utf8) {
+        if let txt = try? String(contentsOf: AppPaths.file("exempt-pids.txt"), encoding: .utf8) {
             for line in txt.split(separator: "\n") {
                 if let v = pid_t(line.trimmingCharacters(in: .whitespaces)) { s.insert(v) }
             }
@@ -89,34 +90,42 @@ final class CurtainInputFilter {
         cachedExempt = Self.loadExemptPIDs()
         cacheTime = Date()
 
-        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-                               | (1 << CGEventType.flagsChanged.rawValue)
-                               | (1 << CGEventType.leftMouseDown.rawValue)
-                               | (1 << CGEventType.rightMouseDown.rawValue)
-                               | (1 << CGEventType.otherMouseDown.rawValue)
+        // 按下类事件 + 滚轮触发 onPhysical；抬起类事件只拦截，免得落到下层窗口
+        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged,
+                                    .leftMouseDown, .leftMouseUp,
+                                    .rightMouseDown, .rightMouseUp,
+                                    .otherMouseDown, .otherMouseUp,
+                                    .scrollWheel]
+        let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
 
-        let cb: CGEventTapCallBack = { _, _, event, refcon in
+        let cb: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
             let me = Unmanaged<CurtainInputFilter>.fromOpaque(refcon).takeUnretainedValue()
+
+            // 回调超时或用户输入过多时系统会停用 tap，不重新启用的话退出路径就没了
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                NSLog("CurtainInputFilter: tap 被系统停用，重新启用")
+                if let t = me.tap { CGEvent.tapEnable(tap: t, enable: true) }
+                return Unmanaged.passUnretained(event)
+            }
+
             let srcPID = pid_t(event.getIntegerValueField(.eventSourceUnixProcessID))
 
-            if srcPID == 0 {
-                me.onPhysical?()                        // 硬件
-            } else if me.strictMode {
-                if me.isExempt(srcPID) {
-                    me.onSynthetic?(srcPID, "exempt")
-                } else {
-                    me.onPhysical?()                    // 严格模式：别的进程算真人
-                }
-            } else {
-                me.onSynthetic?(srcPID, "synthetic")    // 宽松模式：一律放行
+            // 硬件输入算真人；严格模式下非豁免进程的合成输入也算
+            let human = srcPID == 0 || (me.strictMode && !me.isExempt(srcPID))
+            guard human else {
+                me.onSynthetic?(srcPID, me.strictMode ? "exempt" : "synthetic")
+                return Unmanaged.passUnretained(event)  // 合成输入：放行
             }
-            return Unmanaged.passUnretained(event)
+
+            let isRelease = [.keyUp, .leftMouseUp, .rightMouseUp, .otherMouseUp].contains(type)
+            if !isRelease { me.onPhysical?() }
+            return nil                                  // 真人输入：吞掉
         }
 
         guard let t = CGEvent.tapCreate(tap: .cgSessionEventTap,
                                         place: .headInsertEventTap,
-                                        options: .listenOnly,
+                                        options: .defaultTap,
                                         eventsOfInterest: mask,
                                         callback: cb,
                                         userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
@@ -138,4 +147,7 @@ final class CurtainInputFilter {
     }
 
     var isRunning: Bool { tap != nil }
+
+    /// tap 已安装且当前处于启用状态，即按键 / 点击退出路径可用
+    var isHealthy: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 }

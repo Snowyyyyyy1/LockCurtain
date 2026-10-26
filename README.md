@@ -1,54 +1,206 @@
 # LockCurtain
 
-macOS 锁屏壁纸遮罩。锁屏时在每块屏幕上覆盖一层「当前壁纸 + 压暗 + 头像 + 提示文案」，
+macOS 锁屏壁纸遮罩。锁屏时在每块屏幕上覆盖一层「当前壁纸 + 压暗 + 机械眼 + 提示文案」，
 并把遮罩做成对屏幕捕获透明，让后台自动化任务照常工作。
 
-纯视觉层：不改变系统锁屏状态，不干预输入目标，不处理任何账号信息。
+遮罩显示期间只拦截真人的键鼠输入，程序合成的输入照常放行；不处理任何账号信息。
+离开模式和看门狗会调用系统锁屏，除此之外不改变锁屏状态。
 
 ## 快速开始
 
 ```bash
 cd ~/Code/LockCurtain
 ./build.sh
-open -n LockCurtain.app
+open LockCurtain.app
 ```
 
-菜单栏出现 🌙，点开：
+不要用 `open -n`，它会另起一个实例。菜单栏出现幕布图标：拉开表示没有遮罩，合上表示遮罩显示中。点开：
 
 | 菜单项 | 作用 |
 |---|---|
+| 进入离开模式 | 不锁屏，遮罩盖在桌面上让 agent 干活；真人一碰就先锁屏再撤遮罩，见下文 |
 | 锁屏遮罩预览 | 立即显示遮罩，不用真的锁屏 |
 | 紧急关闭遮罩 | 任何时候强制撤掉遮罩 |
-| 模拟锁屏 | 显示遮罩，3 秒后触发系统锁屏 |
-| 申请屏幕录制权限 | 读取壁纸所需 |
-| 申请辅助功能权限 | 全局按键监听所需 |
-| 抓取当前壁纸 | 每块屏存一张到 `/tmp/lockcurtain-wallpaper-menu-<i>.png` |
-| 打印权限状态 | 查看当前授权 |
+| 设置…（⌘,） | 打开设置窗口 |
+
+## 设置窗口
+
+| 页 | 内容 |
+|---|---|
+| 通用 | 在 Dock 中显示（默认关）、在菜单栏中显示（默认开）、锁屏时显示遮罩（默认开）、遮罩图案 |
+| 离开模式 | 屏幕常亮、亮度调到最低，见「离开模式」；立即进入离开模式 |
+| 规则 | 满足条件时自动进入离开模式，见「规则」 |
+| 远程控制 | 命令行路径和命令、快捷指令的配置步骤 |
+| 权限 | 屏幕录制、辅助功能的授权状态和申请按钮；抓取当前壁纸（每块屏存到 `/tmp/lockcurtain-wallpaper-menu-<i>.png`） |
+
+**两个图标都隐藏后怎么回到设置：** 在访达或启动台里再打开一次 LockCurtain，
+或者运行 `--send settings`。再次打开时，系统会把 reopen 事件送给已经在运行的实例，不会另起一个（实测）。
+
+图标开关存在 UserDefaults 里，运行中的 App 用 KVO 监听，所以从外面改也会立即生效：
+
+```bash
+defaults write dev.local.lockcurtain showDockIcon -bool true
+defaults write dev.local.lockcurtain showMenuBarIcon -bool false
+```
+
+**遮罩图案**：机械眼（默认）、Sentry 之眼、头像（原来仿系统锁屏的圆圈）、不显示。
+通用页里点缩略图切换，下次显示遮罩时生效；也可以 `defaults write dev.local.lockcurtain curtainArt mechEye`
+（取值 `mechEye` / `sentryEye` / `avatar` / `none`）。动画图案都按时间实时画，每秒 30 帧，
+加新图案见 `Sources/CurtainArt.swift` 文件头。
+
+## 规则
+
+一条规则由若干条件组成，**开着的条件全部满足**时进入离开模式。一个条件都没开的规则不会触发。
+
+| 条件 | 说明 |
+|---|---|
+| 空闲 N 分钟 | 键盘、鼠标 N 分钟没动（`CGEventSource.secondsSinceLastEventType`） |
+| 某个 app 或进程在运行 | 列表里任意一个在运行即可。可以填 app 的 bundle ID，也可以填进程名：命令行工具没有 bundle ID，比如 `claude` 就要填进程名 |
+| 时间段 | 起止时间加星期几。允许跨午夜，跨过去的后半夜算开始那天 |
+| 接着电源 | 用电池时不触发 |
+
+触发方式：
+
+- **只在条件刚满足的那一刻触发一次。** 你回来撤掉遮罩后，条件要先变成不满足、再重新满足，才会再次触发。
+  否则「某 app 在运行」这类会一直成立的条件，在你撤掉遮罩后会马上又把遮罩盖上。
+- **新建或修改规则后的第一次检查不触发**，App 启动后的第一次检查也不触发。
+  所以改出一条正好满足的规则时，不会把正在改设置的人盖住。
+- **锁屏期间暂停检查，状态保持不变。** 否则解锁的那一刻条件会从「不满足」变成「满足」而触发，
+  人一碰又锁屏，形成死循环。
+- 条件结束后（比如 agent 退出了），遮罩保持，等人回来。
+
+规则每 5 秒检查一次，存在 `~/Library/Application Support/LockCurtain/rules.json`。
+判断逻辑是纯函数（`Sources/Rules.swift`），自测在 `Tests/RulesSelfTest.swift`。
 
 ## 怎么退出遮罩
 
-遮罩在 `CGShieldingWindowLevel() + 1`，覆盖一切。三条退出路径：
+遮罩放在层级 400 的私有空间里（不可用时退回 `CGShieldingWindowLevel() + 1`），覆盖一切。三条退出路径：
 
 1. **按任意键** —— 全局按键监听
 2. **点任意鼠标键** —— 全局鼠标监听
-3. **看门狗** —— 超过 120 秒强制撤掉，防止监听失效时锁死
+3. **看门狗** —— 前两条不可用（缺辅助功能权限、监听被系统停用）连续超过 120 秒时，先锁屏再撤遮罩，防止锁死；锁屏失败也照样撤
 
-前两条依赖辅助功能权限。都失效时用菜单「紧急关闭遮罩」，或 `pkill -9 -f LockCurtain`。
+前两条依赖辅助功能权限。监听正常时遮罩不限时长，被系统停用会自动重新启用；
+真实锁屏下盲输密码解锁，遮罩也会随解锁通知撤掉。都失效时用菜单「紧急关闭遮罩」，或 `pkill -9 -f LockCurtain`。
+
+真人的按键、点击、滚轮会被吞掉，不会落到遮罩下面 agent 正在操作的窗口上。
+遮罩刚显示的 1 秒内不认真人输入（避免点菜单那一下的余波、触控板惯性直接把它撤掉），但照样吞掉。
+
+真人输入之后怎么撤，取决于遮罩是怎么出现的：
+
+| 模式 | 怎么出现 | 真人输入之后 |
+|---|---|---|
+| 锁屏 | 系统锁屏后自动盖上 | 直接撤，露出系统锁屏 |
+| 预览 | 菜单「锁屏遮罩预览」或 `--preview` | 直接撤，回到桌面 |
+| 离开 | 菜单「进入离开模式」、规则触发或 `--send away` | 先锁屏，等锁屏界面出来再撤 |
+
+## 离开模式
+
+真实锁屏下自动化工具能不能照常工作没有保证，离开模式换了个思路：**不锁屏**，
+遮罩盖在已解锁的桌面上，agent 在正常会话里干活；安全由 LockCurtain 负责——
+真人一碰键鼠，输入被吞掉，同时调 `SACLockScreenImmediate` 锁屏，等系统锁屏界面（时钟、密码框）显示出来、淡入做完才撤遮罩
+（`com.apple.screenLockUIIsShown` 之后再等 1.5 秒，通知最多等 5 秒）。系统的「已锁」标志在锁屏界面出来前约 2 秒就变了，不能只看它。
+路过的人看不到桌面、碰不到任何窗口，按一下只会进入系统锁屏。
+
+防休眠（设置窗口「离开模式」页，只在离开模式生效，真实锁屏时不防，免得锁屏过夜的 Mac 永远不睡）：
+
+| 设置 | 默认 | 作用 |
+|---|---|---|
+| 屏幕常亮 | 开 | 开：`PreventUserIdleDisplaySleep`，屏幕不熄。关：只 `PreventUserIdleSystemSleep`，允许熄屏；但熄屏后如果系统设置了「立即要求密码」，会话会被锁上 |
+| 亮度调到最低 | 关 | 进入时把屏幕亮度调到 0，撤遮罩时恢复。走 DisplayServices 私有 API，实测只有内置屏支持，外接屏跳过。进程被 `kill -9` 时来不及恢复，需手动调回 |
+
+合盖仍会让 MacBook 休眠，防休眠断言管不了这一条。
+
+## 控制接口
+
+给 agent、脚本和远程控制用。App 内只有一套命令处理逻辑，本机走 Unix 域套接字，
+App 自己不监听任何网络端口；远程控制都是在外面调用这条命令行。
+
+```bash
+LC=~/Code/LockCurtain/LockCurtain.app/Contents/MacOS/LockCurtain
+$LC --send away      # 进入离开模式（App 没运行时会先拉起）
+$LC --send preview   # 显示预览遮罩（同上）
+$LC --send hide      # 撤遮罩；离开模式下先锁屏再撤
+$LC --send status    # 查询状态
+$LC --send settings  # 打开设置窗口（App 没运行时会先拉起）
+```
+
+一行命令进，一行 JSON 出；回复里 `ok` 为 true 时退出码 0，否则 1：
+
+```json
+{"locked":false,"mode":"away","ok":true,"running":true,"exitPathsHealthy":true,"level":2147483629,"space":true}
+```
+
+`mode` 取值 `none` / `lock` / `preview` / `away`；`exitPathsHealthy`、`level`（遮罩当前层级）和 `space`（遮罩是否在私有空间里）只在遮罩显示时出现。
+App 没运行时 `status` / `hide` 不会拉起它，直接返回 `{"ok":true,"running":false}`。
+
+**安全约束：任何命令都不会露出已解锁的桌面。** 离开模式下的 `hide` 和真人输入一样先锁屏；
+没有远程解锁。控制通道就算被人拿到，最多只能把遮罩拉起来或者锁屏。
+
+套接字在 `~/Library/Application Support/LockCurtain/control.sock`，权限 0600，
+服务端还用 `getpeereid` 校验对方 uid，只接受当前用户。多个实例同时运行时，
+靠 `control.lock` 文件锁决定由谁提供服务。在沙箱里运行的 agent 可能连不上这个套接字，
+需要把路径加进沙箱白名单，或者在沙箱外调用。
+
+### 远程控制：快捷指令 + SSH
+
+```
+iPhone 快捷指令「通过 SSH 运行脚本」 → 组网（如 Surge Ponte） → Mac 的 sshd → $LC --send away
+```
+
+1. Mac 打开「系统设置 → 通用 → 共享 → 远程登录」，建议只允许密钥登录
+2. 快捷指令里添加「通过 SSH 运行脚本」，脚本填上面那条完整路径的命令，认证方式选 SSH 密钥
+3. 远程开启要求 Mac 是醒着的：组网唤醒不了休眠的 Mac；进入离开模式之后才会防休眠
 
 ## 界面构成
 
 ```
 NSWindow  styleMask = 0
-          level     = 2147483629
+          level     = 2147483629（动态，见下）
+          space     = SkyLight 私有空间，绝对层级 400（见下）
           ignoresMouseEvents = true
           canBecomeKey = false
 └── contentView
     ├── wallpaperView   layer.contents = CGImage, contentsGravity = resizeAspectFill
     ├── dimView         black alpha 0.28
-    ├── avatarView      85x85 圆角 39，2pt 白色描边 alpha 0.92，内部图标 44x44
+    ├── artView         NSHostingView(CurtainArtView)：眼睛 160x160 centerY -88，30 帧/秒，
+    │                   头像 85x85 centerY -60；系统开了「减弱动态效果」时停在一帧
     └── textStack       15pt medium / 12pt semibold，宽 194 / 186，
                         vertical + centerX，spacing 15，centerY +33.5
 ```
+
+### 私有空间（层级 400）
+
+macOS 先按空间（Space）的绝对层级叠放窗口：普通桌面 0、锁屏 300、锁屏上的通知 400；
+同一个空间里，才按窗口层级排。遮罩显示时会新建一个绝对层级 400 的空间，把所有遮罩窗口放进去
+（`SkyLightSpace.swift`，做法同 [Lakr233/SkyLightWindow](https://github.com/Lakr233/SkyLightWindow)）。
+这样普通空间里的窗口，层级再高也盖不过遮罩。
+
+实测（2026-10-26，macOS 26，主屏和外接屏）：
+
+| | 普通空间，层级 `shield+1` | 私有空间 400 |
+|---|---|---|
+| 别的窗口在普通空间、层级 `Int32.max` | 被盖住 | 在上面；遮罩的窗口层级设成 0 也一样 |
+| 锁屏 | 锁屏界面的窗口更高（日志里见过 2147483630、2147483646），要靠下面的动态层级保护抬上去 | 直接在锁屏界面上面 |
+| `excludingWindows` 抓屏 | 正常 | 正常 |
+
+这是私有 API，系统升级可能失效，而且失效时不报错。所以每次放进去之后都用 `SLSCopySpacesForWindows`
+查一遍（掩码要用 `0xFFFF`，实测 7 查不到自建的空间）。查不到就把遮罩窗口重建成普通窗口，
+本次运行不再用私有空间，只靠窗口层级和下面的动态层级保护。加 `--no-space` 可以直接关闭。
+
+### 动态层级保护
+
+固定层级会被别的工具盖住：录屏、投屏工具的遮罩或镜像窗可以把层级设到 `Int32.max`。
+镜像窗显示的是屏幕的真实内容，所以一旦盖在遮罩上面，就会把下层桌面露出来。
+
+遮罩显示期间，每秒查一次 `CGWindowListCopyWindowInfo(.optionOnScreenAboveWindow, 我们最靠后的窗口)`。
+只要发现别的进程的不透明窗口压在我们上面，就把全部遮罩窗口抬到「对方层级 + 1」，并重新排到最前。
+
+- 层级封顶 `Int32.max`。超过之后会溢出成负数，窗口沉到最底层（实测）。
+- 到顶之后如果还有平级的窗口，靠重新排到最前压住对方：层级相同时，后排到前面的窗口在上（实测）。
+- 抬高之后不会降回来，每次 `show()` 都从 2147483629 重新开始。
+- 最坏情况下，别的窗口会在遮罩上露出不到 1 秒。
+- 遮罩在私有空间里时照样运行，作为私有空间失效时的后备。
 
 ## 壁纸层怎么来的
 
@@ -91,7 +243,7 @@ let image = try await SCScreenshotManager.captureImage(contentFilter: filter, co
 用 `kCGEventSourceUnixProcessID`（field 41）区分输入来源：
 
 ```
-field41 == 0  → 硬件（真人）      → 撤掉遮罩
+field41 == 0  → 硬件（真人）      → 吞掉，撤掉遮罩
 field41 != 0  → 程序合成的事件    → 放行
 ```
 
@@ -103,7 +255,12 @@ field41 != 0  → 程序合成的事件    → 放行
 | `osascript` System Events 按键 | 遮罩保持 |
 | cua-driver（移动 / 按键 / 点击） | 遮罩保持 |
 
-想改成「除自己之外谁动键鼠都算真人」，设 `LOCKCURTAIN_STRICT=1`。
+想改成「除自己之外谁动键鼠都算真人」，设 `LOCKCURTAIN_STRICT=1`。严格模式的豁免名单：
+可执行文件路径含 cua-driver 等关键词的进程、`LOCKCURTAIN_EXEMPT_PIDS="123,456"`，
+以及 `~/Library/Application Support/LockCurtain/exempt-pids.txt`（每行一个 pid）。
+
+运行时文件都放在 `~/Library/Application Support/LockCurtain/`，不放 `/tmp`：
+`/tmp` 所有用户共享，别的用户能往里写豁免 pid、伪造 `overlay.json`。
 
 ### 抓屏：对捕获透明
 
@@ -156,19 +313,21 @@ layer.contentsRect = CGRect(x: CGFloat(w - 1) / CGFloat(w), y: 0,
 ```
 
 结果：`screencapture`、ScreenCaptureKit 整屏、以及 cua-driver 的整屏截图，
-拍到的都是真实桌面，画面里没有遮罩的头像和文案。
+拍到的都是真实桌面，画面里没有遮罩的机械眼和文案。
 
 想关闭这个行为（例如希望录屏时对方能看到遮罩），加 `--no-stealth`。
 
 ### 如果确实需要显式排除
 
-遮罩会把 windowID 写到 `/tmp/lockcurtain-overlay.json`：
+遮罩会把 windowID 写到 `~/Library/Application Support/LockCurtain/overlay.json`：
 
 ```json
 { "pid": 8398, "windowIDs": [51622, 51623], "updatedAt": "2026-10-25T07:20:32Z" }
 ```
 
-配合封装好的接口使用：
+外部工具读这个文件，用 `SCContentFilter(display:excludingWindows:)` 把这些窗口排除掉。
+`Sources/CurtainCapture.swift` 里的 `CurtainCapture.displayExcludingCurtain()` 是参考实现，
+它编译在本 App 内，外部工具调不到，照抄到自己的工具里即可：
 
 ```swift
 let image = try await CurtainCapture.displayExcludingCurtain()
@@ -243,26 +402,46 @@ ad-hoc（codesign --sign -）
 
 ```
 LockCurtain/
-├── build.sh                      编译 + 签署 + 权限检查
+├── build.sh                      图标 + 编译 + 签署 + 权限检查
 ├── README.md
 ├── Sources/
 │   ├── main.swift                入口，命令行参数分发
-│   ├── AppDelegate.swift         菜单栏、权限申请、抓取壁纸
+│   ├── AppDelegate.swift         主菜单、菜单栏、Dock 图标、reopen、命令分发
+│   ├── Preferences.swift         通用设置的 UserDefaults key
+│   ├── SettingsWindow.swift      设置窗口（SwiftUI）：通用 / 离开模式 / 远程控制 / 权限
+│   ├── RulesPane.swift           设置窗口的规则页和规则编辑器
+│   ├── Rules.swift               规则模型、条件判断、边沿触发（纯函数）
+│   ├── RuleEngine.swift          规则存储、系统状态采集、定时检查
 │   ├── OverlayController.swift   遮罩窗口、锁屏监听、退出路径
+│   ├── SkyLightSpace.swift       把遮罩放进层级 400 的私有空间（私有 API，失效时退回）
+│   ├── CurtainArt.swift          遮罩图案的列表和视图、Sentry 之眼
+│   ├── MechEye.swift             遮罩上的机械眼（SwiftUI Canvas，按时间 t 画帧）
 │   ├── WallpaperCapture.swift    壁纸采集（纯 async）
 │   ├── CurtainInputFilter.swift  真人输入 / 合成输入判定
-│   └── CurtainCapture.swift      带排除的整屏抓取 + windowID 发布
+│   ├── CurtainCapture.swift      带排除的整屏抓取 + windowID 发布 + 运行时文件路径
+│   ├── PowerGuard.swift          离开模式的防休眠、亮度
+│   ├── ControlServer.swift       控制接口：Unix 域套接字服务端 + --send 命令行客户端
+│   └── ScreenChangeCoalescer.swift  屏幕变化通知合并 + 布局差异比对
+├── Tests/
+│   ├── ScreenChangeCoalescerSelfTest.swift  合并器自测，运行方式见文件头
+│   └── RulesSelfTest.swift       规则自测，运行方式见文件头
+├── Tools/
+│   ├── make-icon.swift           用代码画 App 图标，build.sh 调用
+│   └── EyePreview.swift          离线渲染动画图案的拼图和 GIF，运行方式见文件头
+├── proposals/                    未合入的改动提案；已合入的在 archive/
 └── LockCurtain.app               构建产物
 ```
 
 ## 命令行
 
 ```bash
-open -n LockCurtain.app                        # 正常运行
+open LockCurtain.app                           # 正常运行；已在运行时打开设置窗口
 open -n LockCurtain.app --args --status        # 打印系统权限
-open -n LockCurtain.app --args --preview       # 立即显示遮罩并常驻
+open -n LockCurtain.app --args --preview       # 立即显示遮罩并常驻（直到按键或点击）
 open -n LockCurtain.app --args --capture       # 抓取所有屏幕壁纸
 open -n LockCurtain.app --args --no-stealth    # 关闭抓屏透明
 open -n LockCurtain.app --args --level 3000    # 自定义窗口层级
+open -n LockCurtain.app --args --no-space      # 不用私有空间，只靠窗口层级
+LockCurtain.app/Contents/MacOS/LockCurtain --send status   # 控制运行中的实例，见「控制接口」
 ```
 

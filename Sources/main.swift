@@ -7,6 +7,14 @@ import AppKit
 
 let args = CommandLine.arguments
 
+// 控制套接字的对端提前断开时，写入会触发 SIGPIPE 直接杀掉进程（实测退出码 141）
+signal(SIGPIPE, SIG_IGN)
+
+// 命令行客户端：LockCurtain --send away|preview|hide|status，发给正在运行的实例后退出
+if let i = args.firstIndex(of: "--send") {
+    exit(ControlClient.send(i + 1 < args.count ? args[i + 1] : "status"))
+}
+
 if args.contains("--request-permissions") { RunMode.shared = .requestPermissions }
 else if args.contains("--status")         { RunMode.shared = .status }
 else if args.contains("--capture")        { RunMode.shared = .capture }
@@ -18,6 +26,6 @@ MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
-    app.setActivationPolicy(.accessory)
+    app.setActivationPolicy(Prefs.showDockIcon && RunMode.shared == .normal ? .regular : .accessory)
     app.run()
 }

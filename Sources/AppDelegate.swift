@@ -33,7 +33,14 @@ func writeStatus(_ s: String) { try? s.write(toFile: statusPath, atomically: tru
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let overlay = OverlayController()
+    private lazy var control = ControlServer { [weak self] cmd in await self?.handleCommand(cmd) ?? [:] }
     private var permissionTimer: Timer?
+    private var prefObservers: [NSKeyValueObservation] = []
+    private let rules = RuleStore()
+    private lazy var ruleEngine = RuleEngine(store: rules) { [overlay] _ in overlay.enterAway() }
+    private lazy var settings = SettingsWindowController(store: rules, actions: AppActions(
+        enterAway: { [overlay] in overlay.enterAway() },
+        grabWallpaper: { [overlay] in overlay.grabWallpaperNow() }))
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSLog("LockCurtain launched")
@@ -51,18 +58,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         case .preview:
             // 直接显示遮罩并常驻，不依赖菜单栏自动化（测试/脚本用）
-            overlay.show(autoHide: false)
+            overlay.show(.preview)
             setupStatusItem()
 
 
 
 
         case .normal:
+            setupMainMenu()
             setupStatusItem()
+            overlay.onModeChange = { [weak self] mode in self?.updateStatusIcon(showing: mode != nil) }
             overlay.watchLockState()
+            control.start()
+            ruleEngine.start()
+            // KVO 也能收到其他进程（defaults write）的修改，didChangeNotification 只管本进程
+            prefObservers = [
+                UserDefaults.standard.observe(\.showDockIcon) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyAppearance() }
+                },
+                UserDefaults.standard.observe(\.showMenuBarIcon) { [weak self] _, _ in
+                    DispatchQueue.main.async { self?.applyAppearance() }
+                },
+            ]
+            applyAppearance()
             writeStatus(collectStatus("normal"))
         }
     }
+
+    /// 菜单栏和 Dock 图标都隐藏时，在访达 / 启动台里再次打开 App 会走到这里（实测送到已运行的实例）
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if RunMode.shared == .normal { settings.show() }
+        return false
+    }
+
+    private func handleCommand(_ cmd: String) async -> [String: Any] {
+        guard cmd == "settings" else { return await overlay.handleCommand(cmd) }
+        settings.show()
+        return ["ok": true, "running": true]
+    }
+
+    // ---------- Dock / 菜单栏图标 ----------
+    private func applyAppearance() {
+        let policy: NSApplication.ActivationPolicy = Prefs.showDockIcon ? .regular : .accessory
+        if NSApp.activationPolicy() != policy {
+            NSApp.setActivationPolicy(policy)
+            settings.bringToFrontIfVisible()
+        }
+        statusItem?.isVisible = Prefs.showMenuBarIcon
+    }
+
+    private func updateStatusIcon(showing: Bool) {
+        let img = NSImage(systemSymbolName: showing ? "curtains.closed" : "curtains.open",
+                          accessibilityDescription: showing ? "遮罩显示中" : "LockCurtain")
+        img?.isTemplate = true
+        statusItem?.button?.image = img
+        statusItem?.button?.title = img == nil ? "🌙" : ""
+    }
+
+    /// Dock 图标显示时才看得到这个菜单栏；隐藏时 ⌘, ⌘Q 和输入框里的 ⌘C ⌘V 也靠它
+    private func setupMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "关于 LockCurtain", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let s = appMenu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
+        s.target = self
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 LockCurtain", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 LockCurtain", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "编辑")
+        edit.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        let winItem = NSMenuItem()
+        let win = NSMenu(title: "窗口")
+        win.addItem(withTitle: "关闭", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        win.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winItem.submenu = win
+        main.addItem(winItem)
+        NSApp.windowsMenu = win
+
+        NSApp.mainMenu = main
+    }
+
+    @objc private func openSettings() { settings.show() }
 
     // ---------- 权限申请 ----------
     private var permissionWindow: NSWindow?
@@ -159,8 +253,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // ---------- 菜单栏 ----------
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "🌙"
+        statusItem = item
+        updateStatusIcon(showing: false)
         let menu = NSMenu()
+
+        let away = NSMenuItem(title: "进入离开模式", action: #selector(enterAway), keyEquivalent: "")
+        away.target = self; menu.addItem(away)
 
         let pv = NSMenuItem(title: "锁屏遮罩预览", action: #selector(toggleOverlay), keyEquivalent: "")
         pv.target = self; menu.addItem(pv)
@@ -168,61 +266,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let fh = NSMenuItem(title: "紧急关闭遮罩", action: #selector(forceHideOverlay), keyEquivalent: "")
         fh.target = self; menu.addItem(fh)
 
-        let sim = NSMenuItem(title: "模拟解锁 → 3 秒后 ⌃⌘Q", action: #selector(simulateUnlock), keyEquivalent: "")
-        sim.target = self; menu.addItem(sim)
-
         menu.addItem(.separator())
-
-        let sr = NSMenuItem(title: "申请屏幕录制权限", action: #selector(askSR), keyEquivalent: "")
-        sr.target = self; menu.addItem(sr)
-        let ax = NSMenuItem(title: "申请辅助功能权限", action: #selector(askAX), keyEquivalent: "")
-        ax.target = self; menu.addItem(ax)
-        let cap = NSMenuItem(title: "抓取当前壁纸", action: #selector(grabWallpaper), keyEquivalent: "")
-        cap.target = self; menu.addItem(cap)
-
-        menu.addItem(.separator())
-        let st = NSMenuItem(title: "打印 TCC 状态", action: #selector(printStatus), keyEquivalent: "")
+        let st = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         st.target = self; menu.addItem(st)
 
         menu.addItem(.separator())
-        let q = NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.addItem(q)
+        menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
         item.menu = menu
-        statusItem = item
     }
 
     @objc private func forceHideOverlay() { overlay.forceHide() }
 
     @objc private func toggleOverlay() { overlay.togglePreview() }
-    @objc private func simulateUnlock() {
-        overlay.show(autoHide: false)
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(3))
-            OverlayController.relock()
-        }
-    }
-
-    @objc private func askSR() {
-        NSApp.activate(ignoringOtherApps: true)
-        let ok = CGRequestScreenCaptureAccess()
-        alert("屏幕录制", ok ? "已授权 ✅" : "请在「系统设置 → 隐私与安全性 → 屏幕录制」勾选 LockCurtain，然后重启本 App。")
-    }
-    @objc private func askAX() {
-        NSApp.activate(ignoringOtherApps: true)
-        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(opts)
-        alert("辅助功能", "请在「系统设置 → 隐私与安全性 → 辅助功能」勾选 LockCurtain。")
-    }
-    @objc private func grabWallpaper() { overlay.grabWallpaperNow() }
-    @objc private func printStatus() { alert("TCC 状态", collectStatus("menu")) }
-
-    private func alert(_ t: String, _ m: String) {
-        NSApp.activate(ignoringOtherApps: true)
-        let a = NSAlert()
-        a.messageText = t
-        a.informativeText = m
-        a.addButton(withTitle: "好")
-        a.runModal()
-    }
+    @objc private func enterAway() { overlay.enterAway() }
 }

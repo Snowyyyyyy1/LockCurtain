@@ -23,11 +23,11 @@ actor WallpaperStore {
     func store(_ id: CGDirectDisplayID, _ img: CGImage) { cache[id] = img }
     func invalidate() { cache.removeAll(); inflight.removeAll() }
 
-    /// 抓一次，不重复并发；失败返回 nil（调用方退回黑底）
+    /// 每次都重新抓（壁纸可能已更换），不重复并发；
+    /// 失败时退回上次的缓存，都没有返回 nil（调用方退回黑底）
     func image(for screen: NSScreen, content: SCShareableContent?, scale: CGFloat) async -> CGImage? {
         let id = screen.displayID
-        if let c = cache[id] { return c }
-        if let t = inflight[id] { return await t.value }
+        if let t = inflight[id] { return await t.value ?? cache[id] }
 
         let task = Task<CGImage?, Never> { [weak self] in
             do {
@@ -45,7 +45,7 @@ actor WallpaperStore {
         inflight[id] = task
         let img = await task.value
         inflight[id] = nil
-        return img
+        return img ?? cache[id]
     }
 }
 
