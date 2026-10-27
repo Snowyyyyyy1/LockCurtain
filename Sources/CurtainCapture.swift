@@ -6,7 +6,7 @@
 // 要拿到真实内容，必须在 SCContentFilter 里用 excludingWindows 把遮罩窗口排除掉。
 //
 // 抓法对比（--no-stealth 时）：
-//   不排除窗口      → 截到遮罩（壁纸 + 头像 + 文案）
+//   不排除窗口      → 截到遮罩（壁纸 + 图案 + 文案）
 //   显式排除遮罩窗口 → 截到真实桌面（前台窗口、菜单栏、Dock 全部正常）
 //
 // 遮罩会把自己的 windowID 写进 ~/Library/Application Support/LockCurtain/overlay.json，

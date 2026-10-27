@@ -84,11 +84,15 @@ enum MechEye {
 
     // MARK: - 绘制
 
-    /// 画布中心为原点，半径 120 的坐标系
-    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double) {
+    /// 把画布换成中心为原点、半径 120 的坐标系；所有图案都在这个坐标系里画
+    static func unitSpace(_ g: inout GraphicsContext, _ size: CGSize) {
         let s = min(size.width, size.height) / 240
         g.translateBy(x: size.width / 2, y: size.height / 2)
         g.scaleBy(x: s, y: s)
+    }
+
+    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double) {
+        unitSpace(&g, size)
         let p = pose(t)
 
         drawHousing(&g)
@@ -117,6 +121,20 @@ enum MechEye {
               blue: Double(hex & 0xff) / 255, opacity: a)
     }
 
+    /// 拉丝金属环的反光，锥形渐变用
+    static let brushed = Gradient(colors: [0x8A8F98, 0xDCE0E6, 0x6B7079, 0xC4C9D1, 0x777C85, 0xE8EBEF, 0x70757E, 0xB8BDC5, 0x8A8F98].map { rgb($0) })
+
+    /// 一字螺丝，slot 是槽口方向（弧度）
+    static func screw(_ g: inout GraphicsContext, _ c: CGPoint, r: Double = 4.2, slot: Double) {
+        let k = r / 4.2
+        g.fill(circle(r, c), with: .radialGradient(Gradient(colors: [rgb(0xF2F4F7), rgb(0x8C919A), rgb(0x4A4E55)]),
+                                                   center: CGPoint(x: c.x - 1.2 * k, y: c.y - 1.2 * k), startRadius: 0, endRadius: 4.6 * k))
+        var p = Path()
+        p.move(to: CGPoint(x: c.x + 2.8 * k * cos(slot), y: c.y + 2.8 * k * sin(slot)))
+        p.addLine(to: CGPoint(x: c.x - 2.8 * k * cos(slot), y: c.y - 2.8 * k * sin(slot)))
+        g.stroke(p, with: .color(.black.opacity(0.6)), lineWidth: k)
+    }
+
     /// 外壳：拉丝金属环 + 刻度 + 6 颗螺丝 + 一圈橙色余光
     static func drawHousing(_ g: inout GraphicsContext) {
         g.stroke(circle(116), with: .color(rgb(0xFF8A3D, 0.22)), lineWidth: 5)
@@ -125,7 +143,6 @@ enum MechEye {
         sh.addFilter(.shadow(color: .black.opacity(0.55), radius: 10, y: 6))
         sh.fill(circle(112), with: .color(rgb(0x6E737C)))
 
-        let brushed = Gradient(colors: [0x8A8F98, 0xDCE0E6, 0x6B7079, 0xC4C9D1, 0x777C85, 0xE8EBEF, 0x70757E, 0xB8BDC5, 0x8A8F98].map { rgb($0) })
         g.fill(ring(112, 92), with: .conicGradient(brushed, center: .zero, angle: .degrees(-20)), style: FillStyle(eoFill: true))
         g.stroke(circle(111.3), with: .linearGradient(Gradient(colors: [.white.opacity(0.55), .black.opacity(0.35)]),
                                                      startPoint: CGPoint(x: -80, y: -80), endPoint: CGPoint(x: 80, y: 80)), lineWidth: 1.4)
@@ -145,13 +162,7 @@ enum MechEye {
 
         for k in 0..<6 {
             let deg = 30 + Double(k) * 60
-            let c = polar(105, deg)
-            g.fill(circle(4.2, c), with: .radialGradient(Gradient(colors: [rgb(0xF2F4F7), rgb(0x8C919A), rgb(0x4A4E55)]),
-                                                         center: CGPoint(x: c.x - 1.2, y: c.y - 1.2), startRadius: 0, endRadius: 4.6))
-            var slotPath = Path()
-            slotPath.move(to: CGPoint(x: c.x + 2.8 * cos(deg * 1.7), y: c.y + 2.8 * sin(deg * 1.7)))
-            slotPath.addLine(to: CGPoint(x: c.x - 2.8 * cos(deg * 1.7), y: c.y - 2.8 * sin(deg * 1.7)))
-            g.stroke(slotPath, with: .color(.black.opacity(0.6)), lineWidth: 1)
+            screw(&g, polar(105, deg), slot: deg * 1.7)
         }
     }
 

@@ -5,18 +5,23 @@
 // 新加一种图案：在 CurtainArt 里加一个 case，补上 title / size / offsetY / draw。
 
 import AppKit
+import OpenDirectory
 import SwiftUI
 
 enum CurtainArt: String, CaseIterable, Identifiable {
-    case mechEye, sentryEye, avatar, none
+    case mechEye, demonEye, talisman, clock, vault, padlock, custom, none
 
     var id: Self { self }
 
     var title: String {
         switch self {
         case .mechEye: "机械眼"
-        case .sentryEye: "Sentry 之眼"
-        case .avatar: "头像"
+        case .demonEye: "魔瞳"
+        case .talisman: "镇宅符"
+        case .clock: "机械表"
+        case .vault: "保险库"
+        case .padlock: "挂锁"
+        case .custom: "自定义图片"
         case .none: "不显示"
         }
     }
@@ -24,8 +29,8 @@ enum CurtainArt: String, CaseIterable, Identifiable {
     /// 在遮罩上的边长（pt）
     var size: CGFloat {
         switch self {
-        case .mechEye, .sentryEye: 160
-        case .avatar: 85
+        case .mechEye, .demonEye, .talisman, .clock, .vault, .padlock: 160
+        case .custom: 140
         case .none: 0
         }
     }
@@ -33,7 +38,7 @@ enum CurtainArt: String, CaseIterable, Identifiable {
     /// 中心相对屏幕中心的竖直偏移（负数在上方），和下面的文案留出间距
     var offsetY: CGFloat {
         switch self {
-        case .avatar: -60
+        case .custom: -78
         default: -88
         }
     }
@@ -42,8 +47,21 @@ enum CurtainArt: String, CaseIterable, Identifiable {
     var draw: ((inout GraphicsContext, CGSize, Double) -> Void)? {
         switch self {
         case .mechEye: MechEye.draw
-        case .sentryEye: SentryEye.draw
-        case .avatar, .none: nil
+        case .clock: ClockArt.draw
+        case .demonEye: DemonEye.draw
+        case .talisman: TalismanArt.draw
+        case .vault: VaultArt.draw
+        case .padlock: PadlockArt.draw
+        case .custom, .none: nil
+        }
+    }
+
+    /// 停在一帧时画哪一刻：镇宅符停在写完、余光还在的时候，魔瞳避开眨眼，不然可能停在一张白纸或一只闭着的眼上
+    func stillTime(_ t: Double) -> Double {
+        switch self {
+        case .talisman: t - t.truncatingRemainder(dividingBy: TalismanArt.cycle) + TalismanArt.still
+        case .demonEye: DemonEye.pose(t).open < 0.95 ? t - 0.5 : t
+        default: t
         }
     }
 }
@@ -57,56 +75,66 @@ struct CurtainArtView: View {
     var body: some View {
         if let draw = art.draw {
             // 30 帧够看出动作；遮罩可能挂几个小时，没必要跑满刷新率。系统开了「减弱动态效果」就停在一帧
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animated || reduceMotion)) { tl in
-                Canvas { g, size in draw(&g, size, tl.date.timeIntervalSinceReferenceDate) }
+            let paused = !animated || reduceMotion
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: paused)) { tl in
+                let t = tl.date.timeIntervalSinceReferenceDate
+                Canvas { g, size in draw(&g, size, paused ? art.stillTime(t) : t) }
             }
-        } else if art == .avatar {
-            AvatarArt()
+        } else if art == .custom {
+            CustomImageArt()
         }
     }
 }
 
-/// 原来的头像圆圈，仿系统锁屏
-private struct AvatarArt: View {
+/// 自定义图片：用户选的图，没选就用账户头像。裁成圆形时像系统锁屏的头像，带一圈白边；不裁就按原比例放进方框
+private struct CustomImageArt: View {
+    @AppStorage(PrefKey.curtainImage) private var data: Data?
+    @AppStorage(PrefKey.curtainImageRound) private var round = true
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 39).strokeBorder(Color.white.opacity(0.92), lineWidth: 2)
-            if let img = NSImage(named: NSImage.userAccountsName) {
-                Image(nsImage: img).resizable().aspectRatio(contentMode: .fit).frame(width: 44, height: 44)
+        if let img = data.flatMap(NSImage.init(data:)) ?? CurtainImage.accountPicture {
+            if round {
+                Image(nsImage: img).resizable().scaledToFill()
+                    .frame(width: 120, height: 120)
+                    .clipShape(Circle())
+                    .overlay(Circle().strokeBorder(.white.opacity(0.9), lineWidth: 2))
+                    .shadow(color: .black.opacity(0.45), radius: 10, y: 5)
+            } else {
+                Image(nsImage: img).resizable().scaledToFit()
+                    .shadow(color: .black.opacity(0.45), radius: 10, y: 5)
             }
         }
-        .frame(width: 85, height: 85)
     }
 }
 
-/// Lakr233/Sentry 的 EyeView（MIT）改写成按 t 画：橙红虹膜、放射纹理 20 秒转一圈、瞳孔 2 秒一缩
-enum SentryEye {
-    /// 画布中心为原点，半径 100 的坐标系
-    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double) {
-        let s = min(size.width, size.height) / 200
-        g.translateBy(x: size.width / 2, y: size.height / 2)
-        g.scaleBy(x: s, y: s)
-        g.clip(to: MechEye.circle(100))
+enum CurtainImage {
+    /// 最长边缩到这个像素数再存；遮罩上最大 140pt，Retina 下 280px 就够，留一点余量
+    static let maxPixels = 512.0
 
-        g.stroke(MechEye.circle(100), with: .color(.orange.opacity(0.3)), lineWidth: 8)
-        g.fill(MechEye.circle(90), with: .radialGradient(Gradient(colors: [.red.opacity(0.8), .orange, .red.opacity(0.9)]),
-                                                         center: .zero, startRadius: 30, endRadius: 90))
-
-        let spin = (t / 20).truncatingRemainder(dividingBy: 1) * 360
-        var outer = Path(), inner = Path()
-        for k in 0..<36 {
-            outer.move(to: .zero); outer.addLine(to: MechEye.polar(80, spin + Double(k) * 10 - 90))
+    /// 账户头像（系统设置里给这个用户设的那张），读不到就用通用的账户图标。
+    /// 每次建遮罩时重读，用户在系统设置里换了头像不用重启
+    static var accountPicture: NSImage? {
+        if let node = try? ODNode(session: .default(), type: ODNodeType(kODNodeTypeLocalNodes)),
+           let rec = try? node.record(withRecordType: kODRecordTypeUsers, name: NSUserName(), attributes: [kODAttributeTypeJPEGPhoto]),
+           let jpeg = (try? rec.values(forAttribute: kODAttributeTypeJPEGPhoto))?.first as? Data,
+           let small = encode(jpeg).flatMap(NSImage.init(data:)) {
+            return small
         }
-        for k in 0..<24 {
-            inner.move(to: .zero); inner.addLine(to: MechEye.polar(50, Double(k) * 15 - 90))
-        }
-        g.stroke(outer, with: .color(.black.opacity(0.3)), lineWidth: 1)
-        g.stroke(inner, with: .color(.red.opacity(0.4)), lineWidth: 0.5)
+        return NSImage(named: NSImage.userAccountsName)
+    }
 
-        // 原版是 easeInOut 2 秒、来回往复，在 1 和 0.8 之间
-        let pupil = 25 * (0.9 + 0.1 * cos(t * .pi / 2))
-        g.fill(MechEye.circle(pupil), with: .radialGradient(Gradient(colors: [.black, .red.opacity(0.2)]),
-                                                            center: .zero, startRadius: pupil * 0.2, endRadius: pupil))
-        g.fill(MechEye.circle(4), with: .color(.red.opacity(0.6)))
+    /// 读一张图，缩到 maxPixels 以内，带透明的存 PNG、不带的存 JPEG；读不了返回 nil
+    static func encode(_ data: Data) -> Data? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceCreateThumbnailWithTransform: true,     // 按 EXIF 方向转正
+                  kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+              ] as CFDictionary)
+        else { return nil }
+        let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
+        let alpha = props?[kCGImagePropertyHasAlpha] as? Bool ?? true
+        let rep = NSBitmapImageRep(cgImage: cg)
+        return rep.representation(using: alpha ? .png : .jpeg, properties: alpha ? [:] : [.compressionFactor: 0.9])
     }
 }

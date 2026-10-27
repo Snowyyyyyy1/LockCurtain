@@ -2,7 +2,7 @@
 //
 //   D=$TMPDIR/eye; rm -rf $D && mkdir -p $D
 //   cp Tools/EyePreview.swift $D/main.swift
-//   xcrun swiftc -o $D/eyepreview $D/main.swift Sources/CurtainArt.swift Sources/MechEye.swift
+//   xcrun swiftc -o $D/eyepreview $D/main.swift Sources/CurtainArt.swift Sources/MechEye.swift Sources/ArtPresets.swift Sources/Preferences.swift
 //   $D/eyepreview $D mechEye        # 图案名见 CurtainArt；输出 $D/eye-sheet.png、$D/eye.gif
 
 import ImageIO

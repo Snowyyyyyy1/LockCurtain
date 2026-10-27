@@ -14,6 +14,10 @@ enum PrefKey {
     static let awayDimBrightness = "awayDimBrightness"
     /// 开着的保持唤醒会话，下次启动接着开（KeepAwake.swift）
     static let keepAwake = "keepAwake"
+    /// 「自定义图片」图案用的图，缩到 512px 以内存成 PNG/JPEG；没有就用账户头像
+    static let curtainImage = "curtainImage"
+    /// 自定义图片裁成圆形（默认开）
+    static let curtainImageRound = "curtainImageRound"
 }
 
 enum Prefs {

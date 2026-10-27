@@ -66,9 +66,9 @@ defaults write dev.local.lockcurtain showDockIcon -bool true
 defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 ```
 
-**遮罩图案**：机械眼（默认）、Sentry 之眼、头像（原来仿系统锁屏的圆圈）、不显示。
+**遮罩图案**：机械眼（默认）、魔瞳、镇宅符、机械表、保险库、挂锁、自定义图片、不显示。镇宅符照《太上秘法镇宅灵符》（正统道藏洞真部神符类）第三十道描的，原注「盗贼不侵，万事称意」。自定义图片默认是账户头像，在通用页可以换成任意图片（缩到 512px 以内存进设置的 `curtainImage`），可以选裁成圆形（`curtainImageRound`）。
 通用页里点缩略图切换，下次显示遮罩时生效；也可以 `defaults write dev.local.lockcurtain curtainArt mechEye`
-（取值 `mechEye` / `sentryEye` / `avatar` / `none`）。动画图案都按时间实时画，每秒 30 帧，
+（取值 `mechEye` / `demonEye` / `talisman` / `clock` / `vault` / `padlock` / `custom` / `none`）。动画图案都按时间实时画，每秒 30 帧，
 加新图案见 `Sources/CurtainArt.swift` 文件头。
 
 ## 规则
@@ -188,7 +188,7 @@ NSWindow  styleMask = 0
     ├── wallpaperView   layer.contents = CGImage, contentsGravity = resizeAspectFill
     ├── dimView         black alpha 0.28
     ├── artView         NSHostingView(CurtainArtView)：眼睛 160x160 centerY -88，30 帧/秒，
-    │                   头像 85x85 centerY -60；系统开了「减弱动态效果」时停在一帧
+    │                   自定义图片 140x140 centerY -78；系统开了「减弱动态效果」时停在一帧
     └── textStack       15pt medium / 12pt semibold，宽 194 / 186，
                         vertical + centerX，spacing 15，centerY +33.5
 ```
@@ -455,8 +455,9 @@ LockCurtain/
 │   ├── RuleEngine.swift          规则存储、系统状态采集、定时检查
 │   ├── OverlayController.swift   遮罩窗口、锁屏监听、退出路径
 │   ├── SkyLightSpace.swift       把遮罩放进层级 400 的私有空间（私有 API，失效时退回）
-│   ├── CurtainArt.swift          遮罩图案的列表和视图、Sentry 之眼
+│   ├── CurtainArt.swift          遮罩图案的列表和视图
 │   ├── MechEye.swift             遮罩上的机械眼（SwiftUI Canvas，按时间 t 画帧）
+│   ├── ArtPresets.swift          其余动画图案：魔瞳、镇宅符、机械表、保险库门、挂锁
 │   ├── WallpaperCapture.swift    壁纸采集（纯 async）
 │   ├── CurtainInputFilter.swift  真人输入 / 合成输入判定
 │   ├── CurtainCapture.swift      带排除的整屏抓取 + windowID 发布 + 运行时文件路径

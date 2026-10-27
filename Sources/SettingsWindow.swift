@@ -116,6 +116,9 @@ private struct GeneralPane: View {
     @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBar = true
     @AppStorage(PrefKey.curtainOnLock) private var curtainOnLock = true
     @AppStorage(PrefKey.curtainArt) private var art = CurtainArt.mechEye
+    @AppStorage(PrefKey.curtainImage) private var customImage: Data?
+    @AppStorage(PrefKey.curtainImageRound) private var roundImage = true
+    @State private var pickingImage = false
     /// 登录项的状态在系统那边，用户也能在系统设置里改，每次打开这页重读
     @State private var loginStatus = SMAppService.mainApp.status
 
@@ -146,15 +149,39 @@ private struct GeneralPane: View {
                 }
             }
             Section {
-                HStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                     ForEach(CurtainArt.allCases) { a in
                         ArtTile(art: a, selected: a == art) { art = a }
                     }
                 }
+                if art == .custom {
+                    LabeledContent {
+                        HStack {
+                            if customImage != nil {
+                                Button("改回账户头像") { customImage = nil }
+                            }
+                            Button("选择图片…") { pickingImage = true }
+                        }
+                    } label: {
+                        Text("图片")
+                        Text(customImage == nil ? "账户头像" : "自己选的图片")
+                    }
+                    .fileImporter(isPresented: $pickingImage, allowedContentTypes: [.image]) { result in
+                        guard case .success(let url) = result else { return }
+                        // 缩小后存进设置，原图挪走、删掉都不影响
+                        if let small = (try? Data(contentsOf: url)).flatMap(CurtainImage.encode) {
+                            customImage = small
+                        } else {
+                            NSSound.beep()
+                        }
+                    }
+                    Toggle("裁成圆形", isOn: $roundImage)
+                }
             } header: {
                 Text("遮罩图案")
             } footer: {
-                Text("显示在遮罩中间、提示文案上方。下次显示遮罩时生效。")
+                Text(art == .custom ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示遮罩时生效。"
+                                    : "显示在遮罩中间、提示文案上方。下次显示遮罩时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
