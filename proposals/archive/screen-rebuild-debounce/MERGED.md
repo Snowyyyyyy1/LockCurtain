@@ -19,5 +19,6 @@
 
 ## 仍未验证
 
-- 延迟 0.15 秒没有实测依据。日志 `screen layout ... rebuild windows (scheduled=... coalesced=...)` 会打出合并次数，插拔一次外接屏看实际情况再调
+- 延迟 0.15 秒没有实测依据。日志 `screen layout ... rebuild windows (scheduled=... coalesced=...)` 会打出合并次数，插拔一次外接屏看实际情况再调。
+  `measurement/DisplayBurstProbe.swift` 也能测：用程序切分辨率制造重配事件，打出每条通知的时间戳和间隔，跑完自动切回原分辨率
 - 验收标准 2～4（插拔外接屏只出现一次重建日志、无变化时不重建、撤掉后再显示正常建窗）需要真机插拔
