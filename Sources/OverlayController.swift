@@ -38,8 +38,6 @@ enum CurtainMode {
 final class OverlayController {
     private var windows: [NSWindow] = []
     private var wallpaperLayers: [CGDirectDisplayID: CALayer] = [:]
-    /// stealth 模式下补右边缘那 1px 列的窗口图层
-    private var edgeLayers: [CGDirectDisplayID: CALayer] = [:]
     /// 当前显示模式，nil = 没显示
     private(set) var mode: CurtainMode? {
         didSet { if mode != oldValue { onModeChange?(mode) } }
@@ -58,7 +56,7 @@ final class OverlayController {
     private let inputFilter = CurtainInputFilter()
     private var watchdog: Task<Void, Never>?
 
-    /// stealth：对任何抓屏工具隐形（sharingType=.none + 漏 1 个像素）
+    /// stealth：对任何抓屏工具隐形（sharingType = .none，见 buildWindow）
     private let stealthEnabled = !CommandLine.arguments.contains("--no-stealth")
 
     /// 遮罩层级（--level N 可覆盖）
@@ -116,7 +114,6 @@ final class OverlayController {
         let old = windows
         windows.removeAll()
         wallpaperLayers.removeAll()
-        edgeLayers.removeAll()
         buildWindows()
         for w in old { w.orderOut(nil) }
         publishWindowIDs()
@@ -198,14 +195,6 @@ final class OverlayController {
             win.orderFrontRegardless()
             windows.append(win)
             wallpaperLayers[screen.displayID] = layer
-
-            // stealth 时补一块 1px 宽的右边缘窗，让「未覆盖区域」从一整条底边
-            // 缩成右上角 1x1 一个点（单块矩形没法只漏一个点）
-            if stealthEnabled, let (edge, elayer) = buildEdgeWindow(for: screen) {
-                edge.orderFrontRegardless()
-                windows.append(edge)
-                edgeLayers[screen.displayID] = elayer
-            }
         }
 
         // 放进私有空间。失效时本次运行不再用，重建成普通窗口：
@@ -234,16 +223,6 @@ final class OverlayController {
 
     private func applyWallpaper(_ img: CGImage, to id: CGDirectDisplayID) {
         wallpaperLayers[id]?.contents = img
-        if let el = edgeLayers[id], img.width > 1, img.height > 1 {
-            // 只取最右 1 列、去掉顶部 1px，精确对齐主窗内容
-            el.contents = img
-            el.contentsGravity = .resize
-            el.contentsRect = CGRect(
-                x: CGFloat(img.width - 1) / CGFloat(img.width),
-                y: 0,
-                width: 1.0 / CGFloat(img.width),
-                height: CGFloat(img.height - 1) / CGFloat(img.height))
-        }
     }
 
     // MARK: - 隐藏
@@ -255,7 +234,6 @@ final class OverlayController {
         for w in windows { w.orderOut(nil) }
         windows.removeAll()
         wallpaperLayers.removeAll()
-        edgeLayers.removeAll()
         mode = nil
         screenCoalescer.reset()     // 清基线，也让排着的回调失效
     }
@@ -438,28 +416,13 @@ final class OverlayController {
         //   ScreenCaptureKit / screencapture 的结果里消失，
         //   但 WindowServer 仍然合成它，人眼照样看得见。
         //   这样 agent / cua-driver 截到的还是真实桌面。
-        //   设 LOCKCURTAIN_VISIBLE_TO_CAPTURE=1 可强制它被拍进去（调试用）。
-        // sharingType = .none 实测会在截图里留下纯黑空洞（不是透出桌面），
-        // 所以保持默认 .readOnly，改由抓屏侧用 SCContentFilter(display:excludingWindows:)
-        // 显式排除遮罩窗口。
-        // 可调（实验用）：--share none 让窗口对截图不可见
-        // stealth 模式：对任何抓屏工具都隐形。
-        // 做法 = sharingType.none + 高度少 1px。
-        //
-        // 为什么必须少 1px（实测 2026-10-25，macOS 26）：
-        //   不可共享窗口覆盖 100% 屏幕时，SCK 直接返回整屏全黑（138 KB），
-        //   不是「透出下层」。这是系统级的隐私保护：全屏私密层不能被透视。
-        //   覆盖率 90% 或留 1px 缺口时，SCK 正常重新合成，透出真实桌面（1.67 MB）。
-        //   实测：gap1 / gap4 / p90 都透出；halves(两窗拼满) / full 都全黑。
-        // 默认开启 stealth（对抓屏隐形），--no-stealth 可关闭。
-        let stealth = !CommandLine.arguments.contains("--no-stealth")
-        w.sharingType = stealth ? .none : .readOnly
-        if stealth {
-            // 主窗让出最右 1 列（高度不减），配合边缘窗，未覆盖区域只剩右上角 1x1
-            var f = w.frame
-            f.size.width -= 1
-            w.setFrame(f, display: false)
-        }
+        // 窗口铺满整屏，不留缺口，前提是 alphaValue < 1（见 curtainAlpha）。
+        // 实测 2026-10-27，macOS 26，两块屏，SCK / screencapture / 单窗口截图三种抓法：
+        //   alpha 1   + 铺满      → 整屏全黑
+        //   alpha 1   + 留 1px    → 只拍到壁纸，被盖住的窗口全部消失
+        //   alpha 0.999 + 铺满 / 留 1px → 都是真实桌面，盖住的窗口变色也拍得到
+        // 所以原来的 1px 缺口 + 边缘窗已经删掉。--no-stealth 可关闭。
+        w.sharingType = stealthEnabled ? .none : .readOnly
         if CommandLine.arguments.contains("--transparent") {
             w.isOpaque = false
             w.backgroundColor = .clear
@@ -496,44 +459,6 @@ final class OverlayController {
         ])
         w.contentView = content
         return (w, wallpaperLayer)
-    }
-
-    /// stealth 用的右边缘窗：宽 1px、高减 1px，内容是最右一列壁纸 + 同样的压暗
-    private func buildEdgeWindow(for screen: NSScreen) -> (NSWindow, CALayer)? {
-        let f = screen.frame
-        guard f.width > 2, f.height > 2 else { return nil }
-        let edgeFrame = NSRect(x: f.origin.x + f.size.width - 1,
-                               y: f.origin.y,
-                               width: 1,
-                               height: f.size.height - 1)
-
-        let w = OverlayWindow(contentRect: edgeFrame, styleMask: [], backing: .buffered, defer: false)
-        w.animationBehavior = .none
-        w.backgroundColor = .black
-        w.isOpaque = true
-        w.alphaValue = Self.curtainAlpha
-        w.hasShadow = false
-        w.ignoresMouseEvents = true
-        w.level = NSWindow.Level(rawValue: currentLevel)
-        w.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenNone]
-        w.sharingType = .none
-
-        let content = NSView(frame: NSRect(origin: .zero, size: edgeFrame.size))
-        content.wantsLayer = true
-        let layer = content.layer!
-        layer.backgroundColor = NSColor.black.cgColor
-        layer.contentsGravity = .resize
-        layer.masksToBounds = true
-
-        // 同样的 0.28 压暗，让 1px 接缝和主窗一致
-        let dim = CALayer()
-        dim.backgroundColor = NSColor.black.withAlphaComponent(0.28).cgColor
-        dim.frame = layer.bounds
-        dim.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        layer.addSublayer(dim)
-
-        w.contentView = content
-        return (w, layer)
     }
 
     private func buildWallpaperView(for screen: NSScreen) -> (NSView, CALayer) {
