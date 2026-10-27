@@ -9,7 +9,6 @@ private let weekdaysMondayFirst = [2, 3, 4, 5, 6, 7, 1]
 struct RulesPane: View {
     @ObservedObject var store: RuleStore
     @State private var editing: CurtainRule?
-    @State private var isNew = false
 
     var body: some View {
         Form {
@@ -25,7 +24,7 @@ struct RulesPane: View {
                             Text(rule.summary).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Button("编辑") { isNew = false; editing = rule }
+                        Button("编辑") { editing = rule }
                     }
                     .contextMenu {
                         Button("删除", role: .destructive) { store.rules.removeAll { $0.id == rule.id } }
@@ -39,7 +38,6 @@ struct RulesPane: View {
             }
             Section {
                 Button("新建规则…") {
-                    isNew = true
                     var r = CurtainRule(name: "离开 10 分钟")
                     r.idleMinutes = 10
                     editing = r
@@ -48,7 +46,8 @@ struct RulesPane: View {
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { rule in
-            RuleEditor(rule: rule, isNew: isNew) { saved in
+            // 新不新看列表里有没有：另存一个 @State 的话，body 没读它，sheet 里拿到的是旧值
+            RuleEditor(rule: rule, isNew: !store.rules.contains { $0.id == rule.id }) { saved in
                 if let i = store.rules.firstIndex(where: { $0.id == saved.id }) { store.rules[i] = saved }
                 else { store.rules.append(saved) }
                 editing = nil
