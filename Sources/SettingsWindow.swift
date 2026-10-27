@@ -125,6 +125,8 @@ private struct GeneralPane: View {
     @AppStorage(PrefKey.curtainSubtitle) private var curtainSubtitle = Prefs.defaultCurtainSubtitle
     /// 登录项的状态在系统那边，用户也能在系统设置里改，每次打开这页重读
     @State private var loginStatus = SMAppService.mainApp.status
+    /// Sparkle 自己存这个设置，改的时候要经过它才会重排检查时间
+    @State private var autoUpdate = Updater.shared.automaticallyChecks
 
     var body: some View {
         Form {
@@ -226,8 +228,22 @@ private struct GeneralPane: View {
                 Text("在系统锁屏界面上盖一层遮罩。离开模式和规则不受这个开关影响。")
                     .foregroundStyle(.secondary)
             }
-            Section("关于") {
+            Section {
                 LabeledContent("版本", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-")
+                if Updater.shared.isAvailable {
+                    Toggle("自动检查更新", isOn: Binding(get: { autoUpdate }, set: {
+                        autoUpdate = $0
+                        Updater.shared.automaticallyChecks = $0
+                    }))
+                    Button("检查更新…") { Updater.shared.checkForUpdates() }
+                }
+            } header: {
+                Text("关于")
+            } footer: {
+                if Updater.shared.isAvailable {
+                    Text("每天检查一次 GitHub 上的新版本，有新版本时提示，点了才安装。遮罩显示时不提示、不重启。")
+                        .foregroundStyle(.secondary)
+                }
             }
         }
         .formStyle(.grouped)

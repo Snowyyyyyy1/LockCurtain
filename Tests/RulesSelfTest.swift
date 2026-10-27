@@ -17,7 +17,7 @@ func check(_ cond: Bool, _ name: String) {
 }
 
 var cal = Calendar(identifier: .gregorian)
-cal.timeZone = TimeZone(identifier: "UTC")!
+cal.timeZone = TimeZone(identifier: "UTC")!    // 任意没有夏令时的时区都行，结果和本机时区无关
 /// 2026-10-25 是周日（weekday 1）
 func at(_ day: Int, _ h: Int, _ m: Int = 0) -> Date {
     cal.date(from: DateComponents(year: 2026, month: 10, day: day, hour: h, minute: m))!

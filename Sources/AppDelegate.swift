@@ -72,9 +72,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 
         case .normal:
+            Updater.shared.curtainShowing = { [overlay] in overlay.mode != nil }
+            Updater.shared.start()
             setupMainMenu()
             setupStatusItem()
-            overlay.onModeChange = { [weak self] _ in self?.updateStatusIcon() }
+            overlay.onModeChange = { [weak self] mode in
+                self?.updateStatusIcon()
+                if mode == nil { Updater.shared.curtainHidden() }
+            }
             keepAwake.onChange = { [weak self] in self?.updateStatusIcon() }
             keepAwake.restore()
             overlay.watchLockState()
@@ -133,6 +138,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "关于 LockCurtain", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        if Updater.shared.isAvailable {
+            appMenu.addItem(withTitle: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+        }
         appMenu.addItem(.separator())
         let s = appMenu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         s.target = self
@@ -168,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() { settings.show() }
+    @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
 
     // ---------- 权限申请 ----------
     private var permissionWindow: NSWindow?
@@ -280,6 +289,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let st = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         st.target = self; menu.addItem(st)
+        if Updater.shared.isAvailable {
+            let up = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
+            up.target = self; menu.addItem(up)
+        }
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))

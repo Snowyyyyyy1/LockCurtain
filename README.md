@@ -400,7 +400,9 @@ ad-hoc（codesign --sign -）
 | 改 Info.plist | 授权失效 | 保留 |
 | 重新签署 | 授权失效 | 保留 |
 
-`build.sh` 默认使用本机的自签名证书，可用 `LOCKCURTAIN_CERT` 指定其他证书。
+`build.sh` 用哪张证书：环境变量 `LOCKCURTAIN_CERT`，没有就读仓库根目录的 `.signing-cert`（一行证书名，不进 git），
+都没有才用 ad-hoc，并提示每次重新编译都要重新授权。自己建一张：钥匙串访问 → 证书助理 → 创建证书，
+类型选「代码签名」，然后 `echo "证书名" > .signing-cert`。
 
 ## 系统权限
 
@@ -412,11 +414,37 @@ ad-hoc（codesign --sign -）
 辅助功能没有弹窗（应用不带 Dock 图标时不会出现），
 需要到「系统设置 → 隐私与安全性 → 辅助功能」点 `+` 添加 `LockCurtain.app`。
 
+## 自动更新和发布
+
+自动更新用 [Sparkle](https://sparkle-project.org) 2.10.1，`build.sh` 下载固定版本、核对 sha256 后打包进 App。
+
+- 发布版每天查一次 GitHub Release 上的 `appcast.xml`。有新版本时弹出更新窗口，点了才下载安装，不会自己装。
+  设置「通用 → 关于」里可以关掉自动检查，也可以手动「检查更新…」；菜单栏右键菜单和 App 菜单里也有。
+- 遮罩显示时不打扰：定时检查查到新版本先不弹窗，等遮罩撤掉再弹；正要重启安装时遮罩盖着（比如进了离开模式），
+  也等撤掉再重启，不会为了更新撤遮罩（`Sources/Updater.swift`）。
+- 更新包用 EdDSA 签名，签名对不上就拒装；新版本和旧版本用同一张证书签，designated requirement 不变，
+  屏幕录制和辅助功能权限不会丢（都实测过）。
+- 自己从源码编的版本没有公钥（`LOCKCURTAIN_EDDSA_PUBLIC_KEY`），不检查更新，也就不会被官方版本覆盖。
+
+Windows 版用 [WinSparkle](https://winsparkle.org)，和 Mac 共用同一把 EdDSA 密钥，见 `windows/LockCurtain/Updater.cs`。
+
+发新版本（维护者）：
+
+1. 改 `VERSION`（Mac 和 Windows 共用），写 `release-notes/<版本>.md`：「- 」开头一行一条，
+   只对一边成立的写成「- [mac] …」「- [win] …」。提交并推送。
+2. `./release.sh`：编 Mac 和 Windows 版，签更新包，生成 `appcast.xml` 和 `appcast-windows.xml`，产物放进 `dist/`。
+   签名用登录钥匙串里 Sparkle 的 EdDSA 私钥，第一次先跑 `.cache/Sparkle-2.10.1/bin/generate_keys`。
+3. 检查 `dist/` 没问题后 `./release.sh --publish`，用 `gh` 建 Release 并上传。
+   App 从 `releases/latest/download/` 读更新清单，所以总是读到最新那个 Release 的。
+
 ## 文件结构
 
 ```
 LockCurtain/
-├── build.sh                      图标 + 编译 + 签署 + 权限检查
+├── build.sh                      下载 Sparkle + 图标 + 编译 + 签署 + 权限检查
+├── release.sh                    发布：打包、签更新包、生成 appcast、建 GitHub Release
+├── VERSION                       版本号，Mac 和 Windows 共用
+├── release-notes/                每个版本的发布说明
 ├── README.md
 ├── Sources/
 │   ├── main.swift                入口，命令行参数分发
@@ -444,6 +472,7 @@ LockCurtain/
 │   ├── IntervalSet.swift         时间区间的并、交、差
 │   ├── ProcessTable.swift        读进程表：全部 pid、可执行文件路径
 │   ├── ControlServer.swift       控制接口：Unix 域套接字服务端 + --send 命令行客户端
+│   ├── Updater.swift             自动更新（Sparkle）：只有发布版打开，遮罩盖着时不弹窗、不重启
 │   └── ScreenChangeCoalescer.swift  屏幕变化通知合并 + 布局差异比对
 ├── Tests/
 │   ├── ScreenChangeCoalescerSelfTest.swift  合并器自测，运行方式见文件头

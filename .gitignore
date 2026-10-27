@@ -1,3 +1,6 @@
 LockCurtain.app/
 .claude/settings.local.json
 .claude/.cc-writes/
+.cache/
+.signing-cert
+dist/
