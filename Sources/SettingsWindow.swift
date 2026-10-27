@@ -121,6 +121,8 @@ private struct GeneralPane: View {
     @State private var pickingImage = false
     @AppStorage(PrefKey.curtainBackground) private var background = CurtainBackground.wallpaper
     @State private var backgroundThumbs: [CurtainBackground: CGImage] = [:]
+    @AppStorage(PrefKey.curtainTitle) private var curtainTitle = Prefs.defaultCurtainTitle
+    @AppStorage(PrefKey.curtainSubtitle) private var curtainSubtitle = Prefs.defaultCurtainSubtitle
     /// 登录项的状态在系统那边，用户也能在系统设置里改，每次打开这页重读
     @State private var loginStatus = SMAppService.mainApp.status
 
@@ -198,6 +200,23 @@ private struct GeneralPane: View {
             } footer: {
                 Text("壁纸和模糊壁纸用显示遮罩时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次显示遮罩时生效。")
                     .foregroundStyle(.secondary)
+            }
+            Section {
+                TextField("标题", text: $curtainTitle, prompt: Text("不显示"))
+                TextField("提示", text: $curtainSubtitle, prompt: Text("不显示"))
+            } header: {
+                Text("遮罩文字")
+            } footer: {
+                HStack {
+                    Text("显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示遮罩时生效。")
+                        .foregroundStyle(.secondary)
+                    if curtainTitle != Prefs.defaultCurtainTitle || curtainSubtitle != Prefs.defaultCurtainSubtitle {
+                        Button("恢复默认") {
+                            curtainTitle = Prefs.defaultCurtainTitle
+                            curtainSubtitle = Prefs.defaultCurtainSubtitle
+                        }
+                    }
+                }
             }
             Section {
                 Toggle("锁屏时显示遮罩", isOn: $curtainOnLock)

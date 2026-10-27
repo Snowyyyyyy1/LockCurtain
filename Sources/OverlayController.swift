@@ -471,7 +471,8 @@ final class OverlayController {
             artView.centerXAnchor.constraint(equalTo: content.centerXAnchor),
             artView.centerYAnchor.constraint(equalTo: content.centerYAnchor, constant: art.offsetY),
             text.centerXAnchor.constraint(equalTo: content.centerXAnchor),
-            text.centerYAnchor.constraint(equalTo: content.centerYAnchor, constant: 33.5),
+            // 顶边固定在原来两行字的顶边（中心 +33.5、高 47），换行只往下长，不会压到图案
+            text.topAnchor.constraint(equalTo: content.centerYAnchor, constant: 10),
         ])
         w.contentView = content
         return (w, wallpaperLayer)
@@ -507,31 +508,30 @@ final class OverlayController {
         return v
     }
 
+    /// 图案下面的标题和提示，设置里可改，空的那行不显示。
+    /// 宽度跟着文字走，超过 480pt 换行（原来定死 194pt，默认标题要 214pt，末尾的 "ac" 被裁掉）
     private func buildText() -> NSView {
-        let t = NSTextField(labelWithString: "LockCurtain is Using Your Mac")
-        t.font = NSFont.systemFont(ofSize: 15, weight: .medium)
-        t.textColor = NSColor.white.withAlphaComponent(0.5)
-        t.alignment = .center
-        t.translatesAutoresizingMaskIntoConstraints = false
+        let lines: [(String, NSFont)] = [
+            (Prefs.curtainTitle, .systemFont(ofSize: 15, weight: .medium)),
+            (Prefs.curtainSubtitle, .systemFont(ofSize: 12, weight: .semibold)),
+        ]
+        let labels = lines.compactMap { text, font -> NSTextField? in
+            let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { return nil }
+            let l = NSTextField(wrappingLabelWithString: text)
+            l.font = font
+            l.textColor = NSColor.white.withAlphaComponent(0.5)
+            l.alignment = .center
+            l.preferredMaxLayoutWidth = 480
+            l.translatesAutoresizingMaskIntoConstraints = false
+            return l
+        }
 
-        let s = NSTextField(labelWithString: "Press any key or click to unlock")
-        s.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        s.textColor = NSColor.white.withAlphaComponent(0.5)
-        s.alignment = .center
-        s.translatesAutoresizingMaskIntoConstraints = false
-
-        let stack = NSStackView(views: [t, s])
+        let stack = NSStackView(views: labels)
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 15
         stack.translatesAutoresizingMaskIntoConstraints = false
-
-        NSLayoutConstraint.activate([
-            t.widthAnchor.constraint(equalToConstant: 194),
-            t.heightAnchor.constraint(equalToConstant: 18),
-            s.widthAnchor.constraint(equalToConstant: 186),
-            s.heightAnchor.constraint(equalToConstant: 14),
-        ])
         return stack
     }
 

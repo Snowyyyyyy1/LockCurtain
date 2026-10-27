@@ -20,6 +20,9 @@ enum PrefKey {
     static let curtainImageRound = "curtainImageRound"
     /// 遮罩背景（CurtainBackground.swift），默认当前壁纸
     static let curtainBackground = "curtainBackground"
+    /// 遮罩文字：图案下面的标题和提示，空字符串 = 不显示这一行
+    static let curtainTitle = "curtainTitle"
+    static let curtainSubtitle = "curtainSubtitle"
 }
 
 enum Prefs {
@@ -36,6 +39,11 @@ enum Prefs {
     static var curtainBackground: CurtainBackground {
         UserDefaults.standard.string(forKey: PrefKey.curtainBackground).flatMap(CurtainBackground.init(rawValue:)) ?? .wallpaper
     }
+    static let defaultCurtainTitle = "LockCurtain is Using Your Mac"
+    static let defaultCurtainSubtitle = "Press any key or click to unlock"
+    /// 没设置过用默认文案；设成空（或只有空白）就不显示
+    static var curtainTitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainTitle) ?? defaultCurtainTitle }
+    static var curtainSubtitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainSubtitle) ?? defaultCurtainSubtitle }
 }
 
 /// KVO 用：属性名必须和 key 一致

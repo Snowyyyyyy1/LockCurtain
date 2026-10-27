@@ -77,6 +77,11 @@ defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 `defaults write dev.local.lockcurtain curtainBackground black`
 （取值 `wallpaper` / `blurred` / `black` / `starfield` / `hills` / `carbon`）。画法见 `Sources/CurtainBackground.swift`。
 
+**遮罩文字**：图案下面的两行字，默认标题 `LockCurtain is Using Your Mac`、提示 `Press any key or click to unlock`。
+在通用页的「遮罩文字」里改，下次显示遮罩时生效；某一行留空就不显示这一行，超过 480pt 宽自动换行。也可以
+`defaults write dev.local.lockcurtain curtainTitle "Agent 正在用这台 Mac"`（提示那行是 `curtainSubtitle`），
+`defaults delete dev.local.lockcurtain curtainTitle` 恢复默认。
+
 ## 规则
 
 一条规则由若干条件组成，**开着的条件全部满足**时进入离开模式。一个条件都没开的规则不会触发。
@@ -196,8 +201,8 @@ NSWindow  styleMask = 0
     ├── dimView         black，壁纸 alpha 0.28、模糊壁纸 0.35，其余 0
     ├── artView         NSHostingView(CurtainArtView)：眼睛 160x160 centerY -88，30 帧/秒，
     │                   自定义图片 140x140 centerY -78；系统开了「减弱动态效果」时停在一帧
-    └── textStack       15pt medium / 12pt semibold，宽 194 / 186，
-                        vertical + centerX，spacing 15，centerY +33.5
+    └── textStack       标题 15pt medium / 提示 12pt semibold，宽度随文字、最宽 480 换行，
+                        空的那行不放；vertical + centerX，spacing 15，顶边 centerY +10
 ```
 
 ### 私有空间（层级 400）
