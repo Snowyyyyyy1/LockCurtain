@@ -1,16 +1,14 @@
 // TrayApp.cs —— 通知区域图标和菜单，对应 Mac 版的菜单栏图标
 //
-// 图标：幕布拉开表示没有遮罩，合上表示遮罩显示中，杯子表示保持唤醒中（遮罩优先）。
+// 图标（TrayGlyphs.cs）：显示器上的锁开着表示没有遮罩，锁上表示遮罩显示中，杯子表示保持唤醒中（遮罩优先）。
 // 左键弹面板（StatusPanel：离开模式、预览、保持唤醒、谁在阻止睡眠），右键弹系统原生菜单。
 
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
-using Microsoft.Win32;
 
 namespace LockCurtain;
 
-internal sealed class TrayApp : ApplicationContext
+internal sealed partial class TrayApp : ApplicationContext
 {
     /// 面板关掉后这么久之内的左键不再打开它：面板开着时点图标，按下时面板已经因失去焦点关了，松开时不能又弹出来
     const int PanelReopenGuardMs = 300;
@@ -42,8 +40,8 @@ internal sealed class TrayApp : ApplicationContext
         // NotifyIcon 收不到就不会重新添加图标，托盘图标从此消失
         Native.ChangeWindowMessageFilter(Native.RegisterWindowMessageW("TaskbarCreated"), Native.MSGFLT_ADD);
 
-        openIcon = CurtainIcon(closed: false);
-        closedIcon = CurtainIcon(closed: true);
+        openIcon = LockIcon(locked: false);
+        closedIcon = LockIcon(locked: true);
         cupIcon = CupIcon();
         tray = new NotifyIcon { Icon = openIcon, Text = $"LockCurtain · {Status()}", Visible = Settings.Current.ShowTrayIcon };
         Settings.Changed += () => tray.Visible = Settings.Current.ShowTrayIcon;
@@ -160,79 +158,6 @@ internal sealed class TrayApp : ApplicationContext
     }
 
     void ShowMenu(Point at) => NativeMenu.Show(menuOwner.Handle, at, Commands());
-
-    /// 横杆加两片帘子。拉开：帘子收在两边；合上：两片在中间相接
-    internal static Icon CurtainIcon(bool closed) => Glyph((g, brush, s) =>
-    {
-        g.FillRectangle(brush, 1 * s, 1.5f * s, 14 * s, 1.5f * s);
-        var w = closed ? 6.5f : 3f;
-        foreach (var left in new[] { true, false })
-        {
-            using var path = new GraphicsPath();
-            float x0 = left ? 1.5f : 14.5f, x1 = left ? 1.5f + w : 14.5f - w;
-            // 顶边贴着横杆，内侧往下收出一点弧度
-            path.AddLines(new[] { new PointF(x0 * s, 3 * s), new PointF(x1 * s, 3 * s) });
-            path.AddBezier(x1 * s, 3 * s, (x1 + (left ? -1 : 1)) * s, 8 * s, x1 * s, 12 * s, (x1 + (left ? -0.5f : 0.5f)) * s, 14.5f * s);
-            path.AddLine((x1 + (left ? -0.5f : 0.5f)) * s, 14.5f * s, x0 * s, 14.5f * s);
-            path.CloseFigure();
-            g.FillPath(brush, path);
-        }
-    });
-
-    /// 保持唤醒中：托盘上的杯子和碟子（Mac 版是 SF Symbol cup.and.saucer.fill）
-    static Icon CupIcon() => Glyph(DrawCup);
-
-    /// 托盘面板「LockCurtain 保持唤醒」那一行的图标
-    internal static Bitmap CupImage(int size, Color color) => GlyphImage(size, color, DrawCup);
-
-    static void DrawCup(Graphics g, Brush brush, float s)
-    {
-        // 杯身：上宽下窄，底边圆角
-        using (var cup = new GraphicsPath())
-        {
-            cup.AddLine(2 * s, 3.5f * s, 11.5f * s, 3.5f * s);
-            cup.AddLine(11.5f * s, 3.5f * s, 10.5f * s, 9.5f * s);
-            cup.AddBezier(10.5f * s, 9.5f * s, 10.2f * s, 11.2f * s, 9.2f * s, 11.5f * s, 8 * s, 11.5f * s);
-            cup.AddLine(8 * s, 11.5f * s, 5.5f * s, 11.5f * s);
-            cup.AddBezier(5.5f * s, 11.5f * s, 4.3f * s, 11.5f * s, 3.3f * s, 11.2f * s, 3 * s, 9.5f * s);
-            cup.CloseFigure();
-            g.FillPath(brush, cup);
-        }
-        // 把手
-        using (var pen = new Pen(brush, 1.4f * s))
-            g.DrawArc(pen, 9.6f * s, 4.6f * s, 4.4f * s, 4.2f * s, -80, 190);
-        // 碟子
-        using var saucer = new GraphicsPath();
-        saucer.AddArc(0.8f * s, 12.6f * s, 1.6f * s, 1.6f * s, 90, 180);
-        saucer.AddArc(12.6f * s, 12.6f * s, 1.6f * s, 1.6f * s, 270, 180);
-        saucer.CloseFigure();
-        g.FillPath(brush, saucer);
-    }
-
-    /// 托盘小图标：在 16×16 的设计网格里画（s 是一格的像素），颜色跟着任务栏深浅色走
-    static Icon Glyph(Action<Graphics, Brush, float> draw)
-    {
-        var light = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-                                      "SystemUsesLightTheme", 0) is int v && v == 1;
-        using var bmp = GlyphImage(SystemInformation.SmallIconSize.Width, light ? Color.Black : Color.White, draw);
-        var hicon = bmp.GetHicon();
-        var icon = (Icon)Icon.FromHandle(hicon).Clone();
-        DestroyIcon(hicon);
-        return icon;
-    }
-
-    static Bitmap GlyphImage(int size, Color color, Action<Graphics, Brush, float> draw)
-    {
-        var bmp = new Bitmap(size, size);
-        using var g = Graphics.FromImage(bmp);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using var brush = new SolidBrush(color);
-        draw(g, brush, size / 16f);
-        return bmp;
-    }
-
-    [DllImport("user32.dll")]
-    static extern bool DestroyIcon(nint hicon);
 }
 
 /// 收 WM_WTSSESSION_CHANGE 用的隐藏窗口

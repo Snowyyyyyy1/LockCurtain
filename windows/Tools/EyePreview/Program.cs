@@ -13,6 +13,9 @@
 // EyePreview.exe <输出目录> backgrounds [要模糊的图]：遮罩背景（CurtainBackground.cs）。星空、远山、碳纤维按 1280×800 像素、
 // 1 倍和 2 倍各画一张，打印耗时，存成 <背景名>-1x.png / -2x.png；给了图就再按「模糊壁纸」处理，存成 blurred.png。
 // 同样的尺寸和图交给 Mac 版画，两边应该一样。
+//
+// EyePreview.exe <输出目录> glyphs：托盘图标（TrayGlyphs.cs）。锁开着、锁上、杯子按 100%～300% 缩放的托盘尺寸
+// （16、20、24、32、40、48 像素）各画一行，左半是深色任务栏、右半是浅色，存成 tray-glyphs.png。
 
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -37,6 +40,33 @@ if (args.Length > 1 && args[1] == "backgrounds")
         using var blurred = CurtainBackgrounds.Blur(input);
         blurred.Save(Path.Combine(outDir, "blurred.png"), ImageFormat.Png);
     }
+    return 0;
+}
+if (args.Length > 1 && args[1] == "glyphs")
+{
+    int[] sizes = [16, 20, 24, 32, 40, 48];
+    Action<Graphics, Brush, float>[] glyphs =
+        [(g, b, s) => TrayApp.DrawLock(g, b, s, locked: false), (g, b, s) => TrayApp.DrawLock(g, b, s, locked: true), TrayApp.DrawCup];
+    (Color Back, Color Fore)[] taskbars = [(Color.FromArgb(0x20, 0x20, 0x20), Color.White), (Color.FromArgb(0xF3, 0xF3, 0xF3), Color.Black)];
+    const int cell = 56;
+    using var sheet = new Bitmap(cell * glyphs.Length * taskbars.Length, cell * sizes.Length);
+    using (var g = Graphics.FromImage(sheet))
+    {
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        for (var t = 0; t < taskbars.Length; t++)
+        {
+            using var back = new SolidBrush(taskbars[t].Back);
+            g.FillRectangle(back, t * cell * glyphs.Length, 0, cell * glyphs.Length, sheet.Height);
+            for (var r = 0; r < sizes.Length; r++)
+                for (var c = 0; c < glyphs.Length; c++)
+                {
+                    var size = sizes[r];
+                    using var glyph = TrayApp.GlyphImage(size, taskbars[t].Fore, glyphs[c]);
+                    g.DrawImage(glyph, new Rectangle((t * glyphs.Length + c) * cell + (cell - size) / 2, r * cell + (cell - size) / 2, size, size));
+                }
+        }
+    }
+    sheet.Save(Path.Combine(outDir, "tray-glyphs.png"), ImageFormat.Png);
     return 0;
 }
 var arts = Enum.GetValues<CurtainArt>().Where(a => a.Draw() != null).ToList();

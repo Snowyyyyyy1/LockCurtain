@@ -24,6 +24,7 @@
     <Compile Include="../../LockCurtain/VaultArt.cs" Link="VaultArt.cs" />
     <Compile Include="../../LockCurtain/PadlockArt.cs" Link="PadlockArt.cs" />
     <Compile Include="../../LockCurtain/CurtainBackground.cs" Link="CurtainBackground.cs" />
+    <Compile Include="../../LockCurtain/TrayGlyphs.cs" Link="TrayGlyphs.cs" />
   </ItemGroup>
 
 </Project>
