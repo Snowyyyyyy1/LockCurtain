@@ -9,7 +9,8 @@
 # 只对一边成立的写成「- [mac] …」「- [win] …」：更新窗口里只给对应平台看，
 # Release 正文里全列出来，后面注明「仅 Mac」「仅 Windows」。
 #
-# 更新签名用 Sparkle 的 EdDSA 密钥，默认在登录钥匙串里（第一次用 .cache/Sparkle-*/bin/generate_keys 生成），
+# 更新签名用 Sparkle 的 EdDSA 密钥，存在登录钥匙串的 lockcurtain 账户下
+# （.cache/Sparkle-*/bin/generate_keys --account lockcurtain 生成；和别的 Sparkle 项目分开），
 # Mac 和 Windows 共用：Windows 的 WinSparkle 认 Sparkle sign_update 签出来的签名（虚拟机实测）。
 # 测试时可以用 LOCKCURTAIN_ED_KEY_FILE 指定私钥文件，同时用 LOCKCURTAIN_EDDSA_PUBLIC_KEY 给公钥。
 #
@@ -49,13 +50,15 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || gh release view "$TA
 fi
 
 # 平时用登录钥匙串里的私钥签；测试时可以换成私钥文件
-SIGN_ARGS=()
-[ -n "${LOCKCURTAIN_ED_KEY_FILE:-}" ] && SIGN_ARGS=(--ed-key-file "$LOCKCURTAIN_ED_KEY_FILE")
+KEY_ACCOUNT="lockcurtain"
+SIGN_ARGS=(--account "$KEY_ACCOUNT")
+if [ -n "${LOCKCURTAIN_ED_KEY_FILE:-}" ]; then SIGN_ARGS=(--ed-key-file "$LOCKCURTAIN_ED_KEY_FILE"); fi
 
 echo "== Mac $VERSION"
 if [ -z "${LOCKCURTAIN_EDDSA_PUBLIC_KEY:-}" ]; then
   [ -x "$SPARKLE_BIN/generate_keys" ] || ./build.sh >/dev/null    # 只为下载 Sparkle 的工具
-  LOCKCURTAIN_EDDSA_PUBLIC_KEY="$("$SPARKLE_BIN/generate_keys" -p)" || { echo "钥匙串里没有 EdDSA 密钥，先跑 $SPARKLE_BIN/generate_keys"; exit 1; }
+  LOCKCURTAIN_EDDSA_PUBLIC_KEY="$("$SPARKLE_BIN/generate_keys" --account "$KEY_ACCOUNT" -p)" \
+    || { echo "钥匙串里没有 EdDSA 密钥，先跑 $SPARKLE_BIN/generate_keys --account $KEY_ACCOUNT"; exit 1; }
 fi
 export LOCKCURTAIN_EDDSA_PUBLIC_KEY
 unset LOCKCURTAIN_APPCAST_URL LOCKCURTAIN_RIDS    # 发布包只能指向正式的 appcast，Windows 两个架构都要
@@ -72,7 +75,7 @@ cp "windows/dist/LockCurtain-$VERSION-win-x64.zip" "windows/dist/LockCurtain-$VE
 
 echo "== 签名、appcast"
 # sign_update 输出 sparkle:edSignature="…" length="…"，原样塞进 enclosure
-sig() { "$SPARKLE_BIN/sign_update" ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} "$1"; }
+sig() { "$SPARKLE_BIN/sign_update" "${SIGN_ARGS[@]}" "$1"; }
 DATE="$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')"
 
 # 按平台挑说明：notes_for mac|win 只留通用的和这一边的；notes_for all 全留，标上平台

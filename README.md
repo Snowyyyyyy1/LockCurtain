@@ -433,7 +433,8 @@ Windows 版用 [WinSparkle](https://winsparkle.org)，和 Mac 共用同一把 Ed
 1. 改 `VERSION`（Mac 和 Windows 共用），写 `release-notes/<版本>.md`：「- 」开头一行一条，
    只对一边成立的写成「- [mac] …」「- [win] …」。提交并推送。
 2. `./release.sh`：编 Mac 和 Windows 版，签更新包，生成 `appcast.xml` 和 `appcast-windows.xml`，产物放进 `dist/`。
-   签名用登录钥匙串里 Sparkle 的 EdDSA 私钥，第一次先跑 `.cache/Sparkle-2.10.1/bin/generate_keys`。
+   签名用登录钥匙串里 `lockcurtain` 账户下的 EdDSA 私钥（`.cache/Sparkle-2.10.1/bin/generate_keys --account lockcurtain` 生成）。
+   这把钥匙丢了，已经装上的 App 就再也收不到更新，要另外备份。
 3. 检查 `dist/` 没问题后 `./release.sh --publish`，用 `gh` 建 Release 并上传。
    App 从 `releases/latest/download/` 读更新清单，所以总是读到最新那个 Release 的。
 
