@@ -450,7 +450,7 @@ LockCurtain/
 │   ├── SleepLogSelfTest.swift    电源日志解析、区间代数、24 小时统计的自测
 │   └── RulesSelfTest.swift       规则自测，运行方式见文件头
 ├── Tools/
-│   ├── make-icon.swift           用代码画 App 图标，build.sh 调用
+│   ├── make-icon.swift           用代码画 App 图标（显示器加锁），build.sh 调用；--ico 出 Windows 图标
 │   └── EyePreview.swift          离线渲染动画图案的拼图和 GIF，运行方式见文件头
 ├── proposals/                    未合入的改动提案；已合入的在 archive/
 └── LockCurtain.app               构建产物

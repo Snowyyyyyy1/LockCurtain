@@ -116,10 +116,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.isVisible = Prefs.showMenuBarIcon
     }
 
-    /// 遮罩盖着 > 保持唤醒中 > 平时
+    /// 遮罩盖着 > 保持唤醒中 > 平时。显示器加锁和 App 图标是同一个意思：锁上表示遮罩盖着
     private func updateStatusIcon() {
-        let (symbol, label) = overlay.mode != nil ? ("curtains.closed", "遮罩显示中")
-            : keepAwake.isOn ? ("cup.and.saucer.fill", "保持唤醒中") : ("curtains.open", "LockCurtain")
+        let (symbol, label) = overlay.mode != nil ? ("lock.display", "遮罩显示中")
+            : keepAwake.isOn ? ("cup.and.saucer.fill", "保持唤醒中") : ("lock.open.display", "LockCurtain")
         let img = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         img?.isTemplate = true
         statusItem?.button?.image = img

@@ -42,7 +42,7 @@ final class OverlayController {
     private(set) var mode: CurtainMode? {
         didSet { if mode != oldValue { onModeChange?(mode) } }
     }
-    /// 菜单栏图标跟着切换「拉上 / 拉开」
+    /// 菜单栏图标跟着切换「锁上 / 打开」
     var onModeChange: ((CurtainMode?) -> Void)?
     /// 刚显示的 1 秒内不认真人输入（点菜单那一下的余波、触控板惯性滚动），但照样吞掉
     private var armedAt = Date.distantPast

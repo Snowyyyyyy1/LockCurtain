@@ -10,6 +10,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 在 Mac 上用 Tools/make-icon.swift 生成（见文件头），和 Mac 的 App 图标同一张图 -->
+    <ApplicationIcon>LockCurtain.ico</ApplicationIcon>
     <AssemblyName>LockCurtain</AssemblyName>
     <RootNamespace>LockCurtain</RootNamespace>
     <InvariantGlobalization>true</InvariantGlobalization>
