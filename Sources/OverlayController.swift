@@ -208,19 +208,35 @@ final class OverlayController {
         screenCoalescer.seed(Self.currentLayout())
         NSLog("overlay windows built, %d windows (screens=%d, space=%d)", windows.count, screens.count, space == nil ? 0 : 1)
 
-        // 2) 壁纸异步补上：先用上次的缓存，再换成新抓的（壁纸可能已更换）；
-        //    都没有就保持黑底，不影响退出
+        // 2) 背景异步补上，都没有就保持黑底，不影响退出。
+        //    壁纸类先用上次的缓存，再换成新抓的（壁纸可能已更换）；程序画的图在后台线程按屏幕尺寸画
+        let bg = Prefs.curtainBackground
         Task { @MainActor in
-            for s in screens {
-                if let img = await WallpaperStore.shared.cached(s.displayID) { self.applyWallpaper(img, to: s.displayID) }
+            if bg.usesWallpaper {
+                for s in screens {
+                    if let img = await WallpaperStore.shared.cached(s.displayID) { await self.applyBackground(img, bg, to: s.displayID) }
+                }
+                let images = await WallpaperCapture.prewarm(screens: screens)
+                for (id, img) in images { await self.applyBackground(img, bg, to: id) }
+                NSLog("wallpaper applied %d/%d (%@)", images.count, screens.count, bg.rawValue)
+            } else {
+                for s in screens {
+                    let size = s.frame.size, scale = s.backingScaleFactor
+                    if let img = await Task.detached(operation: { bg.render(size: size, scale: scale) }).value {
+                        self.applyWallpaper(img, to: s.displayID)
+                    }
+                }
+                NSLog("background %@ applied", bg.rawValue)
             }
-            let images = await WallpaperCapture.prewarm(screens: screens)
-            guard !self.windows.isEmpty else { return }
-            for (id, img) in images { self.applyWallpaper(img, to: id) }
-            NSLog("wallpaper applied %d/%d", images.count, screens.count)
         }
     }
 
+    /// 抓到的壁纸按背景处理（模糊）再贴，处理放在后台线程
+    private func applyBackground(_ img: CGImage, _ bg: CurtainBackground, to id: CGDirectDisplayID) async {
+        applyWallpaper(bg == .wallpaper ? img : await Task.detached { bg.prepare(img) }.value, to: id)
+    }
+
+    /// 遮罩已经撤掉时 wallpaperLayers 是空的，什么也不做
     private func applyWallpaper(_ img: CGImage, to id: CGDirectDisplayID) {
         wallpaperLayers[id]?.contents = img
     }
@@ -436,7 +452,7 @@ final class OverlayController {
             : NSColor.black.cgColor
 
         let (wallpaperView, wallpaperLayer) = buildWallpaperView(for: screen)
-        let dim = buildDim()
+        let dim = buildDim(Prefs.curtainBackground.dim)
         let art = Prefs.curtainArt
         let artView = buildArt(art)
         let text = buildText()
@@ -472,11 +488,11 @@ final class OverlayController {
         return (v, l)
     }
 
-    private func buildDim() -> NSView {
+    private func buildDim(_ alpha: CGFloat) -> NSView {
         let v = NSView()
         v.translatesAutoresizingMaskIntoConstraints = false
         v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.28).cgColor
+        v.layer?.backgroundColor = NSColor.black.withAlphaComponent(alpha).cgColor
         return v
     }
 

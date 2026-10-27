@@ -119,6 +119,8 @@ private struct GeneralPane: View {
     @AppStorage(PrefKey.curtainImage) private var customImage: Data?
     @AppStorage(PrefKey.curtainImageRound) private var roundImage = true
     @State private var pickingImage = false
+    @AppStorage(PrefKey.curtainBackground) private var background = CurtainBackground.wallpaper
+    @State private var backgroundThumbs: [CurtainBackground: CGImage] = [:]
     /// 登录项的状态在系统那边，用户也能在系统设置里改，每次打开这页重读
     @State private var loginStatus = SMAppService.mainApp.status
 
@@ -185,11 +187,24 @@ private struct GeneralPane: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+                    ForEach(CurtainBackground.allCases) { b in
+                        BackgroundTile(background: b, thumbnail: backgroundThumbs[b], selected: b == background) { background = b }
+                    }
+                }
+                .task { backgroundThumbs = await BackgroundTile.thumbnails() }
+            } header: {
+                Text("遮罩背景")
+            } footer: {
+                Text("壁纸和模糊壁纸用显示遮罩时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次显示遮罩时生效。")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("锁屏时显示遮罩", isOn: $curtainOnLock)
             } header: {
                 Text("锁屏")
             } footer: {
-                Text("在系统锁屏界面上盖一层壁纸遮罩。离开模式和规则不受这个开关影响。")
+                Text("在系统锁屏界面上盖一层遮罩。离开模式和规则不受这个开关影响。")
                     .foregroundStyle(.secondary)
             }
             Section("关于") {
@@ -237,6 +252,53 @@ private struct ArtTile: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 背景缩略图：屏幕比例的小图，叠上和遮罩一样的压暗
+private struct BackgroundTile: View {
+    let background: CurtainBackground
+    let thumbnail: CGImage?
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                ZStack {
+                    Color.black
+                    if let thumbnail {
+                        Image(decorative: thumbnail, scale: 2).resizable().scaledToFill()
+                        Color.black.opacity(background.dim)
+                    } else if background.usesWallpaper {
+                        Image(systemName: "photo").font(.title3).foregroundStyle(.white.opacity(0.45))
+                    }
+                }
+                .frame(width: 96, height: 60)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2.5))
+                Text(background.title).font(.caption)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// 每种背景一张缩略图：程序画的按 480×300 点画，壁纸类用主屏的当前壁纸；纯黑没有图
+    static func thumbnails() async -> [CurtainBackground: CGImage] {
+        var out = await Task.detached {
+            var drawn: [CurtainBackground: CGImage] = [:]
+            for b in CurtainBackground.allCases {
+                drawn[b] = b.render(size: CGSize(width: 480, height: 300), scale: 0.4)
+            }
+            return drawn
+        }.value
+        if let id = NSScreen.main?.displayID, let wp = await WallpaperCapture.preview(displayID: id) {
+            out[.wallpaper] = wp
+            out[.blurred] = await Task.detached { CurtainBackground.blurred.prepare(wp) }.value
+        }
+        return out
     }
 }
 

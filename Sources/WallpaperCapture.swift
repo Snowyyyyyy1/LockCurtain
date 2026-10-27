@@ -98,6 +98,13 @@ enum WallpaperCapture {
         return false
     }
 
+    /// 设置页缩略图用：有缓存用缓存，没有就按 1 倍抓一张。不写进缓存，缓存留给遮罩用全分辨率的
+    static func preview(displayID: CGDirectDisplayID) async -> CGImage? {
+        if let img = await WallpaperStore.shared.cached(displayID) { return img }
+        guard let c = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return nil }
+        return try? await shoot(content: c, displayID: displayID, scale: 1)
+    }
+
     /// 异步抓所有屏幕，返回 [displayID: CGImage]
     static func prewarm(screens: [NSScreen]) async -> [CGDirectDisplayID: CGImage] {
         var out: [CGDirectDisplayID: CGImage] = [:]

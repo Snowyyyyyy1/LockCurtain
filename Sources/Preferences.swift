@@ -18,6 +18,8 @@ enum PrefKey {
     static let curtainImage = "curtainImage"
     /// 自定义图片裁成圆形（默认开）
     static let curtainImageRound = "curtainImageRound"
+    /// 遮罩背景（CurtainBackground.swift），默认当前壁纸
+    static let curtainBackground = "curtainBackground"
 }
 
 enum Prefs {
@@ -29,6 +31,10 @@ enum Prefs {
     /// 遮罩中间的图案（默认机械眼）
     static var curtainArt: CurtainArt {
         UserDefaults.standard.string(forKey: PrefKey.curtainArt).flatMap(CurtainArt.init(rawValue:)) ?? .mechEye
+    }
+    /// 遮罩背景（默认当前壁纸）
+    static var curtainBackground: CurtainBackground {
+        UserDefaults.standard.string(forKey: PrefKey.curtainBackground).flatMap(CurtainBackground.init(rawValue:)) ?? .wallpaper
     }
 }
 

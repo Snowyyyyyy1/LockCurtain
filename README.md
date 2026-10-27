@@ -71,6 +71,12 @@ defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 （取值 `mechEye` / `demonEye` / `talisman` / `clock` / `vault` / `padlock` / `custom` / `none`）。动画图案都按时间实时画，每秒 30 帧，
 加新图案见 `Sources/CurtainArt.swift` 文件头。
 
+**遮罩背景**：壁纸（默认，当前壁纸压暗 28%）、模糊壁纸、纯黑、星空、远山、碳纤维。星空、远山、碳纤维是程序画的静态图，
+每次显示遮罩时按屏幕像素尺寸在后台线程画一张（2 倍屏上 150～800 毫秒），不跑动画，也不用抓屏。
+纯黑能让外接屏也暗下来（外接屏调不了亮度）。通用页里点缩略图切换，或者
+`defaults write dev.local.lockcurtain curtainBackground black`
+（取值 `wallpaper` / `blurred` / `black` / `starfield` / `hills` / `carbon`）。画法见 `Sources/CurtainBackground.swift`。
+
 ## 规则
 
 一条规则由若干条件组成，**开着的条件全部满足**时进入离开模式。一个条件都没开的规则不会触发。
@@ -185,8 +191,9 @@ NSWindow  styleMask = 0
           ignoresMouseEvents = true
           canBecomeKey = false
 └── contentView
-    ├── wallpaperView   layer.contents = CGImage, contentsGravity = resizeAspectFill
-    ├── dimView         black alpha 0.28
+    ├── wallpaperView   layer.contents = CGImage（壁纸 / 模糊壁纸 / 程序画的背景，纯黑时为空），
+    │                   contentsGravity = resizeAspectFill
+    ├── dimView         black，壁纸 alpha 0.28、模糊壁纸 0.35，其余 0
     ├── artView         NSHostingView(CurtainArtView)：眼睛 160x160 centerY -88，30 帧/秒，
     │                   自定义图片 140x140 centerY -78；系统开了「减弱动态效果」时停在一帧
     └── textStack       15pt medium / 12pt semibold，宽 194 / 186，
@@ -418,6 +425,7 @@ LockCurtain/
 │   ├── OverlayController.swift   遮罩窗口、锁屏监听、退出路径
 │   ├── SkyLightSpace.swift       把遮罩放进层级 400 的私有空间（私有 API，失效时退回）
 │   ├── CurtainArt.swift          遮罩图案的列表和视图
+│   ├── CurtainBackground.swift   遮罩背景：壁纸、模糊壁纸、纯黑，和程序画的星空、远山、碳纤维
 │   ├── MechEye.swift             遮罩上的机械眼（SwiftUI Canvas，按时间 t 画帧）
 │   ├── ArtPresets.swift          其余动画图案：魔瞳、镇宅符、机械表、保险库门、挂锁
 │   ├── WallpaperCapture.swift    壁纸采集（纯 async）
