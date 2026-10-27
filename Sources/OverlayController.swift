@@ -41,7 +41,7 @@ final class OverlayController {
     /// stealth 模式下补右边缘那 1px 列的窗口图层
     private var edgeLayers: [CGDirectDisplayID: CALayer] = [:]
     /// 当前显示模式，nil = 没显示
-    private var mode: CurtainMode? {
+    private(set) var mode: CurtainMode? {
         didSet { if mode != oldValue { onModeChange?(mode) } }
     }
     /// 菜单栏图标跟着切换「拉上 / 拉开」

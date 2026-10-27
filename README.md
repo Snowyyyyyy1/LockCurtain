@@ -14,7 +14,8 @@ cd ~/Code/LockCurtain
 open LockCurtain.app
 ```
 
-不要用 `open -n`，它会另起一个实例。菜单栏出现幕布图标：拉开表示没有遮罩，合上表示遮罩显示中。点开：
+不要用 `open -n`，它会另起一个实例。菜单栏出现幕布图标：拉开表示没有遮罩，合上表示遮罩显示中。
+左键点开是面板，见「菜单栏面板」；右键（或按住 ⌃ 点）是菜单：
 
 | 菜单项 | 作用 |
 |---|---|
@@ -23,11 +24,33 @@ open LockCurtain.app
 | 紧急关闭遮罩 | 任何时候强制撤掉遮罩 |
 | 设置…（⌘,） | 打开设置窗口 |
 
+## 菜单栏面板
+
+左键点菜单栏图标弹出，从上到下：
+
+- **常用操作**：进入离开模式、预览遮罩、设置。
+- **阻止睡眠**：现在有哪些 app 不让 Mac 睡。「显示器」是不让屏幕变暗（看视频、演示），「系统」是不让机器睡（屏幕可以黑）。
+  - 数据来自 `IOPMCopyAssertionsByProcess`，不需要权限；面板开着时每 2 秒刷新。
+  - powerd、coreaudiod 这类系统服务（程序在 `/System`、`/usr/sbin`、`/usr/libexec` 等目录下）不逐个列出，只在底下计数。
+    `/usr/bin` 下的 `caffeinate` 是人自己跑的，照常列出。
+  - 右上角「保持唤醒」：不盖遮罩，只让 Mac 不睡，相当于 Amphetamine 的会话。可选一直、1 / 2 / 5 小时、到指定时间、某个 app 开着时。
+    - 只拦系统睡眠（`PreventUserIdleSystemSleep`），屏幕照样按系统设置熄灭，合盖照样睡。
+    - 和离开模式互不影响：锁屏、解锁都不会结束它，只有点「停止」、时间到了或那个 app 退出才结束。
+    - 开着时菜单栏图标变成咖啡杯，卡片里多一行显示还剩多久。
+    - LockCurtain 退出时还开着的会话，下次启动接着开：一直的照开，定时的没到点才开，跟着 app 的那个 app 还开着才开（按 bundle ID 找）。
+      配合设置里的「登录时打开 LockCurtain」，开机就自动保持唤醒，相当于 Amphetamine 的「启动时开始会话」。
+- **过去 24 小时**：一条时间条，加上睡眠、在用、被阻止三个总时长，以及被阻止期间各 app 各占多久。
+  - 被阻止 = 有程序不让睡的时间，去掉睡着的和你在用的。系统认为你在用（`UserIsActive`）的时候本来就不会睡，算不上被谁拦着。
+  - 几个 app 同时在拦时，每个 app 都算满这段时间，所以各 app 的时长加起来可以超过总数。
+  - 系统服务计入被阻止的总时长，但合成一行显示。已经退出的系统服务认不出来，会当成 app 列出。
+  - 数据来自 `pmset -g log`，读一次要 3～4 秒，所以每次打开面板时在后台读，5 分钟内不重读。
+    日志的读法（大部分断言只有 Released 一行，要按时长倒推）写在 `Sources/SleepLedger.swift` 文件头。
+
 ## 设置窗口
 
 | 页 | 内容 |
 |---|---|
-| 通用 | 在 Dock 中显示（默认关）、在菜单栏中显示（默认开）、锁屏时显示遮罩（默认开）、遮罩图案 |
+| 通用 | 登录时打开 LockCurtain（默认关，用系统登录项 `SMAppService`）、在 Dock 中显示（默认关）、在菜单栏中显示（默认开）、锁屏时显示遮罩（默认开）、遮罩图案 |
 | 离开模式 | 屏幕常亮、亮度调到最低，见「离开模式」；立即进入离开模式 |
 | 规则 | 满足条件时自动进入离开模式，见「规则」 |
 | 远程控制 | 命令行路径和命令、快捷指令的配置步骤 |
@@ -56,6 +79,7 @@ defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 |---|---|
 | 空闲 N 分钟 | 键盘、鼠标 N 分钟没动（`CGEventSource.secondsSinceLastEventType`） |
 | 某个 app 或进程在运行 | 列表里任意一个在运行即可。可以填 app 的 bundle ID，也可以填进程名：命令行工具没有 bundle ID，比如 `claude` 就要填进程名 |
+| 有 app 在阻止睡眠 | 列表留空时，任意 app 在阻止睡眠即可；也可以只列几个 app（bundle ID 或进程名）。认法和面板的「阻止睡眠」一样，系统服务和 LockCurtain 自己不算 |
 | 时间段 | 起止时间加星期几。允许跨午夜，跨过去的后半夜算开始那天 |
 | 接着电源 | 用电池时不触发 |
 
@@ -423,6 +447,7 @@ LockCurtain/
 ├── Sources/
 │   ├── main.swift                入口，命令行参数分发
 │   ├── AppDelegate.swift         主菜单、菜单栏、Dock 图标、reopen、命令分发
+│   ├── StatusPanel.swift         菜单栏左键弹出的面板：常用操作、阻止睡眠和保持唤醒、过去 24 小时
 │   ├── Preferences.swift         通用设置的 UserDefaults key
 │   ├── SettingsWindow.swift      设置窗口（SwiftUI）：通用 / 离开模式 / 远程控制 / 权限
 │   ├── RulesPane.swift           设置窗口的规则页和规则编辑器
@@ -436,10 +461,17 @@ LockCurtain/
 │   ├── CurtainInputFilter.swift  真人输入 / 合成输入判定
 │   ├── CurtainCapture.swift      带排除的整屏抓取 + windowID 发布 + 运行时文件路径
 │   ├── PowerGuard.swift          离开模式的防休眠、亮度
+│   ├── KeepAwake.swift           保持唤醒：不盖遮罩的防休眠，定时或跟着某个 app 结束
+│   ├── SleepBlockers.swift       现在谁在阻止睡眠（读电源断言），分显示器 / 系统两类
+│   ├── SleepLog.swift            解析 pmset -g log 的电源断言和睡眠 / 唤醒事件
+│   ├── SleepLedger.swift         过去 24 小时的睡眠 / 在用 / 被阻止统计
+│   ├── IntervalSet.swift         时间区间的并、交、差
+│   ├── ProcessTable.swift        读进程表：全部 pid、可执行文件路径
 │   ├── ControlServer.swift       控制接口：Unix 域套接字服务端 + --send 命令行客户端
 │   └── ScreenChangeCoalescer.swift  屏幕变化通知合并 + 布局差异比对
 ├── Tests/
 │   ├── ScreenChangeCoalescerSelfTest.swift  合并器自测，运行方式见文件头
+│   ├── SleepLogSelfTest.swift    电源日志解析、区间代数、24 小时统计的自测
 │   └── RulesSelfTest.swift       规则自测，运行方式见文件头
 ├── Tools/
 │   ├── make-icon.swift           用代码画 App 图标，build.sh 调用

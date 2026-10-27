@@ -32,9 +32,12 @@ final class RuleStore: ObservableObject {
 }
 
 enum SystemFacts {
-    /// 进程列表要遍历全部 pid，只在有规则用到进程条件时才收集
-    static func collect(processes: Bool) -> RuleFacts {
-        RuleFacts(idleSeconds: idleSeconds(), running: processes ? running() : [], now: Date(), onACPower: onACPower())
+    /// 进程列表要遍历全部 pid、阻止睡眠要读全部电源断言，只在有规则用到时才收集
+    @MainActor
+    static func collect(processes: Bool, sleepBlockers: Bool) -> RuleFacts {
+        RuleFacts(idleSeconds: idleSeconds(), running: processes ? running() : [],
+                  sleepBlockers: sleepBlockers ? SleepBlockers.snapshot().identities : [],
+                  now: Date(), onACPower: onACPower())
     }
 
     /// 距上一次键盘/鼠标输入的秒数（kCGAnyInputEventType）
@@ -45,12 +48,8 @@ enum SystemFacts {
     /// 运行中 app 的 bundle ID，加上所有进程名（命令行工具没有 bundle ID）
     static func running() -> Set<String> {
         var s = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let n = proc_listallpids(nil, 0)
-        guard n > 0 else { return s }
-        var pids = [pid_t](repeating: 0, count: Int(n) + 32)
-        let got = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
         var name = [CChar](repeating: 0, count: 2 * Int(MAXCOMLEN) + 1)
-        for pid in pids.prefix(Int(max(got, 0))) where pid > 0 {
+        for pid in ProcessTable.allPIDs() {
             if proc_name(pid, &name, UInt32(name.count)) > 0 { s.insert(String(cString: name)) }
         }
         return s
@@ -84,7 +83,8 @@ final class RuleEngine {
 
     private func tick() {
         guard store.rules.contains(where: \.enabled) else { trigger = RuleTrigger(); return }
-        let facts = SystemFacts.collect(processes: store.rules.contains { $0.processes != nil })
+        let facts = SystemFacts.collect(processes: store.rules.contains { $0.processes != nil },
+                                        sleepBlockers: store.rules.contains { $0.sleepBlockers != nil })
         let fired = trigger.step(store.rules, facts, frozen: sessionLocked())
         if let r = fired.first {
             NSLog("rule fired: %@", r.name)

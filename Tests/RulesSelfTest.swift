@@ -22,8 +22,9 @@ cal.timeZone = TimeZone(identifier: "UTC")!
 func at(_ day: Int, _ h: Int, _ m: Int = 0) -> Date {
     cal.date(from: DateComponents(year: 2026, month: 10, day: day, hour: h, minute: m))!
 }
-func facts(idle: Double = 0, running: Set<String> = [], now: Date = at(25, 12), ac: Bool = true) -> RuleFacts {
-    RuleFacts(idleSeconds: idle, running: running, now: now, onACPower: ac)
+func facts(idle: Double = 0, running: Set<String> = [], blockers: Set<String> = [], now: Date = at(25, 12),
+           ac: Bool = true) -> RuleFacts {
+    RuleFacts(idleSeconds: idle, running: running, sleepBlockers: blockers, now: now, onACPower: ac)
 }
 
 print("== 时间段 ==")
@@ -50,6 +51,20 @@ r.requireACPower = true
 check(!r.matches(facts(idle: 300, running: ["claude"], ac: false), calendar: cal), "要求接电源但在用电池 -> 不命中")
 r.enabled = false
 check(!r.matches(facts(idle: 300, running: ["claude"]), calendar: cal), "禁用 -> 不命中")
+
+print("== 阻止睡眠 ==")
+var awake = CurtainRule(name: "有 app 不让睡且离开 10 分钟")
+awake.idleMinutes = 10
+awake.sleepBlockers = []
+check(awake.hasConditions, "只开「阻止睡眠」也算有条件")
+check(!awake.matches(facts(idle: 600), calendar: cal), "任意 app：没有 app 在阻止 -> 不命中")
+check(awake.matches(facts(idle: 600, blockers: ["caffeinate"]), calendar: cal), "任意 app：有一个在阻止 -> 命中")
+check(!awake.matches(facts(idle: 599, blockers: ["caffeinate"]), calendar: cal), "有 app 在阻止但空闲不足 -> 不命中")
+awake.sleepBlockers = ["com.openai.codex", "caffeinate"]
+check(awake.matches(facts(idle: 600, blockers: ["com.openai.codex", "ChatGPT"]), calendar: cal), "指定 app：bundle ID 命中")
+check(awake.matches(facts(idle: 600, blockers: ["caffeinate"]), calendar: cal), "指定 app：进程名命中")
+check(!awake.matches(facts(idle: 600, blockers: ["Claude"]), calendar: cal), "指定 app：在阻止的是别的 app -> 不命中")
+check(!awake.matches(facts(idle: 600, running: ["caffeinate"]), calendar: cal), "只在运行、没在阻止 -> 不命中")
 
 print("== 边沿触发 ==")
 var app = CurtainRule(name: "app 在运行")

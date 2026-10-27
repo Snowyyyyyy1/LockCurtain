@@ -6,6 +6,7 @@
 
 import AppKit
 import Combine
+import ServiceManagement
 import SwiftUI
 
 /// 设置界面需要调用的 App 动作
@@ -115,9 +116,24 @@ private struct GeneralPane: View {
     @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBar = true
     @AppStorage(PrefKey.curtainOnLock) private var curtainOnLock = true
     @AppStorage(PrefKey.curtainArt) private var art = CurtainArt.mechEye
+    /// 登录项的状态在系统那边，用户也能在系统设置里改，每次打开这页重读
+    @State private var loginStatus = SMAppService.mainApp.status
 
     var body: some View {
         Form {
+            Section {
+                Toggle("登录时打开 LockCurtain", isOn: Binding(get: { loginStatus == .enabled }, set: setOpenAtLogin))
+            } header: {
+                Text("启动")
+            } footer: {
+                if loginStatus == .requiresApproval {
+                    HStack {
+                        Text("还要在系统设置的登录项里允许。").foregroundStyle(.secondary)
+                        Button("打开登录项设置") { SMAppService.openSystemSettingsLoginItems() }
+                    }
+                }
+            }
+            .onAppear { loginStatus = SMAppService.mainApp.status }
             Section {
                 Toggle("在 Dock 中显示", isOn: $showDock)
                 Toggle("在菜单栏中显示", isOn: $showMenuBar)
@@ -154,6 +170,15 @@ private struct GeneralPane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func setOpenAtLogin(_ on: Bool) {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+        } catch {
+            NSLog("登录项 %@ 失败：%@", on ? "register" : "unregister", "\(error)")
+        }
+        loginStatus = SMAppService.mainApp.status
     }
 }
 

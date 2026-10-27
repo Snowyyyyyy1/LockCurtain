@@ -70,7 +70,6 @@ private struct RuleEditor: View {
     let onSave: (CurtainRule) -> Void
     let onDelete: () -> Void
     let onCancel: () -> Void
-    @State private var newProcess = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -81,6 +80,7 @@ private struct RuleEditor: View {
                 Section {
                     idleSection
                     processSection
+                    sleepBlockerSection
                     timeSection
                     Toggle("接着电源", isOn: $rule.requireACPower)
                 } header: {
@@ -124,32 +124,27 @@ private struct RuleEditor: View {
             get: { rule.processes != nil },
             set: { rule.processes = $0 ? [] : nil }))
         if let list = rule.processes {
-            ForEach(list, id: \.self) { p in
-                HStack {
-                    Text(displayName(p))
-                    Text(p).font(.caption.monospaced()).foregroundStyle(.secondary)
-                    Spacer()
-                    Button { rule.processes?.removeAll { $0 == p } } label: { Image(systemName: "minus.circle") }
-                        .buttonStyle(.borderless)
-                }
-            }
-            HStack {
-                TextField("进程名，如 claude", text: $newProcess)
-                    .onSubmit(addProcess)
-                Button("添加", action: addProcess).disabled(newProcess.trimmingCharacters(in: .whitespaces).isEmpty)
-                Menu("运行中的 app") {
-                    ForEach(runningApps, id: \.bundleIdentifier) { app in
-                        Button(app.localizedName ?? app.bundleIdentifier ?? "?") {
-                            if let id = app.bundleIdentifier { add(id) }
-                        }
-                    }
-                }
-                .fixedSize()
-            }
+            IdentityListEditor(list: listBinding(\.processes), placeholder: "进程名，如 claude",
+                               menuTitle: "运行中的 app", choices: runningApps)
             if list.isEmpty {
                 Text("列表里任意一个在运行即满足。命令行工具（没有 bundle ID）填进程名。")
                     .font(.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // 阻止睡眠
+    @ViewBuilder private var sleepBlockerSection: some View {
+        Toggle("有 app 在阻止睡眠", isOn: Binding(
+            get: { rule.sleepBlockers != nil },
+            set: { rule.sleepBlockers = $0 ? [] : nil }))
+        if let list = rule.sleepBlockers {
+            IdentityListEditor(list: listBinding(\.sleepBlockers), placeholder: "进程名，如 caffeinate",
+                               menuTitle: "正在阻止睡眠的", choices: currentBlockers)
+            Text(list.isEmpty
+                 ? "留空 = 任意 app 在阻止睡眠即满足；系统服务和 LockCurtain 自己不算。"
+                 : "列表里任意一个在阻止睡眠即满足。")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 
@@ -179,26 +174,24 @@ private struct RuleEditor: View {
         }
     }
 
-    private var runningApps: [NSRunningApplication] {
+    private var runningApps: [IdentityChoice] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil && $0.bundleIdentifier != Bundle.main.bundleIdentifier }
             .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
+            .map { IdentityChoice(id: $0.bundleIdentifier!, title: $0.localizedName ?? $0.bundleIdentifier!) }
     }
 
-    private func addProcess() {
-        add(newProcess.trimmingCharacters(in: .whitespaces))
-        newProcess = ""
+    /// 有 bundle ID 的填 bundle ID，命令行工具填进程名；同一个 app 同时挡显示器和系统时只出现一次
+    private var currentBlockers: [IdentityChoice] {
+        var seen = Set<String>()
+        return SleepBlockers.snapshot().others
+            .map { IdentityChoice(id: $0.bundleID ?? $0.processName, title: $0.title) }
+            .filter { seen.insert($0.id).inserted }
     }
 
-    private func add(_ p: String) {
-        guard !p.isEmpty, !(rule.processes ?? []).contains(p) else { return }
-        rule.processes = (rule.processes ?? []) + [p]
-    }
-
-    private func displayName(_ p: String) -> String {
-        NSRunningApplication.runningApplications(withBundleIdentifier: p).first?.localizedName
-            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: p).map { FileManager.default.displayName(atPath: $0.path) }
-            ?? p
+    /// 可选条件存成 Optional 数组，编辑器只在条件打开时出现
+    private func listBinding(_ key: WritableKeyPath<CurtainRule, [String]?>) -> Binding<[String]> {
+        Binding(get: { rule[keyPath: key] ?? [] }, set: { rule[keyPath: key] = $0 })
     }
 
     /// TimeWindow 存的是当天第几分钟，DatePicker 要 Date
@@ -215,6 +208,62 @@ private struct RuleEditor: View {
     }
 }
 
+// MARK: - bundle ID / 进程名列表
+
+private struct IdentityChoice: Identifiable {
+    let id: String
+    let title: String
+}
+
+/// 一串 bundle ID 或进程名：手填，或从菜单里挑
+private struct IdentityListEditor: View {
+    @Binding var list: [String]
+    let placeholder: String
+    let menuTitle: String
+    let choices: [IdentityChoice]
+    @State private var draft = ""
+
+    var body: some View {
+        ForEach(list, id: \.self) { p in
+            HStack {
+                Text(displayName(p))
+                Text(p).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Spacer()
+                Button { list.removeAll { $0 == p } } label: { Image(systemName: "minus.circle") }
+                    .buttonStyle(.borderless)
+            }
+        }
+        HStack {
+            // 表单里的 TextField 默认把标题放左边当标签，输入框会被挤没；改成框内占位文字
+            TextField(placeholder, text: $draft, prompt: Text(placeholder))
+                .labelsHidden()
+                .onSubmit(addDraft)
+            Button("添加", action: addDraft).disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            Menu(menuTitle) {
+                if choices.isEmpty { Text("现在没有") }
+                ForEach(choices) { c in Button(c.title) { add(c.id) } }
+            }
+            .fixedSize()
+        }
+    }
+
+    private func addDraft() {
+        add(draft.trimmingCharacters(in: .whitespaces))
+        draft = ""
+    }
+
+    private func add(_ p: String) {
+        guard !p.isEmpty, !list.contains(p) else { return }
+        list.append(p)
+    }
+
+    private func displayName(_ p: String) -> String {
+        NSRunningApplication.runningApplications(withBundleIdentifier: p).first?.localizedName
+            ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: p).map { FileManager.default.displayName(atPath: $0.path) }
+            ?? p
+    }
+}
+
 // MARK: - 摘要
 
 extension CurtainRule {
@@ -222,6 +271,7 @@ extension CurtainRule {
         var parts: [String] = []
         if let m = idleMinutes { parts.append("空闲 \(m) 分钟") }
         if let p = processes { parts.append(p.isEmpty ? "进程（未填）" : p.joined(separator: " / ") + " 在运行") }
+        if let b = sleepBlockers { parts.append(b.isEmpty ? "有 app 在阻止睡眠" : b.joined(separator: " / ") + " 在阻止睡眠") }
         if let w = timeWindow {
             func hm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }
             let days = w.weekdays.count == 7 ? "每天" : weekdaysMondayFirst.filter(w.weekdays.contains)

@@ -39,12 +39,14 @@ struct CurtainRule: Codable, Equatable, Identifiable {
     var idleMinutes: Int?
     /// 任一在运行即满足：app 的 bundle ID 或进程名（如 claude）；nil = 不限
     var processes: [String]?
+    /// 有 app 在阻止睡眠：空数组 = 任意 app；否则列表里任一在阻止即满足（bundle ID 或进程名）；nil = 不限
+    var sleepBlockers: [String]?
     /// nil = 不限
     var timeWindow: TimeWindow?
     var requireACPower = false
 
     var hasConditions: Bool {
-        idleMinutes != nil || processes != nil || timeWindow != nil || requireACPower
+        idleMinutes != nil || processes != nil || sleepBlockers != nil || timeWindow != nil || requireACPower
     }
 }
 
@@ -53,6 +55,8 @@ struct RuleFacts {
     var idleSeconds: Double
     /// 运行中的 app bundle ID 和进程名
     var running: Set<String>
+    /// 在阻止睡眠的 app 的 bundle ID 和进程名，不含系统服务和 LockCurtain 自己
+    var sleepBlockers: Set<String>
     var now: Date
     var onACPower: Bool
 }
@@ -62,6 +66,9 @@ extension CurtainRule {
         guard enabled, hasConditions else { return false }
         if let m = idleMinutes, f.idleSeconds < Double(m * 60) { return false }
         if let p = processes, !p.contains(where: { f.running.contains($0) }) { return false }
+        if let b = sleepBlockers, b.isEmpty ? f.sleepBlockers.isEmpty : !b.contains(where: f.sleepBlockers.contains) {
+            return false
+        }
         if let w = timeWindow, !w.contains(f.now, calendar: calendar) { return false }
         if requireACPower, !f.onACPower { return false }
         return true

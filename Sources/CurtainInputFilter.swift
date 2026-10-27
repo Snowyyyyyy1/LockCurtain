@@ -44,12 +44,6 @@ final class CurtainInputFilter {
     private var cacheTime = Date.distantPast
 
     // MARK: - 豁免判定
-    private static func execPath(of pid: pid_t) -> String? {
-        var buf = [CChar](repeating: 0, count: 4096)
-        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
-        guard n > 0 else { return nil }
-        return String(cString: buf)
-    }
 
     private func isExempt(_ pid: pid_t) -> Bool {
         if Date().timeIntervalSince(cacheTime) > 3 {
@@ -62,7 +56,7 @@ final class CurtainInputFilter {
 
     static func isAgentPid(_ pid: pid_t) -> Bool {
         if pid == 0 { return false }
-        guard let p = execPath(of: pid) else { return false }
+        guard let p = ProcessTable.executablePath(pid) else { return false }
         return agentPathHints.contains { p.contains($0) }
     }
 

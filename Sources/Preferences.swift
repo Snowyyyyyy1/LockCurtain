@@ -12,6 +12,8 @@ enum PrefKey {
     static let curtainArt = "curtainArt"
     static let awayKeepDisplayOn = "awayKeepDisplayOn"
     static let awayDimBrightness = "awayDimBrightness"
+    /// 开着的保持唤醒会话，下次启动接着开（KeepAwake.swift）
+    static let keepAwake = "keepAwake"
 }
 
 enum Prefs {

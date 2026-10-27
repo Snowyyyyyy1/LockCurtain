@@ -32,7 +32,14 @@ func writeStatus(_ s: String) { try? s.write(toFile: statusPath, atomically: tru
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
+    /// 右键弹的菜单；左键弹面板
+    private var statusMenu = NSMenu()
+    private lazy var panel = StatusPanelController(actions: StatusPanelActions(
+        enterAway: { [overlay] in overlay.enterAway() },
+        preview: { [overlay] in overlay.togglePreview() },
+        openSettings: { [weak self] in self?.settings.show() }), keepAwake: keepAwake)
     private let overlay = OverlayController()
+    private let keepAwake = KeepAwake()
     private lazy var control = ControlServer { [weak self] cmd in await self?.handleCommand(cmd) ?? [:] }
     private var permissionTimer: Timer?
     private var prefObservers: [NSKeyValueObservation] = []
@@ -67,7 +74,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .normal:
             setupMainMenu()
             setupStatusItem()
-            overlay.onModeChange = { [weak self] mode in self?.updateStatusIcon(showing: mode != nil) }
+            overlay.onModeChange = { [weak self] _ in self?.updateStatusIcon() }
+            keepAwake.onChange = { [weak self] in self?.updateStatusIcon() }
+            keepAwake.restore()
             overlay.watchLockState()
             control.start()
             ruleEngine.start()
@@ -107,9 +116,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.isVisible = Prefs.showMenuBarIcon
     }
 
-    private func updateStatusIcon(showing: Bool) {
-        let img = NSImage(systemSymbolName: showing ? "curtains.closed" : "curtains.open",
-                          accessibilityDescription: showing ? "遮罩显示中" : "LockCurtain")
+    /// 遮罩盖着 > 保持唤醒中 > 平时
+    private func updateStatusIcon() {
+        let (symbol, label) = overlay.mode != nil ? ("curtains.closed", "遮罩显示中")
+            : keepAwake.isOn ? ("cup.and.saucer.fill", "保持唤醒中") : ("curtains.open", "LockCurtain")
+        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
         img?.isTemplate = true
         statusItem?.button?.image = img
         statusItem?.button?.title = img == nil ? "🌙" : ""
@@ -254,7 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
-        updateStatusIcon(showing: false)
+        updateStatusIcon()
         let menu = NSMenu()
 
         let away = NSMenuItem(title: "进入离开模式", action: #selector(enterAway), keyEquivalent: "")
@@ -273,7 +284,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
 
-        item.menu = menu
+        statusMenu = menu
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+    }
+
+    /// 左键弹面板；右键或按住 ⌃ 点按弹原来的菜单
+    @objc private func statusItemClicked() {
+        guard let item = statusItem, let button = item.button else { return }
+        let e = NSApp.currentEvent
+        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true {
+            item.menu = statusMenu      // 临时挂上弹出来，再摘掉，否则左键也会弹菜单
+            button.performClick(nil)
+            item.menu = nil
+        } else {
+            panel.toggle(from: button)
+        }
     }
 
     @objc private func forceHideOverlay() { overlay.forceHide() }
