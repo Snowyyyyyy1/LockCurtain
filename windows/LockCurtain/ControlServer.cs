@@ -91,7 +91,7 @@ internal sealed class ControlServer
     }
 }
 
-/// 命令行客户端：LockCurtain.exe --send away|preview|hide|status
+/// 命令行客户端：LockCurtain.exe --send away|preview|hide|status|settings
 internal static class ControlClient
 {
     public static int Send(string cmd)
@@ -101,7 +101,7 @@ internal static class ControlClient
         {
             // 没运行时 status / hide 不拉起 App
             if (cmd is "status" or "hide") return Print("{\"ok\":true,\"running\":false}", 0);
-            if (cmd is "away" or "preview")
+            if (cmd is "away" or "preview" or "settings")
             {
                 // 装了以最高权限运行的计划任务就通过它拉起，否则直接启动自己。
                 // UseShellExecute：不让 GUI 进程继承我们的标准输出，否则调用方读输出会一直等到 App 退出
@@ -118,8 +118,10 @@ internal static class ControlClient
         return Print(reply, ok ? 0 : 1);
     }
 
-    static string? TrySend(string cmd, int timeoutMs)
+    public static string? TrySend(string cmd, int timeoutMs)
     {
+        // 设置窗口要能到前台：前台权限在我们（用户刚双击 / 刚敲的命令）手上，让给 App
+        if (cmd == "settings") Native.AllowSetForegroundWindow(Native.ASFW_ANY);
         try
         {
             using var pipe = new NamedPipeClientStream(".", ControlServer.PipeName, PipeDirection.InOut);

@@ -13,6 +13,7 @@
 //
 // 安全约束和 Mac 版一样：离开模式下任何撤遮罩的路径都先锁屏，不会露出已解锁的桌面。
 
+using System.Diagnostics;
 using Microsoft.Win32;
 
 namespace LockCurtain;
@@ -22,8 +23,6 @@ internal enum CurtainMode { Preview, Away }
 internal sealed class OverlayController
 {
     const int MaxUnguardedSeconds = 120;
-    /// 离开模式下屏幕常亮；关掉时只防系统休眠，允许熄屏
-    const bool KeepDisplayOn = true;
 
     readonly List<OverlayForm> forms = new();
     readonly InputFilter input = new();
@@ -69,7 +68,7 @@ internal sealed class OverlayController
         armedAt = DateTime.UtcNow.AddSeconds(1);
         unguardedSeconds = 0;
         lastAbove = null;
-        if (mode == CurtainMode.Away) power.Engage(KeepDisplayOn);
+        if (mode == CurtainMode.Away) power.Engage();
         BuildForms();
         input.Start(() => ui.Post(_ => HandlePhysicalInput(), null));
         if (!input.IsRunning) Log.Write("⚠️ 无法安装输入钩子，遮罩只能靠看门狗或菜单关闭");
@@ -78,18 +77,21 @@ internal sealed class OverlayController
         StateChanged?.Invoke();
     }
 
-    /// 每块屏建一个窗口，先黑底上屏；壁纸在后台读，读完补上
+    /// 每块屏建一个窗口，先黑底上屏；背景在后台准备，好了再补上
     void BuildForms()
     {
+        var art = Settings.Current.CurtainArt;
+        var background = Settings.Current.CurtainBackground;
+        if (art == CurtainArt.Custom) CustomArt.Reload();
         foreach (var screen in Screen.AllScreens)
         {
-            var form = new OverlayForm(screen, stealth);
+            var form = new OverlayForm(screen, stealth, art, background);
             form.Show();
             form.Bounds = screen.Bounds;    // 建在另一块缩放不同的屏上时，系统可能按 DPI 改过尺寸
             form.EnsureTopmost();
             forms.Add(form);
         }
-        _ = ApplyWallpaperAsync(forms.ToList());
+        _ = ApplyBackgroundAsync(forms.ToList(), background);
     }
 
     /// 先建新窗口、再关旧窗口，中间不留空档：离开模式下不会露出桌面（和 Mac 版 rebuildWindows 一样）。
@@ -102,11 +104,36 @@ internal sealed class OverlayController
         foreach (var f in old) f.Close();
     }
 
-    static async Task ApplyWallpaperAsync(List<OverlayForm> targets)
+    /// 壁纸类先读壁纸文件；模糊壁纸再按系统铺法画整屏、缩小、模糊。程序画的图按每块屏的像素尺寸和缩放比例画。
+    /// 都在后台线程，一块屏一块屏来（多块屏可能共用缓存里的同一张壁纸）。纯黑什么也不用做
+    static async Task ApplyBackgroundAsync(List<OverlayForm> targets, CurtainBackground background)
     {
-        var image = await Task.Run(Wallpaper.Load);
-        foreach (var f in targets)
-            if (!f.IsDisposed) f.SetWallpaper(image);
+        if (background == CurtainBackground.Black) return;
+        var clock = Stopwatch.StartNew();
+        var screens = targets.Select(f => (Form: f, Bounds: f.Display.Bounds, f.ClientSize, Scale: f.DeviceDpi / 96f)).ToList();
+        if (background.UsesWallpaper())
+        {
+            var wallpapers = await Task.Run(() => Wallpaper.Load(targets.Select(f => f.Display).ToList()));
+            foreach (var (form, bounds, size, _) in screens)
+            {
+                if (!wallpapers.TryGetValue(form.Display.DeviceName, out var wallpaper)) continue;
+                if (background == CurtainBackground.Wallpaper)
+                {
+                    if (!form.IsDisposed) form.SetWallpaper(wallpaper);
+                    continue;
+                }
+                form.SetBackgroundImage(await Task.Run(() =>
+                {
+                    using var full = OverlayForm.RenderWallpaper(wallpaper, bounds, size);
+                    return CurtainBackgrounds.Blur(full);
+                }));
+            }
+        }
+        else
+            foreach (var (form, _, size, scale) in screens)
+                if (await Task.Run(() => background.Render(size.Width, size.Height, scale)) is { } image)
+                    form.SetBackgroundImage(image);
+        Log.Write($"background {background} ready in {clock.ElapsedMilliseconds} ms");
     }
 
     // MARK: - 隐藏
@@ -199,12 +226,16 @@ internal sealed class OverlayController
     {
         switch (cmd)
         {
+            // 锁屏界面在安全桌面上，遮罩盖不上去；现在盖上，解锁回来的人一碰又锁屏
+            case "away" or "preview" when Session.IsLocked():
+                return new() { ["ok"] = false, ["running"] = true, ["locked"] = true,
+                               ["error"] = "会话已锁屏，遮罩盖不到锁屏界面上；解锁后再发" };
             case "away": Show(CurtainMode.Away); break;
             case "preview": Show(CurtainMode.Preview); break;
             case "hide": await SafeHide(); break;
             case "status": break;
             default:
-                return new() { ["ok"] = false, ["error"] = $"未知命令 {cmd}，可用：away / preview / hide / status" };
+                return new() { ["ok"] = false, ["error"] = $"未知命令 {cmd}，可用：away / preview / hide / status / settings" };
         }
         var s = new Dictionary<string, object>
         {

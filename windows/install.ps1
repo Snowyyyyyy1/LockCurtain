@@ -51,6 +51,8 @@ if ($Uninstall) {
 
 New-Item -ItemType Directory -Force $dir | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'LockCurtain.exe') $exe -Force
+# 设置里开过「登录时打开」的话删掉，不然登录时 Run 键和计划任务各起一个
+Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name LockCurtain -ErrorAction SilentlyContinue
 if ($PSScriptRoot -eq $stage) { Remove-Item $stage -Recurse -Force }
 
 $action = New-ScheduledTaskAction -Execute $exe

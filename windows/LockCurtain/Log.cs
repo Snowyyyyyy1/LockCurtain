@@ -31,4 +31,10 @@ internal static class Log
         }
         System.Diagnostics.Debug.Write(line);
     }
+
+    public static void OpenDir()
+    {
+        Directory.CreateDirectory(Dir);
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Dir) { UseShellExecute = true });
+    }
 }

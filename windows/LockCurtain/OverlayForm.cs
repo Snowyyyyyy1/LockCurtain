@@ -10,10 +10,10 @@
 // Chromium 系浏览器被别的窗口整个挡住时会停止渲染页面，但实测（2026-10-26，Win11 25H2 ARM，Edge）
 // 遮罩盖住时 Edge 照常渲染：requestAnimationFrame 不停，visibilityState 一直是 visible。
 //
-// 画面从下到上：壁纸（等比铺满）→ 黑色 28% → 机械眼 → 两行文案。
+// 画面从下到上：背景（CurtainBackground.cs：壁纸照系统的铺法，见 Wallpaper.cs；模糊壁纸拉伸铺满；
+// 程序画的图和屏一样大；纯黑什么也不画）→ 黑色压暗（壁纸 28%、模糊壁纸 35%，其余不压）→ 图案 → 两行文案。
 // 尺寸照搬 Mac 版的 pt，乘以这块屏的缩放比例（DPI / 96）。
 
-using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -25,25 +25,34 @@ namespace LockCurtain;
 
 internal sealed class OverlayForm : Form
 {
-    const float EyeSize = 160, EyeOffsetY = -88;
     const string Title = "LockCurtain is Using Your PC";
     const string Subtitle = "Press any key or click to unlock";
 
     readonly bool stealth;
+    readonly CurtainArt art;
+    readonly CurtainBackground curtainBackground;
     readonly bool animate;
-    readonly long startTimestamp = Stopwatch.GetTimestamp();
     readonly System.Windows.Forms.Timer frameTimer = new() { Interval = 33 };   // 30 帧，和 Mac 版一样
-    Image? wallpaper;
-    bool wallpaperResolved;
-    Bitmap? background;
+    /// 还没读完时是 null，先画黑底
+    WallpaperInfo? wallpaper;
+    /// 模糊壁纸（缩小过的）或程序画的背景，后台准备好之前是 null
+    Bitmap? backgroundImage;
+    /// 不动的部分画好存起来
+    Bitmap? still;
     bool artFailureLogged;
 
     /// 排除捕获设置成功了没有
     public bool Stealthed { get; private set; }
 
-    public OverlayForm(Screen screen, bool stealth)
+    /// 这个窗口盖的那块屏
+    public Screen Display { get; }
+
+    public OverlayForm(Screen screen, bool stealth, CurtainArt art, CurtainBackground curtainBackground)
     {
+        Display = screen;
         this.stealth = stealth;
+        this.art = art;
+        this.curtainBackground = curtainBackground;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -51,8 +60,9 @@ internal sealed class OverlayForm : Form
         BackColor = Color.Black;
         Bounds = screen.Bounds;
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-        // 系统关了「动画效果」时停在一帧
-        animate = !Native.SystemParametersInfoW(Native.SPI_GETCLIENTAREAANIMATION, 0, out int on, 0) || on != 0;
+        // 系统关了「动画效果」时停在一帧；自定义图片和没有图案时不用动
+        animate = art.Draw() != null
+                  && (!Native.SystemParametersInfoW(Native.SPI_GETCLIENTAREAANIMATION, 0, out int on, 0) || on != 0);
         frameTimer.Tick += (_, _) => Invalidate(Rectangle.Ceiling(EyeRect()));
     }
 
@@ -89,17 +99,35 @@ internal sealed class OverlayForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         frameTimer.Dispose();
-        background?.Dispose();
+        still?.Dispose();
+        backgroundImage?.Dispose();
         base.OnFormClosed(e);
     }
 
-    /// 壁纸异步读完后调用；null 表示纯色桌面
-    public void SetWallpaper(Image? image)
+    /// 壁纸异步读完后调用
+    public void SetWallpaper(WallpaperInfo info)
     {
-        wallpaper = image;
-        wallpaperResolved = true;
-        background?.Dispose();
-        background = null;
+        wallpaper = info;
+        Repaint();
+    }
+
+    /// 模糊壁纸或程序画的背景在后台准备好后调用；窗口已经关了就把图扔掉
+    public void SetBackgroundImage(Bitmap image)
+    {
+        if (IsDisposed)
+        {
+            image.Dispose();
+            return;
+        }
+        backgroundImage?.Dispose();
+        backgroundImage = image;
+        Repaint();
+    }
+
+    void Repaint()
+    {
+        still?.Dispose();
+        still = null;
         Invalidate();
     }
 
@@ -112,7 +140,7 @@ internal sealed class OverlayForm : Form
             if (!Native.IsWindowVisible(h)) continue;
             Native.GetWindowThreadProcessId(h, out var pid);
             if (pid == me) continue;
-            if (Native.DwmGetWindowAttribute(h, Native.DWMWA_CLOAKED, out var cloaked, sizeof(int)) == 0 && cloaked != 0) continue;
+            if (Native.IsCloaked(h)) continue;
             if (!Native.GetWindowRect(h, out var r)) continue;
             if (!Bounds.IntersectsWith(Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom))) continue;
 
@@ -129,8 +157,8 @@ internal sealed class OverlayForm : Form
 
     RectangleF EyeRect()
     {
-        var side = EyeSize * DpiScale;
-        var c = new PointF(ClientSize.Width / 2f, ClientSize.Height / 2f + EyeOffsetY * DpiScale);
+        var side = art.Size() * DpiScale;
+        var c = new PointF(ClientSize.Width / 2f, ClientSize.Height / 2f + art.OffsetY() * DpiScale);
         return new RectangleF(c.X - side / 2, c.Y - side / 2, side, side);
     }
 
@@ -139,46 +167,108 @@ internal sealed class OverlayForm : Form
     protected override void OnPaint(PaintEventArgs e)
     {
         var g = e.Graphics;
-        background ??= BuildBackground();
-        g.DrawImage(background, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
+        still ??= BuildStill();
+        g.DrawImage(still, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
 
         var eye = EyeRect();
-        if (!eye.IntersectsWith(e.ClipRectangle)) return;
-        var t = animate ? Stopwatch.GetElapsedTime(startTimestamp).TotalSeconds : 0;
+        var draw = art == CurtainArt.Custom ? CustomArt.Draw : art.Draw();
+        if (draw == null || !eye.IntersectsWith(e.ClipRectangle)) return;
+        var t = animate ? CurtainArts.Now : art.StillTime(CurtainArts.Now);   // 系统关了动画效果就停在一帧
         var state = g.Save();
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TranslateTransform(eye.X, eye.Y);
         // OnPaint 抛一次异常，WinForms 就把整个窗口标成出错、以后不再绘制，遮罩只剩一片黑。
-        // 眼睛只是装饰：画不出来就跳过这一帧，记一次日志（新图案先用 Tools/EyePreview 逐帧检查）
-        try { MechEye.Draw(g, eye.Width, t); }
+        // 图案只是装饰：画不出来就跳过这一帧，记一次日志（新图案先用 Tools/EyePreview 逐帧检查）
+        try { draw(g, eye.Width, t); }
         catch (ExternalException ex)
         {
-            if (!artFailureLogged) Log.Write($"机械眼 t={t:F3} 画失败，跳过这一帧: {ex.Message}");
+            if (!artFailureLogged) Log.Write($"{art.Title()} t={t:F3} 画失败，跳过这一帧: {ex.Message}");
             artFailureLogged = true;
         }
         g.Restore(state);
     }
 
-    /// 不动的部分（壁纸、压暗、文案）画一次存起来，每帧只重画眼睛那一块
-    Bitmap BuildBackground()
+    /// 不动的部分（背景、压暗、文案）画一次存起来，每帧只重画眼睛那一块
+    Bitmap BuildStill()
     {
         int w = Math.Max(1, ClientSize.Width), h = Math.Max(1, ClientSize.Height);
         var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
         using var g = Graphics.FromImage(bmp);
-        // 壁纸还没读完时是黑底，读完发现是纯色桌面就用桌面背景色
-        g.Clear(wallpaperResolved && wallpaper == null ? Wallpaper.DesktopColor() : Color.Black);
-        if (wallpaper != null)
+        g.Clear(Color.Black);
+        if (curtainBackground == CurtainBackground.Wallpaper && wallpaper != null)
+            PaintWallpaper(g, wallpaper, Display.Bounds, new Size(w, h));
+        else if (backgroundImage != null)
         {
-            var s = Math.Max((float)w / wallpaper.Width, (float)h / wallpaper.Height);
-            float dw = wallpaper.Width * s, dh = wallpaper.Height * s;
-            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            // 程序画的图和屏一样大，原样贴上；模糊壁纸是 1/4 的小图，拉伸回整屏，边缘按镜像取样，不然四边会混进透明变暗
+            g.InterpolationMode = InterpolationMode.HighQualityBilinear;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            g.DrawImage(wallpaper, (w - dw) / 2, (h - dh) / 2, dw, dh);
+            using var edges = new ImageAttributes();
+            edges.SetWrapMode(WrapMode.TileFlipXY);
+            g.DrawImage(backgroundImage, new Rectangle(0, 0, w, h), 0, 0, backgroundImage.Width, backgroundImage.Height,
+                        GraphicsUnit.Pixel, edges);
         }
-        using (var dim = new SolidBrush(Color.FromArgb(71, 0, 0, 0)))   // 黑色 alpha 0.28
-            g.FillRectangle(dim, 0, 0, w, h);
+        var dim = curtainBackground.Dim();
+        if (dim > 0)
+            using (var brush = new SolidBrush(Color.FromArgb((int)Math.Round(dim * 255), 0, 0, 0)))
+                g.FillRectangle(brush, 0, 0, w, h);
         DrawText(g, w, h);
         return bmp;
+    }
+
+    /// 画进一张屏幕大小的新图，参数同 PaintWallpaper
+    internal static Bitmap RenderWallpaper(WallpaperInfo wallpaper, Rectangle display, Size size)
+    {
+        var bmp = new Bitmap(Math.Max(1, size.Width), Math.Max(1, size.Height), PixelFormat.Format32bppPArgb);
+        using var g = Graphics.FromImage(bmp);
+        PaintWallpaper(g, wallpaper, display, size);
+        return bmp;
+    }
+
+    /// 照系统的铺法画一块屏的壁纸：先铺底色（适应、居中没铺满的地方露出它，纯色桌面就只有底色），再画图。
+    /// 坐标是这块屏的物理像素，图片按像素尺寸算（居中是 1:1，不跟着缩放比例放大）；display 是这块屏在桌面上的位置，跨屏铺法要用。
+    /// 模糊壁纸在后台线程调用：多块屏共用缓存里的同一张图，GDI+ 的图不能两个线程同时画，所以锁住
+    internal static void PaintWallpaper(Graphics g, WallpaperInfo wallpaper, Rectangle display, Size size)
+    {
+        g.Clear(wallpaper.Background);
+        if (wallpaper.Image is not { } image) return;
+        var client = new Rectangle(Point.Empty, size);
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        lock (image)
+            switch (wallpaper.Fit)
+            {
+                case WallpaperFit.Stretch:
+                    g.DrawImage(image, client);
+                    break;
+                case WallpaperFit.Center:
+                    g.DrawImage(image, (client.Width - image.Width) / 2, (client.Height - image.Height) / 2, image.Width, image.Height);
+                    break;
+                case WallpaperFit.Tile:
+                    // 从这块屏的左上角开始铺（推断：Win8 起每块屏单独画壁纸）
+                    using (var brush = new TextureBrush(image)) g.FillRectangle(brush, client);
+                    break;
+                case WallpaperFit.Fit:
+                    DrawScaled(g, image, client, cover: false);
+                    break;
+                case WallpaperFit.Span:
+                    // 一张图铺满所有屏的外接矩形，这块屏只画自己那一块
+                    var desk = SystemInformation.VirtualScreen;
+                    desk.Offset(-display.X, -display.Y);
+                    DrawScaled(g, image, desk, cover: true);
+                    break;
+                default:
+                    DrawScaled(g, image, client, cover: true);
+                    break;
+            }
+    }
+
+    /// 等比缩放后居中放进 area：cover 铺满（多出的裁掉），否则整张放得下
+    static void DrawScaled(Graphics g, Image image, Rectangle area, bool cover)
+    {
+        float sx = (float)area.Width / image.Width, sy = (float)area.Height / image.Height;
+        var s = cover ? Math.Max(sx, sy) : Math.Min(sx, sy);
+        float dw = image.Width * s, dh = image.Height * s;
+        g.DrawImage(image, area.X + (area.Width - dw) / 2, area.Y + (area.Height - dh) / 2, dw, dh);
     }
 
     /// 两行居中，行高 18 / 14，间距 15，整组中心在屏幕中心往下 33.5

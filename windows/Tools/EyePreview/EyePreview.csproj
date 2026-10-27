@@ -6,6 +6,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
     <!-- 调用栈里要带行号 -->
@@ -13,7 +14,16 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../../LockCurtain/ArtKit.cs" Link="ArtKit.cs" />
+    <Compile Include="../../LockCurtain/ArtLayer.cs" Link="ArtLayer.cs" />
+    <Compile Include="../../LockCurtain/CurtainArt.cs" Link="CurtainArt.cs" />
     <Compile Include="../../LockCurtain/MechEye.cs" Link="MechEye.cs" />
+    <Compile Include="../../LockCurtain/DemonEyeArt.cs" Link="DemonEyeArt.cs" />
+    <Compile Include="../../LockCurtain/TalismanArt.cs" Link="TalismanArt.cs" />
+    <Compile Include="../../LockCurtain/ClockArt.cs" Link="ClockArt.cs" />
+    <Compile Include="../../LockCurtain/VaultArt.cs" Link="VaultArt.cs" />
+    <Compile Include="../../LockCurtain/PadlockArt.cs" Link="PadlockArt.cs" />
+    <Compile Include="../../LockCurtain/CurtainBackground.cs" Link="CurtainBackground.cs" />
   </ItemGroup>
 
 </Project>

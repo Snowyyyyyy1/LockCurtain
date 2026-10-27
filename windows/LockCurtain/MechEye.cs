@@ -8,67 +8,22 @@
 
 using System.Drawing;
 using System.Drawing.Drawing2D;
+using static LockCurtain.ArtKit;
 
 namespace LockCurtain;
 
 internal static class MechEye
 {
     // 设计坐标：原点在中心，半径 120 的坐标系（与 Swift 相同）
-    private const double Slot = 1.7;       // 注视点切换的时间片
-    private const double MaxGaze = 15.0;   // 注视点最大偏移
+    internal const double Slot = 1.7;       // 注视点切换的时间片
+    internal const double MaxGaze = 15.0;   // 注视点最大偏移
 
-    private static readonly Color Clear = Color.FromArgb(0, 0, 0, 0);
-
-    // 拉丝金属的 9 个停靠色（Swift 里 Gradient(colors:) 均匀分布）
-    private static readonly Color[] BrushedStops =
-    {
-        Rgb(0x8A8F98), Rgb(0xDCE0E6), Rgb(0x6B7079), Rgb(0xC4C9D1), Rgb(0x777C85),
-        Rgb(0xE8EBEF), Rgb(0x70757E), Rgb(0xB8BDC5), Rgb(0x8A8F98),
-    };
-
-    // 与 Swift 的 Gaze 结构对应的二维向量
-    private readonly record struct V(double X, double Y)
-    {
-        public static V operator +(V a, V b) => new(a.X + b.X, a.Y + b.Y);
-        public static V operator -(V a, V b) => new(a.X - b.X, a.Y - b.Y);
-        public static V operator *(V a, double k) => new(a.X * k, a.Y * k);
-    }
-
-    private readonly record struct Pose(V Gaze, double Pupil, double Gear, double Iris, double Glow);
+    internal readonly record struct Pose(V Gaze, double Pupil, double Gear, double Iris, double Glow);
 
     // MARK: - 动作
 
-    /// 阻尼弹簧，0 → 1，带一点过冲。omega 越大越快
-    private static double Spring(double tau, double omega = 26, double zeta = 0.42)
-    {
-        if (!(tau > 0)) return 0;
-        double wd = omega * Math.Sqrt(1 - zeta * zeta);
-        return 1 - Math.Exp(-zeta * omega * tau) * (Math.Cos(wd * tau) + zeta * omega / wd * Math.Sin(wd * tau));
-    }
-
-    /// 0..1 的伪随机数，只由 (i, salt) 决定（SplitMix64 风格，UInt64 回绕）
-    private static double Rand(int i, ulong salt)
-    {
-        unchecked
-        {
-            ulong z = (ulong)(long)i + salt * 0x9E3779B97F4A7C15UL;
-            z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9UL;
-            z = (z ^ (z >> 27)) * 0x94D049BB133111EBUL;
-            z ^= z >> 31;
-            return (double)(z >> 11) / (double)(1UL << 53);
-        }
-    }
-
-    /// 棘轮：每 period 秒跳一格 step（度），跳的时候带过冲
-    private static double Ratchet(double t, double period, double step)
-    {
-        double n = Math.Floor(t / period);
-        double teeth = Math.Round(360 / step, MidpointRounding.AwayFromZero);
-        return (n % teeth + Spring(t - n * period, 55, 0.35)) * step;
-    }
-
     /// 每 slot 秒可能换一次注视点，换的时刻在 slot 开头 0.6 秒内随机
-    private static double MoveTime(int i) => i * Slot + 0.6 * Rand(i, 1);
+    internal static double MoveTime(int i) => i * Slot + 0.6 * Rand(i, 1);
 
     private static V GazeTarget(int i)
     {
@@ -78,7 +33,7 @@ internal static class MechEye
         return new V(Math.Cos(a) * r, Math.Sin(a) * r * 0.7);  // 左右看得比上下多
     }
 
-    private static Pose PoseAt(double t)
+    internal static Pose PoseAt(double t)
     {
         int i = (int)Math.Floor(t / Slot);
         if (t < MoveTime(i)) i -= 1;
@@ -166,22 +121,11 @@ internal static class MechEye
             g.DrawLine(pen, P(Polar(95, deg)), P(Polar(isLong ? 101 : 98.5, deg)));
         }
 
-        // 螺丝：球面受光（径向渐变中心偏左上 1.2）+ 一条槽
+        // 螺丝槽：Swift 原版把 deg * 1.7 当作弧度用，这里保持一致（疑似原作笔误，未修正）
         for (int k = 0; k < 6; k++)
         {
             double deg = 30 + k * 60.0;
-            V c = Polar(105, deg);
-            using (var br = Radial(new V(c.X - 1.2, c.Y - 1.2), 0, 4.6, Rgb(0xF2F4F7), Rgb(0x8C919A), Rgb(0x4A4E55)))
-            using (var head = Circle(4.2, c.X, c.Y))
-                g.FillPath(br, head);
-
-            // 螺丝槽：Swift 原版把 deg * 1.7 当作弧度用，这里保持一致（疑似原作笔误，未修正）
-            double sa = deg * 1.7;
-            double dx = 2.8 * Math.Cos(sa), dy = 2.8 * Math.Sin(sa);
-            using var slotLine = new GraphicsPath();
-            slotLine.AddLine(P(c.X + dx, c.Y + dy), P(c.X - dx, c.Y - dy));
-            using var slotPen = new Pen(Black(0.6), 1f);
-            g.DrawPath(slotPen, slotLine);
+            Screw(g, Polar(105, deg), slot: deg * 1.7);
         }
     }
 
@@ -372,9 +316,7 @@ internal static class MechEye
             g.DrawPath(arcPen, arc);
         }
 
-        // 高光点原版带 blur(3)，GDI+ 不支持模糊，这里直接画实心小圆
-        using (var spot = Circle(5, -36, -44))
-            FillSolid(g, spot, White(0.35));
+        SoftDot(g, new V(-36, -44), 5, 3, White(0.35));
 
         using (var lensEdge = Circle(79))
         using (var br = Radial(new V(0, 0), 55, 80, Clear, Black(0.35)))
@@ -383,144 +325,10 @@ internal static class MechEye
         g.Restore(st);
     }
 
-    // MARK: - 几何与颜色辅助
-
-    /// 圆（路径，调用方负责 Dispose）
-    private static GraphicsPath Circle(double r, double cx = 0, double cy = 0)
-    {
-        var p = new GraphicsPath();
-        AddCircle(p, r, cx, cy);
-        return p;
-    }
-
-    /// 环：外圆 + 内圆，奇偶规则填充得到中空环
-    private static GraphicsPath Ring(double outer, double inner)
-    {
-        var p = new GraphicsPath(FillMode.Alternate);
-        AddCircle(p, outer, 0, 0);
-        AddCircle(p, inner, 0, 0);
-        return p;
-    }
-
-    private static void AddCircle(GraphicsPath p, double r, double cx, double cy)
-    {
-        p.AddEllipse((float)(cx - r), (float)(cy - r), (float)(2 * r), (float)(2 * r));
-    }
-
-    private static V Polar(double r, double deg) =>
-        new(r * Math.Cos(deg * Math.PI / 180), r * Math.Sin(deg * Math.PI / 180));
-
     /// 第 k 条边的方向（正八边形按角度算，开口为 0 时也成立）
     private static V DirOf(double twist, int n, int k)
     {
         double a = twist + (k + 0.5) * 2 * Math.PI / n + Math.PI / 2;
         return new V(Math.Cos(a), Math.Sin(a));
-    }
-
-    private static PointF P(double x, double y) => new((float)x, (float)y);
-
-    private static PointF P(V v) => new((float)v.X, (float)v.Y);
-
-    /// 与 Swift Color.rgb 对应：hex 为 0xRRGGBB，a 为不透明度 0..1
-    private static Color Rgb(uint hex, double a = 1) =>
-        Color.FromArgb(A(a), (int)((hex >> 16) & 0xff), (int)((hex >> 8) & 0xff), (int)(hex & 0xff));
-
-    private static Color Black(double a) => Color.FromArgb(A(a), 0, 0, 0);
-
-    private static Color White(double a) => Color.FromArgb(A(a), 255, 255, 255);
-
-    /// 不透明度 → alpha：(int)(opacity * 255)，夹在 0..255
-    private static int A(double opacity) => Math.Clamp((int)(opacity * 255), 0, 255);
-
-    private static Color Lerp(Color a, Color b, double u)
-    {
-        static int Mix(int x, int y, double k) => (int)Math.Round(x + (y - x) * k);
-        return Color.FromArgb(Mix(a.A, b.A, u), Mix(a.R, b.R, u), Mix(a.G, b.G, u), Mix(a.B, b.B, u));
-    }
-
-    /// 均匀分布的多色停靠点在角度 deg 上的颜色（从 startDeg 起顺时针）
-    private static Color ConicColor(double deg, double startDeg, Color[] stops)
-    {
-        double f = (((deg - startDeg) % 360) + 360) % 360 / 360.0;
-        double x = f * (stops.Length - 1);
-        int i = Math.Min((int)Math.Floor(x), stops.Length - 2);
-        return Lerp(stops[i], stops[i + 1], x - i);
-    }
-
-    private static void FillSolid(Graphics g, GraphicsPath path, Color c)
-    {
-        using var b = new SolidBrush(c);
-        g.FillPath(b, path);
-    }
-
-    private static void StrokeSolid(Graphics g, GraphicsPath path, Color c, float width)
-    {
-        using var pen = new Pen(c, width);
-        g.DrawPath(pen, path);
-    }
-
-    /// 线性渐变。端点和路径在同一个坐标系里，Graphics 的世界变换会同时作用于两者，画刷不用再设变换。
-    /// GDI+ 的线性渐变超出端点会重复，不能像 SwiftUI 那样延用端点色（WrapMode.Clamp 会抛异常），
-    /// 所以把渐变线两头各延长 4 倍，原来的端点以外填端点色。
-    /// 渐变线几乎水平或竖直时（眨眼合上那几帧 twist 为 0，叶片方向落在坐标轴上，cos(π/2) 只是接近 0），
-    /// GDI+ 建画刷会失败；正好水平或竖直它能处理，所以把浮点残差归零。
-    private static LinearGradientBrush Linear(double x0, double y0, double x1, double y1, Color c0, Color c1)
-    {
-        const double k = 4;
-        double dx = x1 - x0, dy = y1 - y0;
-        if (Math.Abs(dx) < 1e-6) dx = 0;
-        if (Math.Abs(dy) < 1e-6) dy = 0;
-        (x1, y1) = (x0 + dx, y0 + dy);
-        var br = new LinearGradientBrush(P(x0 - dx * k, y0 - dy * k), P(x1 + dx * k, y1 + dy * k), c0, c1);
-        float a = (float)(k / (2 * k + 1)), b = (float)((k + 1) / (2 * k + 1));
-        br.InterpolationColors = new ColorBlend { Positions = new[] { 0f, a, b, 1f }, Colors = new[] { c0, c0, c1, c1 } };
-        return br;
-    }
-
-    /// 径向渐变：Swift 的 colors 在半径 [r0, r1] 上均匀分布，r0 以内取首色，r1 以外取末色。
-    /// PathGradientBrush 只画源路径以内，而且位置 0 在边界、1 在中心，所以源路径取一个
-    /// 比 r1 大得多的圆，r1 到这个圆之间都填末色，位置按半径倒过来换算。
-    private static PathGradientBrush Radial(V center, double r0, double r1, params Color[] stops)
-    {
-        int n = stops.Length;
-        double outer = r1 * 4 + 200;
-        var pos = new List<float> { 0f };
-        var cols = new List<Color> { stops[n - 1] };
-        for (int i = n - 1; i >= 0; i--)
-        {
-            double r = r0 + (r1 - r0) * i / (n - 1);
-            pos.Add((float)(1 - r / outer));
-            cols.Add(stops[i]);
-        }
-        if (r0 > 0)
-        {
-            pos.Add(1f);                // 圆心到 r0 之间取首色
-            cols.Add(stops[0]);
-        }
-
-        using var src = Circle(outer, center.X, center.Y);
-        return new PathGradientBrush(src)
-        {
-            CenterPoint = P(center),
-            InterpolationColors = new ColorBlend { Positions = pos.ToArray(), Colors = cols.ToArray() },
-        };
-    }
-
-    /// 拉丝环：把 conic 渐变拆成 120 个 3° 楔形（每块两侧略重叠防缝）
-    private static void DrawConicRing(Graphics g, double outer, double inner, double startDeg, Color[] stops)
-    {
-        const int n = 120;
-        for (int k = 0; k < n; k++)
-        {
-            double a0 = k * 360.0 / n, a1 = (k + 1) * 360.0 / n;
-            Color c = ConicColor((a0 + a1) / 2, startDeg, stops);
-            using var wedge = new GraphicsPath();
-            wedge.AddPolygon(new[]
-            {
-                P(Polar(outer, a0 - 0.3)), P(Polar(outer, a1 + 0.3)),
-                P(Polar(inner, a1 + 0.3)), P(Polar(inner, a0 - 0.3)),
-            });
-            FillSolid(g, wedge, c);
-        }
     }
 }

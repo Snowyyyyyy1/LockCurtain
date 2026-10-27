@@ -3,3 +3,7 @@ LockCurtain/obj/
 Tools/EyePreview/bin/
 Tools/EyePreview/obj/
 dist/
+Tests/RulesSelfTest/bin/
+Tests/RulesSelfTest/obj/
+Tests/SleepSelfTest/bin/
+Tests/SleepSelfTest/obj/
