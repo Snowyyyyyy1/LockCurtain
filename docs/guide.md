@@ -1,6 +1,6 @@
 # LockCurtain 详细说明
 
-Mac 版的完整用法和实现细节。简介、安装和 Windows 版见 [README](../README.md)。
+Mac 版的完整用法和实现细节。简介、安装和 Windows 版见 [README](../README.zh-CN.md)。
 
 在每块屏幕上盖一层「壁纸 + 压暗 + 图案 + 提示文案」的遮罩，并把遮罩做成对屏幕捕获透明，让后台自动化任务照常工作。
 遮罩显示期间只拦截真人的键鼠输入，程序合成的输入照常放行；不处理任何账号信息。
@@ -447,7 +447,7 @@ LockCurtain/
 ├── release.sh                    发布：打包、签更新包、生成 appcast、建 GitHub Release
 ├── VERSION                       版本号，Mac 和 Windows 共用
 ├── release-notes/                每个版本的发布说明
-├── README.md / README.en.md      简介和安装（中文 / 英文）
+├── README.md / README.zh-CN.md   简介和安装（英文 / 中文）
 ├── LICENSE                       AGPL-3.0
 ├── docs/guide.md                 本文
 ├── Sources/

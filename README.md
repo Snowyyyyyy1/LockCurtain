@@ -2,104 +2,104 @@
 
 <h1 align="center">LockCurtain</h1>
 
-<p align="center">离开电脑时，agent 照常干活，路过的人只看到一块遮罩。</p>
+<p align="center">Step away while your AI agent keeps working. Anyone walking by sees only a curtain.</p>
 
-<p align="center">中文 · <a href="README.en.md">English</a></p>
+<p align="center">English · <a href="README.zh-CN.md">中文</a></p>
 
-<p align="center"><img src="docs/images/curtain.gif" alt="离开模式下的遮罩：星空背景上的机械眼和提示文案"></p>
+<p align="center"><img src="docs/images/curtain.gif" alt="The curtain in away mode: a mechanical eye and a hint over a starfield"></p>
 
-让 Claude Code、Codex 这类 agent 跑长任务时，人走开一会儿就两头为难：
-锁屏的话，截屏、模拟点击这类自动化操作不一定还能用；不锁屏的话，谁路过都能看到、碰到你的桌面。
+When Claude Code, Codex or another agent is running a long task and you need to step away, you face a choice.
+Lock the screen, and screenshots and simulated clicks may stop working. Leave it unlocked, and anyone passing by can see and touch your desktop.
 
-LockCurtain 的**离开模式**不锁屏，而是用一层遮罩盖住所有屏幕：
+LockCurtain's **away mode** doesn't lock the screen. It covers every display with a curtain instead:
 
-- **agent 不受影响**：遮罩对截屏和录屏透明，自动化工具拍到的是遮罩下面的真实桌面；程序发出的键鼠输入照常放行。
-- **真人碰不到桌面**：有人按键盘或点鼠标，这次输入被吞掉，电脑随即锁屏，等系统锁屏界面出来了才撤遮罩。
+- **The agent keeps working.** The curtain is invisible to screenshots and screen recording, so automation tools see the real desktop underneath. Keyboard and mouse input sent by programs goes through as usual.
+- **People can't reach the desktop.** When someone presses a key or clicks, that input is swallowed and the computer locks. The curtain lifts only once the system lock screen is up.
 
-Mac 和 Windows 都有。
+Available for Mac and Windows.
 
-## 功能
+## Features
 
-- **离开模式**：手动进入，或者交给规则：空闲 N 分钟、某个 app 或进程在运行、有 app 在阻止睡眠、某个时间段、接着电源，开着的条件都满足时自动进入。离开期间电脑不睡。
-- **遮罩样式**：图案有机械眼、魔瞳、镇宅符、机械表、保险库、挂锁，也可以用自己的图片；背景有壁纸、模糊壁纸、纯黑，和程序画的星空、远山、碳纤维。遮罩上的两行字也能改。
-- **锁屏遮罩**（仅 Mac）：真的锁屏时也盖一层同样的遮罩。
-- **面板**（菜单栏 / 通知区域）：现在谁在阻止睡眠、过去 24 小时睡了多久，以及「保持唤醒」：不盖遮罩，只让电脑不睡。
-- **命令行**：`--send away` / `hide` / `status`，agent 和脚本可以自己进入离开模式。Mac 上还能用 iPhone 快捷指令通过 SSH 远程开。
-- **自动更新**：每天检查一次，有新版本先问你；遮罩盖着时不弹窗，也不重启。
+- **Away mode.** Turn it on yourself, or let rules do it: idle for N minutes, an app or process is running, an app is keeping the computer awake, a time window, on AC power. Away mode starts when all enabled conditions are met, and keeps the computer awake.
+- **Curtain styles.** Patterns: mechanical eye, demon eye, Taoist talisman, clock, vault door, padlock, or your own picture. Backgrounds: wallpaper, blurred wallpaper, black, or generated starfield, hills and carbon fiber. The two lines of text on the curtain can be changed too.
+- **Lock screen curtain** (Mac only). The same curtain also covers the real lock screen.
+- **Panel** (menu bar / notification area). What is keeping the computer awake right now, how long it slept in the last 24 hours, and "Keep awake": no curtain, just no sleep.
+- **Command line.** `--send away` / `hide` / `status`, so agents and scripts can turn on away mode themselves. On the Mac you can also trigger it remotely from an iPhone Shortcut over SSH.
+- **Automatic updates.** Checks once a day and asks before installing. No prompts or restarts while the curtain is up.
 
-界面目前只有中文。
+The interface is in Chinese only for now.
 
-## 安装
+## Install
 
 ### Mac
 
-需要 macOS 14 或更新版本、Apple 芯片（M 系列）。
+Requires macOS 14 or later on Apple silicon.
 
-1. 从 [Releases](https://github.com/Snowyyyyyy1/LockCurtain/releases/latest) 下载 `LockCurtain-<版本>-mac.zip`，解压，把 LockCurtain 拖进「应用程序」文件夹。
-2. 第一次打开时系统会拦下：App 用自建证书签名，没有经过 Apple 公证。到「系统设置 → 隐私与安全性」，往下翻到 LockCurtain 那一条，点「仍要打开」。
-3. 给两个权限，设置窗口的「权限」页能看到状态：
-   - **屏幕录制**：读当前壁纸，做遮罩背景。
-   - **辅助功能**：监听键盘和鼠标，判断是不是有人回来了。系统不会弹窗，要在「系统设置 → 隐私与安全性 → 辅助功能」里点 `+` 把 LockCurtain 加进去。
+1. Download `LockCurtain-<version>-mac.zip` from [Releases](https://github.com/Snowyyyyyy1/LockCurtain/releases/latest), unzip it and move LockCurtain to Applications.
+2. macOS blocks the first launch because the app is signed with a self-made certificate and isn't notarized. Go to System Settings → Privacy & Security, scroll down to the LockCurtain entry and click "Open Anyway".
+3. Grant two permissions. The Permissions page in LockCurtain's settings shows their status.
+   - **Screen Recording** reads the current wallpaper for the curtain background.
+   - **Accessibility** watches the keyboard and mouse to tell when someone is back. macOS doesn't prompt for it: click `+` in System Settings → Privacy & Security → Accessibility and add LockCurtain.
 
 ### Windows
 
-需要 Windows 10 2004 或更新版本（含 Windows 11），64 位。目前只在 Windows 11 ARM64 上实测过。不用另装 .NET。
+Requires Windows 10 version 2004 or later (including Windows 11), 64-bit. So far tested only on Windows 11 ARM64. No separate .NET install needed.
 
-1. 打开「设置 → 系统 → 系统信息」看「系统类型」：ARM 处理器（骁龙笔记本、Mac 上的虚拟机）下载 `LockCurtain-<版本>-win-arm64.zip`，其余下载 `-win-x64.zip`。
-2. 解压，右键 `install.ps1` 选「使用 PowerShell 运行」，在 UAC 提示里点「是」。程序会装到 `C:\Program Files\LockCurtain`，以后每次登录都以管理员身份自动启动，不再弹 UAC。
-   右键菜单里没有这一项时，在解压出来的文件夹里打开 PowerShell，运行 `powershell -ExecutionPolicy Bypass -File .\install.ps1`。
-3. 程序没有代码签名，可能会看到「Windows 已保护你的电脑」：点「更多信息」，再点「仍要运行」。开着「智能应用控制」时，没签名的程序会被直接拦下，只能在 Windows 安全中心里把它关掉。
+1. Check Settings → System → About → System type. On an ARM-based processor (Snapdragon laptops, VMs on Apple silicon Macs), download `LockCurtain-<version>-win-arm64.zip`; otherwise download `-win-x64.zip`.
+2. Unzip, right-click `install.ps1`, choose "Run with PowerShell" and accept the UAC prompt. It installs to `C:\Program Files\LockCurtain` and starts LockCurtain as administrator at every sign-in, without asking again.
+   If that menu item is missing, open PowerShell in the unzipped folder and run `powershell -ExecutionPolicy Bypass -File .\install.ps1`.
+3. The app isn't code-signed, so you may see "Windows protected your PC": click "More info", then "Run anyway". If Smart App Control is on, it blocks unsigned apps outright, and the only way around it is to turn it off in Windows Security.
 
-不是管理员的账户用不了 `install.ps1`：把解压出来的文件夹放在自己的目录里，直接运行 `LockCurtain.exe`，在设置里打开「登录时打开」。
-这样运行时，如果前台是以管理员身份运行的窗口，按键会先落进那个窗口，约 0.2 秒后才锁屏。
+Standard (non-admin) accounts can't use `install.ps1`. Keep the unzipped folder somewhere you own, run `LockCurtain.exe` and turn on "Open at login" in its settings.
+In this mode, when a window running as administrator is in front, keystrokes reach that window first and the computer locks about 0.2 seconds later.
 
-卸载：运行 `install.ps1 -Uninstall`，会删掉计划任务和 `C:\Program Files\LockCurtain`。设置和日志在 `%LOCALAPPDATA%\LockCurtain`，不要了可以手动删。
+To uninstall, run `install.ps1 -Uninstall`. It removes the scheduled task and `C:\Program Files\LockCurtain`. Settings and logs stay in `%LOCALAPPDATA%\LockCurtain`; delete that folder if you don't need them.
 
-和 Mac 版的差别：锁屏界面上盖不了遮罩，开始菜单这类系统弹出层会显示在遮罩上面；
-「过去 24 小时」只记睡眠和唤醒，不记各程序阻止睡眠的历史；没有 iPhone 快捷指令的远程控制，只有命令行。
+Differences from the Mac version: the curtain can't cover the lock screen, and the Start menu and other system pop-ups appear above it.
+"Last 24 hours" shows only sleep and wake, without per-app history of what kept the PC awake. There is no iPhone Shortcuts remote control, only the command line.
 
-## 用法
+## Usage
 
-点菜单栏（Windows 是通知区域）里的 LockCurtain 图标，选「进入离开模式」，然后就可以走开了。
+Click the LockCurtain icon in the menu bar (the notification area on Windows) and choose 「进入离开模式」 (enter away mode). Then walk away.
 
-回来时按任意键或点一下鼠标，电脑锁屏，用密码解锁就行。这一下输入不会落到 agent 正在操作的窗口上。
+When you come back, press any key or click once. The computer locks; unlock it with your password as usual. That keystroke or click never reaches the window the agent is working in.
 
-让 agent 自己进入离开模式：
+To let an agent turn on away mode itself:
 
 ```bash
 # Mac
 /Applications/LockCurtain.app/Contents/MacOS/LockCurtain --send away
-# Windows（PowerShell）
+# Windows (PowerShell)
 & "C:\Program Files\LockCurtain\LockCurtain.exe" --send away
 ```
 
-`hide` 撤遮罩（离开模式下同样先锁屏），`status` 输出一行 JSON。命令只能把遮罩拉起来或者锁屏，不能远程解锁。
+`hide` lifts the curtain (in away mode it locks the computer first, like a human touch). `status` prints one line of JSON. Commands can only raise the curtain or lock the computer; there is no remote unlock.
 
-规则在设置窗口的「规则」页。规则只在条件刚满足的那一刻触发一次，你回来撤掉遮罩后，不会马上又被盖上。
+Rules live on the 「规则」 (Rules) page in settings. A rule fires once, at the moment its conditions become true, so the curtain doesn't come right back after you dismiss it.
 
-## 常见问题
+## FAQ
 
-**遮罩盖着时，agent 截的图真的不受影响？**
-是。Mac 上遮罩窗口设了 `sharingType = .none`，Windows 上用 `WDA_EXCLUDEFROMCAPTURE`，系统的截屏和录屏都会跳过它。
-在 Mac 上用 ScreenCaptureKit、`screencapture` 和 cua-driver 测过，拍到的都是遮罩下面的桌面，包括遮罩显示之后才打开的窗口。
+**Can the agent really take screenshots through the curtain?**
+Yes. The curtain window uses `sharingType = .none` on the Mac and `WDA_EXCLUDEFROMCAPTURE` on Windows, so system screenshots and screen recording skip it.
+On the Mac this was tested with ScreenCaptureKit, `screencapture` and cua-driver: all of them captured the desktop under the curtain, including windows opened after the curtain went up.
 
-**这样安全吗？**
-遮罩不是锁。离开模式下桌面并没有锁上，遮罩防的是路过的人：看不到屏幕，碰一下就锁屏。
-它防不住能在这台电脑上运行程序的人，比如通过 SSH 登录的人，或者 agent 本身。
+**Is this secure?**
+The curtain is not a lock. In away mode your desktop is unlocked; the curtain protects against people walking by, who can't see the screen and lock it the moment they touch anything.
+It doesn't protect against anyone who can run programs on the computer, such as someone logged in over SSH, or the agent itself.
 
-**离开期间电脑会睡吗？**
-不会。离开模式会阻止系统睡眠，默认屏幕也常亮（可以在设置里关掉）。真的锁屏之后就不再阻止，照常睡。MacBook 合上盖子照样会睡。
+**Will the computer sleep while I'm away?**
+No. Away mode prevents system sleep and, by default, keeps the display on (you can turn that off in settings). Once the computer is really locked, LockCurtain stops preventing sleep. Closing a MacBook's lid still puts it to sleep.
 
-**遮罩撤不掉怎么办？**
-Mac 上如果因为缺辅助功能权限，连续 2 分钟监听不到键盘和鼠标，LockCurtain 会自己先锁屏再撤遮罩。
-还不行的话，从另一台设备 SSH 登录，运行 `pkill -9 -f LockCurtain`。
+**What if the curtain won't go away?**
+On the Mac, if LockCurtain can't see the keyboard and mouse for 2 minutes (for example, because the Accessibility permission is missing), it locks the computer and lifts the curtain on its own.
+If that fails too, log in from another device over SSH and run `pkill -9 -f LockCurtain`.
 
-**会联网吗？**
-只有自动更新会：每天从 GitHub 读一次更新清单，不收集任何数据。从源码编译的版本不检查更新。
+**Does it connect to the internet?**
+Only for automatic updates: once a day it reads the update feed from GitHub. It collects no data. Builds from source don't check for updates.
 
-## 从源码编译
+## Build from source
 
-Mac，需要 Xcode 或 Command Line Tools：
+Mac, with Xcode or the Command Line Tools:
 
 ```bash
 git clone https://github.com/Snowyyyyyy1/LockCurtain.git
@@ -108,12 +108,12 @@ cd LockCurtain
 open LockCurtain.app
 ```
 
-没有签名证书时用 ad-hoc 签名，每次重新编译都要重新给权限。自建一张证书就不用：钥匙串访问 → 证书助理 → 创建证书，类型选「代码签名」，然后 `echo "证书名" > .signing-cert`。
+Without a signing certificate the build is ad-hoc signed, and you have to grant permissions again after every rebuild. A self-made certificate avoids that: Keychain Access → Certificate Assistant → Create a Certificate, type "Code Signing", then `echo "<certificate name>" > .signing-cert`.
 
-Windows 版也在 Mac 上编译：`brew install dotnet`，然后运行 `windows/build.sh`。
+The Windows version is also built on a Mac: `brew install dotnet`, then run `windows/build.sh`.
 
-完整的用法、实现细节和实测记录见 [docs/guide.md](docs/guide.md)。
+Full usage, implementation notes and test records (in Chinese) are in [docs/guide.md](docs/guide.md).
 
-## 许可证
+## License
 
 [AGPL-3.0](LICENSE)
