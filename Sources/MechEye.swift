@@ -2,9 +2,9 @@
 //
 // 结构从外到内：金属外壳（刻度 + 螺丝）→ 棘轮齿圈 → 眼窝 → 会转动的眼球
 // （橙红虹膜 + 8 片光圈叶片 + 红色指示灯）→ 玻璃罩高光。
-// 整只眼是时间 t 的纯函数，由 CurtainArtView 按帧调用 draw。
+// 整只眼是时间 t（和盯光标的状态 Stare）的纯函数，由 CurtainArtView 按帧调用 draw。
 // 动作都是「机械」的：齿圈一格一格跳、眼球快速转到新位置再带一点过冲停住、
-// 光圈跟着重新对焦，偶尔整个合上再打开（眨眼）。
+// 光圈跟着重新对焦，偶尔整个合上再打开（眨眼）。有人动鼠标时转过去盯着光标。
 
 import SwiftUI
 
@@ -40,11 +40,84 @@ enum MechEye {
 
     static func moveTime(_ i: Int) -> Double { Double(i) * slot + 0.6 * rand(i, 1) }
 
+    /// t 时刻看的是第几个注视点：这个 slot 换眼的时刻还没到，就还是上一个
+    static func slotIndex(_ t: Double) -> Int {
+        let i = Int((t / slot).rounded(.down))
+        return t < moveTime(i) ? i - 1 : i
+    }
+
     static func gazeTarget(_ i: Int) -> CGPoint {
         if rand(i, 2) < 0.28 { return .zero }                 // 时不时回正
         let a = rand(i, 3) * 2 * .pi
         let r = maxGaze * (0.45 + 0.55 * rand(i, 4))
         return CGPoint(x: cos(a) * r, y: sin(a) * r * 0.7)    // 左右看得比上下多
+    }
+
+    /// 自己东张西望时的注视点（不含抖动）
+    static func wander(_ t: Double) -> CGPoint {
+        let i = slotIndex(t)
+        return lerp(gazeTarget(i - 1), gazeTarget(i), spring(t - moveTime(i)))
+    }
+
+    static func lerp(_ a: CGPoint, _ b: CGPoint, _ k: Double) -> CGPoint {
+        CGPoint(x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k)
+    }
+
+    /// 先冲上去再落回来的一下，peak 秒时最大（= 1）
+    static func kick(_ h: Double, peak: Double) -> Double {
+        h > 0 && h.isFinite ? h / peak * exp(1 - h / peak) : 0
+    }
+
+    // MARK: - 盯光标
+
+    /// 有人动鼠标时，眼球转过去盯着光标：光圈收小、指示灯常亮、不眨眼；光标停下 hold 秒后回去东张西望。
+    /// 遮罩每帧把光标位置喂进来（Tools/EyePreview 喂一条假轨迹）。这里只记几个时刻和注视点，
+    /// 所以 pose(t, stare) 仍然只由参数决定
+    final class Stare {
+        static let hold = 3.0       // 光标停下多久后回去东张西望
+        static let step = 0.15      // 两跳之间至少隔这么久：光标一直在动时，眼球一小跳一小跳地跟
+
+        private(set) var since = -Double.infinity      // 这一轮开始盯的时刻
+        private(set) var lastMove = -Double.infinity   // 光标最后一次动的时刻
+        private(set) var hop = (t: -Double.infinity, from: CGPoint.zero, to: CGPoint.zero)   // 最近一跳
+        private var cursor: CGPoint?
+
+        /// cursor 和 eye 都是屏幕坐标（原点在左下，单位 pt），eye 是图案中心
+        func feed(_ t: Double, cursor c: CGPoint, eye: CGPoint) {
+            let now = MechEye.look(t, self)            // 先记下这一刻的注视点，新的一跳从这里出发
+            let was = t - lastMove < Self.hold
+            if let last = cursor, hypot(c.x - last.x, c.y - last.y) > 0.5 { lastMove = t }
+            cursor = c                                  // 第一帧只记位置：遮罩刚盖上时不算有人动
+            guard t - lastMove < Self.hold else { return }
+            if !was { since = t }
+            let to = Self.aim(c, eye)
+            if !was || (hypot(to.x - hop.to.x, to.y - hop.to.y) > 1 && t - hop.t > Self.step) {
+                hop = (t, now, to)
+            }
+        }
+
+        /// 朝光标方向看：离得越远转得越多，光标停在眼睛上时直视
+        static func aim(_ c: CGPoint, _ eye: CGPoint) -> CGPoint {
+            let dx = c.x - eye.x, dy = eye.y - c.y      // 画布的 y 朝下
+            let d = hypot(dx, dy)
+            guard d > 1 else { return .zero }
+            let r = maxGaze * (1 - exp(-d / 200))
+            return CGPoint(x: dx / d * r, y: dy / d * r * 0.8)
+        }
+    }
+
+    /// 注视点（不含抖动）：盯光标时弹到最近一跳的落点，光标停下 hold 秒后再弹回东张西望
+    static func look(_ t: Double, _ stare: Stare?) -> CGPoint {
+        let w = wander(t)
+        guard let s = stare, s.hop.t > -.infinity else { return w }
+        let held = lerp(s.hop.from, s.hop.to, spring(t - s.hop.t))
+        let back = t - s.lastMove - Stare.hold
+        return back > 0 ? lerp(held, w, spring(back)) : held
+    }
+
+    /// 盯人的程度 0..1：开始盯时升到 1，回去东张西望时降回 0
+    static func lock(_ t: Double, _ s: Stare) -> Double {
+        smoothstep((t - s.since) / 0.25) * (1 - smoothstep((t - s.lastMove - Stare.hold) / 0.4))
     }
 
     struct Pose {
@@ -55,15 +128,13 @@ enum MechEye {
         var glow: Double       // 指示灯亮度 0..1
     }
 
-    static func pose(_ t: Double) -> Pose {
-        var i = Int((t / slot).rounded(.down))
-        if t < moveTime(i) { i -= 1 }
+    static func pose(_ t: Double, _ stare: Stare? = nil) -> Pose {
+        let i = slotIndex(t)
         let tau = t - moveTime(i)
-        let k = spring(tau)
-        let from = gazeTarget(i - 1), to = gazeTarget(i)
         // 停住时伺服电机的细微抖动
         let hum = CGPoint(x: sin(t * 37) * 0.18 + sin(t * 59) * 0.1, y: cos(t * 43) * 0.15)
-        let gaze = CGPoint(x: from.x + (to.x - from.x) * k + hum.x, y: from.y + (to.y - from.y) * k + hum.y)
+        let base = look(t, stare)
+        let gaze = CGPoint(x: base.x + hum.x, y: base.y + hum.y)
 
         // 转完眼再对焦：光圈晚 0.12 秒跟上
         let focusFrom = 10 + 12 * rand(i - 1, 5), focusTo = 10 + 12 * rand(i, 5)
@@ -76,10 +147,18 @@ enum MechEye {
             else if b >= 0.18 { pupil *= min(1, spring(b - 0.18, omega: 20, zeta: 0.55)) }
         }
 
+        // 盯人时光圈收小，每跳一下先张开一点再收回去对焦；指示灯常亮，不眨眼
+        var glow = 0.72 + 0.28 * sin(t * 2 * .pi / 2.6)
+        if let s = stare {
+            let l = lock(t, s)
+            pupil += (7 + 6 * kick(t - s.hop.t, peak: 0.12) - pupil) * l
+            glow += (1 - glow) * l
+        }
+
         return Pose(gaze: gaze, pupil: max(0, pupil),
                     gear: ratchet(t, period: 1.6, step: 7.5),
                     iris: -ratchet(t + 0.4, period: 0.8, step: 2.5),
-                    glow: 0.72 + 0.28 * sin(t * 2 * .pi / 2.6))
+                    glow: glow)
     }
 
     // MARK: - 绘制
@@ -91,9 +170,9 @@ enum MechEye {
         g.scaleBy(x: s, y: s)
     }
 
-    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double) {
+    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double, stare: Stare?) {
         unitSpace(&g, size)
-        let p = pose(t)
+        let p = pose(t, stare)
 
         drawHousing(&g)
         drawGear(&g, angle: p.gear)

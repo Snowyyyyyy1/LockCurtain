@@ -2,9 +2,9 @@
 //
 // 结构从外到内：金属外壳（刻度 + 螺丝）→ 棘轮齿圈 → 眼窝 → 会转动的眼球
 // （橙红虹膜 + 8 片光圈叶片 + 红色指示灯）→ 玻璃罩高光。
-// 整只眼是时间 t 的纯函数，由调用方按帧调用 Draw。
+// 整只眼是时间 t（和盯光标的状态 Stare）的纯函数，由调用方按帧调用 Draw。
 // 动作都是「机械」的：齿圈一格一格跳、眼球快速转到新位置再带一点过冲停住、
-// 光圈跟着重新对焦，偶尔整个合上再打开（眨眼）。
+// 光圈跟着重新对焦，偶尔整个合上再打开（眨眼）。有人动鼠标时转过去盯着光标。
 
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -25,6 +25,13 @@ internal static class MechEye
     /// 每 slot 秒可能换一次注视点，换的时刻在 slot 开头 0.6 秒内随机
     internal static double MoveTime(int i) => i * Slot + 0.6 * Rand(i, 1);
 
+    /// t 时刻看的是第几个注视点：这个 slot 换眼的时刻还没到，就还是上一个
+    internal static int SlotIndex(double t)
+    {
+        int i = (int)Math.Floor(t / Slot);
+        return t < MoveTime(i) ? i - 1 : i;
+    }
+
     private static V GazeTarget(int i)
     {
         if (Rand(i, 2) < 0.28) return new V(0, 0);             // 时不时回正
@@ -33,16 +40,81 @@ internal static class MechEye
         return new V(Math.Cos(a) * r, Math.Sin(a) * r * 0.7);  // 左右看得比上下多
     }
 
-    internal static Pose PoseAt(double t)
+    /// 自己东张西望时的注视点（不含抖动）
+    internal static V Wander(double t)
     {
-        int i = (int)Math.Floor(t / Slot);
-        if (t < MoveTime(i)) i -= 1;
+        int i = SlotIndex(t);
+        return Lerp(GazeTarget(i - 1), GazeTarget(i), Spring(t - MoveTime(i)));
+    }
+
+    internal static V Lerp(V a, V b, double k) => new(a.X + (b.X - a.X) * k, a.Y + (b.Y - a.Y) * k);
+
+    /// 先冲上去再落回来的一下，peak 秒时最大（= 1）
+    internal static double Kick(double h, double peak) =>
+        h > 0 && double.IsFinite(h) ? h / peak * Math.Exp(1 - h / peak) : 0;
+
+    // MARK: - 盯光标
+
+    /// 有人动鼠标时，眼球转过去盯着光标：光圈收小、指示灯常亮、不眨眼；光标停下 Hold 秒后回去东张西望。
+    /// 遮罩每帧把光标位置喂进来。这里只记几个时刻和注视点，所以 PoseAt(t, stare) 仍然只由参数决定
+    internal sealed class Stare
+    {
+        internal const double Hold = 3.0;      // 光标停下多久后回去东张西望
+        internal const double Step = 0.15;     // 两跳之间至少隔这么久：光标一直在动时，眼球一小跳一小跳地跟
+
+        internal double Since { get; private set; } = double.NegativeInfinity;      // 这一轮开始盯的时刻
+        internal double LastMove { get; private set; } = double.NegativeInfinity;   // 光标最后一次动的时刻
+        internal (double T, V From, V To) Hop { get; private set; } = (double.NegativeInfinity, default, default);   // 最近一跳
+        private V? cursor;
+
+        /// c 和 eye 都是屏幕坐标（原点在左上，单位是这块屏的逻辑像素），eye 是图案中心
+        internal void Feed(double t, V c, V eye)
+        {
+            V now = Look(t, this);                      // 先记下这一刻的注视点，新的一跳从这里出发
+            bool was = t - LastMove < Hold;
+            if (cursor is { } last && Dist(c, last) > 0.5) LastMove = t;
+            cursor = c;                                 // 第一帧只记位置：遮罩刚盖上时不算有人动
+            if (!(t - LastMove < Hold)) return;
+            if (!was) Since = t;
+            V to = Aim(c, eye);
+            if (!was || (Dist(to, Hop.To) > 1 && t - Hop.T > Step)) Hop = (t, now, to);
+        }
+
+        /// 朝光标方向看：离得越远转得越多，光标停在眼睛上时直视。屏幕的 y 朝下，和画布一样，不用反过来
+        internal static V Aim(V c, V eye)
+        {
+            double dx = c.X - eye.X, dy = c.Y - eye.Y;
+            double d = Math.Sqrt(dx * dx + dy * dy);
+            if (d <= 1) return new V(0, 0);
+            double r = MaxGaze * (1 - Math.Exp(-d / 200));
+            return new V(dx / d * r, dy / d * r * 0.8);
+        }
+
+        private static double Dist(V a, V b) => Math.Sqrt((a.X - b.X) * (a.X - b.X) + (a.Y - b.Y) * (a.Y - b.Y));
+    }
+
+    /// 注视点（不含抖动）：盯光标时弹到最近一跳的落点，光标停下 Hold 秒后再弹回东张西望
+    internal static V Look(double t, Stare? stare)
+    {
+        V w = Wander(t);
+        if (stare is not { } s || double.IsNegativeInfinity(s.Hop.T)) return w;
+        V held = Lerp(s.Hop.From, s.Hop.To, Spring(t - s.Hop.T));
+        double back = t - s.LastMove - Stare.Hold;
+        return back > 0 ? Lerp(held, w, Spring(back)) : held;
+    }
+
+    /// 盯人的程度 0..1：开始盯时升到 1，回去东张西望时降回 0
+    internal static double Lock(double t, Stare s) =>
+        Smoothstep((t - s.Since) / 0.25) * (1 - Smoothstep((t - s.LastMove - Stare.Hold) / 0.4));
+
+    internal static Pose PoseAt(double t, Stare? stare = null)
+    {
+        int i = SlotIndex(t);
         double tau = t - MoveTime(i);
-        double k = Spring(tau);
-        V from = GazeTarget(i - 1), to = GazeTarget(i);
         // 停住时伺服电机的细微抖动
         V hum = new(Math.Sin(t * 37) * 0.18 + Math.Sin(t * 59) * 0.1, Math.Cos(t * 43) * 0.15);
-        V gaze = new(from.X + (to.X - from.X) * k + hum.X, from.Y + (to.Y - from.Y) * k + hum.Y);
+        V baseGaze = Look(t, stare);
+        V gaze = new(baseGaze.X + hum.X, baseGaze.Y + hum.Y);
 
         // 转完眼再对焦：光圈晚 0.12 秒跟上
         double focusFrom = 10 + 12 * Rand(i - 1, 5), focusTo = 10 + 12 * Rand(i, 5);
@@ -56,20 +128,29 @@ internal static class MechEye
             else if (b >= 0.18) pupil *= Math.Min(1, Spring(b - 0.18, 20, 0.55));
         }
 
+        // 盯人时光圈收小，每跳一下先张开一点再收回去对焦；指示灯常亮，不眨眼
+        double glow = 0.72 + 0.28 * Math.Sin(t * 2 * Math.PI / 2.6);
+        if (stare is { } s)
+        {
+            double l = Lock(t, s);
+            pupil += (7 + 6 * Kick(t - s.Hop.T, 0.12) - pupil) * l;
+            glow += (1 - glow) * l;
+        }
+
         return new Pose(gaze, Math.Max(0, pupil),
                         Ratchet(t, 1.6, 7.5),
                         -Ratchet(t + 0.4, 0.8, 2.5),
-                        0.72 + 0.28 * Math.Sin(t * 2 * Math.PI / 2.6));
+                        glow);
     }
 
     // MARK: - 绘制
 
     /// 把整只眼画进 (0,0)-(side,side) 的方块里。同一个 t 画出同一帧。
     /// 调用方已设好 SmoothingMode 并把 g 平移到方块左上角。
-    public static void Draw(Graphics g, float side, double t)
+    public static void Draw(Graphics g, float side, double t, Stare? stare)
     {
         float s = side / 240f;                 // 与 Swift 的 min(size)/240 一致
-        Pose p = PoseAt(t);
+        Pose p = PoseAt(t, stare);
 
         GraphicsState st = g.Save();
         g.TranslateTransform(side / 2f, side / 2f);

@@ -457,7 +457,8 @@ final class OverlayController {
         let (wallpaperView, wallpaperLayer) = buildWallpaperView(for: screen)
         let dim = buildDim(Prefs.curtainBackground.dim)
         let art = Prefs.curtainArt
-        let artView = buildArt(art)
+        // 图案中心：水平居中，竖直方向按 offsetY 往上挪（Auto Layout 的 y 朝下，屏幕坐标的 y 朝上）
+        let artView = buildArt(art, center: CGPoint(x: screen.frame.midX, y: screen.frame.midY - art.offsetY))
         let text = buildText()
 
         for v in [wallpaperView, dim, artView, text] { content.addSubview(v) }
@@ -501,8 +502,8 @@ final class OverlayController {
     }
 
     /// 中间的图案（CurtainArt.swift），设置里可换
-    private func buildArt(_ art: CurtainArt) -> NSView {
-        let v = NSHostingView(rootView: CurtainArtView(art: art))
+    private func buildArt(_ art: CurtainArt, center: CGPoint) -> NSView {
+        let v = NSHostingView(rootView: CurtainArtView(art: art, center: center))
         v.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             v.widthAnchor.constraint(equalToConstant: art.size),

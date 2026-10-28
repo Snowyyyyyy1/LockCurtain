@@ -32,6 +32,8 @@ internal sealed class OverlayForm : Form
     readonly CurtainBackground curtainBackground;
     readonly bool animate;
     readonly System.Windows.Forms.Timer frameTimer = new() { Interval = 33 };   // 30 帧，和 Mac 版一样
+    /// 机械眼、魔瞳盯光标的状态，每块屏一个（MechEye.Stare）
+    readonly MechEye.Stare stare = new();
     /// 还没读完时是 null，先画黑底
     WallpaperInfo? wallpaper;
     /// 模糊壁纸（缩小过的）或程序画的背景，后台准备好之前是 null
@@ -170,15 +172,27 @@ internal sealed class OverlayForm : Form
         g.DrawImage(still, e.ClipRectangle, e.ClipRectangle, GraphicsUnit.Pixel);
 
         var eye = EyeRect();
-        var draw = art == CurtainArt.Custom ? CustomArt.Draw : art.Draw();
+        var draw = art == CurtainArt.Custom ? (cg, cs, ct, _) => CustomArt.Draw(cg, cs, ct) : art.Draw();
         if (draw == null || !eye.IntersectsWith(e.ClipRectangle)) return;
         var t = animate ? CurtainArts.Now : art.StillTime(CurtainArts.Now);   // 系统关了动画效果就停在一帧
+        // 盯光标：只有遮罩上、动画在跑的机械眼和魔瞳才转过去（系统关了动画效果或暂停时不喂，画成没有盯光标的样子）。
+        // 光标和眼睛中心都换成这块屏的逻辑像素（物理像素除以缩放比例），和 Mac 版的 pt 一样
+        MechEye.Stare? stareNow = null;
+        if (animate && art.Stares())
+        {
+            stareNow = stare;
+            var scale = DpiScale;
+            var origin = PointToScreen(Point.Empty);
+            var eyeCenter = new ArtKit.V((origin.X + eye.X + eye.Width / 2) / scale, (origin.Y + eye.Y + eye.Height / 2) / scale);
+            var cursor = System.Windows.Forms.Cursor.Position;
+            stare.Feed(t, new ArtKit.V(cursor.X / scale, cursor.Y / scale), eyeCenter);
+        }
         var state = g.Save();
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TranslateTransform(eye.X, eye.Y);
         // OnPaint 抛一次异常，WinForms 就把整个窗口标成出错、以后不再绘制，遮罩只剩一片黑。
         // 图案只是装饰：画不出来就跳过这一帧，记一次日志（新图案先用 Tools/EyePreview 逐帧检查）
-        try { draw(g, eye.Width, t); }
+        try { draw(g, eye.Width, t, stareNow); }
         catch (ExternalException ex)
         {
             if (!artFailureLogged) Log.Write($"{art.Title()} t={t:F3} 画失败，跳过这一帧: {ex.Message}");

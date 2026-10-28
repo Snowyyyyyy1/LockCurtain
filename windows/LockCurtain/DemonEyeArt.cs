@@ -2,6 +2,7 @@
 //
 // 竖着的杏仁形眼眶里一只发光的竖瞳，背后一圈慢慢转的符文法阵。
 // 眼珠沿用机械眼的注视节奏（MechEye.PoseAt），上下转得多、左右转得少；转眼时竖瞳先张开、再收窄对焦；偶尔眨一下眼。
+// 有人动鼠标时同机械眼一样转过去盯着光标（见 MechEye.Stare）。
 // 整个图案是时间 t 的纯函数，由调用方按帧调用 Draw。
 
 using System.Drawing;
@@ -15,14 +16,12 @@ internal static class DemonEye
     internal readonly record struct Pose(V Gaze, double Slit, double Open, double Glow);
 
     /// 眼珠、竖瞳、眼睑和发光强度。注视直接用机械眼的，再按魔瞳的比例压扁、拉长
-    internal static Pose PoseAt(double t)
+    internal static Pose PoseAt(double t, MechEye.Stare? stare = null)
     {
-        var p = MechEye.PoseAt(t);
-        int i = (int)Math.Floor(t / MechEye.Slot);
-        if (t < MechEye.MoveTime(i)) i -= 1;
+        var p = MechEye.PoseAt(t, stare);
+        int i = MechEye.SlotIndex(t);
         double tau = t - MechEye.MoveTime(i);
-        double kick = tau > 0 ? tau / 0.15 * Math.Exp(1 - tau / 0.15) : 0;        // 0.15 秒时最大
-        double slit = 3.5 + 3.5 * Rand(i, 8) + 7 * kick;
+        double slit = 3.5 + 3.5 * Rand(i, 8) + 7 * MechEye.Kick(tau, 0.15);
         double open = 1.0;
         if (Rand(i, 7) < 0.18)
         {
@@ -31,15 +30,22 @@ internal static class DemonEye
             else if (b >= 0.07 && b < 0.11) open = 0;
             else if (b >= 0.11) open = Math.Min(1, Spring(b - 0.11, 24, 0.7));
         }
+        // 盯光标时竖瞳收窄，每跳一下先张开再收回；不眨眼
+        if (stare is { } s)
+        {
+            double l = MechEye.Lock(t, s);
+            slit += (2.5 + 7 * MechEye.Kick(t - s.Hop.T, 0.15) - slit) * l;
+            open += (1 - open) * l;
+        }
         return new Pose(new V(p.Gaze.X * 0.9, p.Gaze.Y * 1.9), slit, open, p.Glow);
     }
 
     /// 把整个图案画进 (0,0)-(side,side) 的方块里，同一个 t 画出同一帧。
     /// 调用方已把 g 平移到方块左上角。
-    public static void Draw(Graphics g, float side, double t)
+    public static void Draw(Graphics g, float side, double t, MechEye.Stare? stare)
     {
         using var c = Layer.Canvas(side);
-        var p = PoseAt(t);
+        var p = PoseAt(t, stare);
 
         DrawSigil(c, t, p.Glow);
         using var eye = Almond(p.Open);

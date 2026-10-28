@@ -662,7 +662,7 @@ internal sealed class ArtTile : Tile
 
         // 和遮罩上一样，自定义图片比动画图案小一点
         var side = S(ArtSide) * art.Size() / CurtainArt.MechEye.Size();
-        var draw = art == CurtainArt.Custom ? CustomArt.Draw : art.Draw();
+        var draw = art == CurtainArt.Custom ? (cg, cs, ct, _) => CustomArt.Draw(cg, cs, ct) : art.Draw();
         if (draw == null)
         {
             // 对应 Mac 的 SF Symbol circle.slash
@@ -680,7 +680,8 @@ internal sealed class ArtTile : Tile
             var state = g.Save();
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TranslateTransform((Width - side) / 2f, (tile.Height - side) / 2f);
-            try { draw(g, side, t); }
+            // 缩略图不盯光标，传 null
+            try { draw(g, side, t, null); }
             catch (ExternalException ex)
             {
                 if (!artFailureLogged) Log.Write($"缩略图 {art} t={t:F3} 画失败，跳过这一帧: {ex.Message}");

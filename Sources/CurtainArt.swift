@@ -2,6 +2,7 @@
 //
 // 动画图案都是「时间 t → 一帧」的纯函数，用 TimelineView + Canvas 实时画；
 // 同一个 t 永远画出同一帧，Tools/EyePreview.swift 靠这一点离线出预览。
+// 两只眼还会盯光标，多一个参数 MechEye.Stare，记着光标什么时候动过、眼球最近一跳的起止点。
 // 新加一种图案：在 CurtainArt 里加一个 case，补上 title / size / offsetY / draw。
 
 import AppKit
@@ -43,18 +44,21 @@ enum CurtainArt: String, CaseIterable, Identifiable {
         }
     }
 
-    /// 动画图案的画法；静态图案为 nil
-    var draw: ((inout GraphicsContext, CGSize, Double) -> Void)? {
+    /// 动画图案的画法；静态图案为 nil。最后一个参数是盯光标的状态，只有两只眼用
+    var draw: ((inout GraphicsContext, CGSize, Double, MechEye.Stare?) -> Void)? {
         switch self {
         case .mechEye: MechEye.draw
-        case .clock: ClockArt.draw
         case .demonEye: DemonEye.draw
-        case .talisman: TalismanArt.draw
-        case .vault: VaultArt.draw
-        case .padlock: PadlockArt.draw
+        case .clock: { g, s, t, _ in ClockArt.draw(&g, size: s, t: t) }
+        case .talisman: { g, s, t, _ in TalismanArt.draw(&g, size: s, t: t) }
+        case .vault: { g, s, t, _ in VaultArt.draw(&g, size: s, t: t) }
+        case .padlock: { g, s, t, _ in PadlockArt.draw(&g, size: s, t: t) }
         case .custom, .none: nil
         }
     }
+
+    /// 会不会转过去盯着光标
+    var stares: Bool { self == .mechEye || self == .demonEye }
 
     /// 停在一帧时画哪一刻：镇宅符停在写完、余光还在的时候，魔瞳避开眨眼，不然可能停在一张白纸或一只闭着的眼上
     func stillTime(_ t: Double) -> Double {
@@ -70,6 +74,9 @@ struct CurtainArtView: View {
     let art: CurtainArt
     /// 设置窗口里没选中的缩略图停在一帧，省得几个一起跑
     var animated = true
+    /// 图案中心的屏幕坐标（原点在左下）。遮罩上给出，眼睛就会盯着光标；设置窗口里不给
+    var center: CGPoint?
+    @State private var stare = MechEye.Stare()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -78,7 +85,11 @@ struct CurtainArtView: View {
             let paused = !animated || reduceMotion
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: paused)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
-                Canvas { g, size in draw(&g, size, paused ? art.stillTime(t) : t) }
+                Canvas { g, size in
+                    // 遮罩不拦鼠标也不藏光标，每帧读一次光标位置就够，不用新权限
+                    if !paused, art.stares, let center { stare.feed(t, cursor: NSEvent.mouseLocation, eye: center) }
+                    draw(&g, size, paused ? art.stillTime(t) : t, paused ? nil : stare)
+                }
             }
         } else if art == .custom {
             CustomImageArt()

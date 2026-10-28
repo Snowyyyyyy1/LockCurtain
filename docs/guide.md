@@ -67,7 +67,7 @@ defaults write dev.local.lockcurtain showDockIcon -bool true
 defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 ```
 
-**遮罩图案**：机械眼（默认）、魔瞳、镇宅符、机械表、保险库、挂锁、自定义图片、不显示。镇宅符照《太上秘法镇宅灵符》（正统道藏洞真部神符类）第三十道描的，原注「盗贼不侵，万事称意」。自定义图片默认是账户头像，在通用页可以换成任意图片（缩到 512px 以内存进设置的 `curtainImage`），可以选裁成圆形（`curtainImageRound`）。
+**遮罩图案**：机械眼（默认）、魔瞳、镇宅符、机械表、保险库、挂锁、自定义图片、不显示。机械眼和魔瞳会盯光标（Windows 版也会）：光标一动，眼球就转过去看它，光标停在眼睛上时直视，在另一块屏上时斜着看过去；盯着时光圈或竖瞳收窄、不眨眼，光标停下 3 秒后回去东张西望。光标位置每帧读一次 `NSEvent.mouseLocation`，不需要新权限；移动鼠标本来就不会撤遮罩，只有按键、点击、滚轮会。程序挪动光标时眼睛也会跟。开了「减弱动态效果」时不动。镇宅符照《太上秘法镇宅灵符》（正统道藏洞真部神符类）第三十道描的，原注「盗贼不侵，万事称意」。自定义图片默认是账户头像，在通用页可以换成任意图片（缩到 512px 以内存进设置的 `curtainImage`），可以选裁成圆形（`curtainImageRound`）。
 通用页里点缩略图切换，下次显示遮罩时生效；也可以 `defaults write dev.local.lockcurtain curtainArt mechEye`
 （取值 `mechEye` / `demonEye` / `talisman` / `clock` / `vault` / `padlock` / `custom` / `none`）。动画图案都按时间实时画，每秒 30 帧，
 加新图案见 `Sources/CurtainArt.swift` 文件头。

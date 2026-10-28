@@ -17,7 +17,7 @@ private func line(_ a: CGPoint, _ b: CGPoint) -> Path {
     return p
 }
 
-private func smoothstep(_ x: Double) -> Double {
+func smoothstep(_ x: Double) -> Double {
     let x = min(max(x, 0), 1)
     return x * x * (3 - 2 * x)
 }
@@ -596,13 +596,11 @@ enum DemonEye {
         var glow: Double       // 发光强度
     }
 
-    static func pose(_ t: Double) -> Pose {
-        let p = M.pose(t)
-        var i = Int((t / M.slot).rounded(.down))
-        if t < M.moveTime(i) { i -= 1 }
+    static func pose(_ t: Double, _ stare: MechEye.Stare? = nil) -> Pose {
+        let p = M.pose(t, stare)
+        let i = M.slotIndex(t)
         let tau = t - M.moveTime(i)
-        let kick = tau > 0 ? tau / 0.15 * exp(1 - tau / 0.15) : 0        // 0.15 秒时最大
-        let slit = 3.5 + 3.5 * M.rand(i, 8) + 7 * kick
+        var slit = 3.5 + 3.5 * M.rand(i, 8) + 7 * M.kick(tau, peak: 0.15)
         var open = 1.0
         if M.rand(i, 7) < 0.18 {
             let b = tau - 1.0
@@ -610,12 +608,18 @@ enum DemonEye {
             else if b >= 0.07, b < 0.11 { open = 0 }
             else if b >= 0.11 { open = min(1, M.spring(b - 0.11, omega: 24, zeta: 0.7)) }
         }
+        // 盯光标时竖瞳收窄，每跳一下先张开再收回；不眨眼
+        if let s = stare {
+            let l = M.lock(t, s)
+            slit += (2.5 + 7 * M.kick(t - s.hop.t, peak: 0.15) - slit) * l
+            open += (1 - open) * l
+        }
         return Pose(gaze: CGPoint(x: p.gaze.x * 0.9, y: p.gaze.y * 1.9), slit: slit, open: open, glow: p.glow)
     }
 
-    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double) {
+    static func draw(_ g: inout GraphicsContext, size: CGSize, t: Double, stare: MechEye.Stare?) {
         M.unitSpace(&g, size)
-        let p = pose(t)
+        let p = pose(t, stare)
         drawSigil(&g, t: t, glow: p.glow)
         let eye = almond(p.open)
 
