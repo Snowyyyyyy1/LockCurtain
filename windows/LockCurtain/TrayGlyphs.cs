@@ -12,30 +12,32 @@ namespace LockCurtain;
 
 internal partial class TrayApp
 {
-    /// 显示器上一把锁，和 App 图标、Mac 版的 SF Symbol lock.display / lock.open.display 一样。
-    /// 没有遮罩时锁是开的，遮罩显示中锁上
-    internal static Icon LockIcon(bool locked) => Glyph((g, brush, s) => DrawLock(g, brush, s, locked));
+    /// 初代 Mac，和 App 图标、Mac 版菜单栏图标同一个造型。平时屏幕上是笑脸，遮罩显示中屏幕涂满、抠出一把锁。
+    /// 16 格里放不下 Mac 版笑脸的鼻子，这里只有眼睛和嘴
+    internal static Icon MacIcon(bool locked) => Glyph((g, brush, s) => DrawMac(g, brush, s, locked));
 
-    internal static void DrawLock(Graphics g, Brush brush, float s, bool locked)
+    internal static void DrawMac(Graphics g, Brush brush, float s, bool locked)
     {
         // 边都落在整格上，100%（一格一像素）和 200% 缩放下不发虚。GDI+ 默认像素中心在整数坐标上，
         // 整格上的 1 像素线会糊成两格灰，所以把像素边对到整数上
         g.PixelOffsetMode = PixelOffsetMode.Half;
-        using var pen = new Pen(brush, 1 * s);
-        using (var screen = ArtKit.RoundedRect(1.5 * s, 1.5 * s, 13 * s, 10 * s, 1.5 * s))
-            g.DrawPath(pen, screen);
-        g.FillRectangle(brush, 7 * s, 12 * s, 2 * s, 2 * s);
-        using (var stand = ArtKit.RoundedRect(4 * s, 14 * s, 8 * s, 1 * s, 0.5 * s))
-            g.FillPath(brush, stand);
-        using (var body = ArtKit.RoundedRect(5 * s, 7 * s, 6 * s, 3 * s, 0.5 * s))
+        RectangleF R(float x, float y, float w, float h) => new(x * s, y * s, w * s, h * s);
+        // 机身外框（GraphicsPath 默认奇偶填充，里圈抠掉）、软驱口
+        using (var body = ArtKit.RoundedRect(1 * s, 1 * s, 14 * s, 14 * s, 2.5 * s))
+        {
+            ArtKit.AddRoundedRect(body, 2 * s, 2 * s, 12 * s, 12 * s, 1.5 * s);
             g.FillPath(brush, body);
-        // 锁梁：两条腿加半圆。开着的整体抬高一格，右腿停在锁身上方，留出一格缝
-        float top = locked ? 6 : 5, rightEnd = locked ? 7 : 6;
-        using var shackle = new GraphicsPath();
-        shackle.AddLine(6.5f * s, 7 * s, 6.5f * s, top * s);
-        shackle.AddArc(6.5f * s, (top - 1.5f) * s, 3 * s, 3 * s, 180, 180);
-        shackle.AddLine(9.5f * s, top * s, 9.5f * s, rightEnd * s);
-        g.DrawPath(pen, shackle);
+        }
+        g.FillRectangle(brush, R(8, 12, 4, 1));
+        // 屏幕：遮罩显示中整块涂满，锁梁和锁身抠出来；平时是一圈框，里面两只眼、一道笑
+        using var screen = ArtKit.RoundedRect(3 * s, 3 * s, 10 * s, 8 * s, 1.5 * s);
+        if (locked)
+            screen.AddRectangles([R(7, 4, 2, 1), R(6, 5, 1, 2), R(9, 5, 1, 2), R(5, 7, 6, 3)]);
+        else
+            screen.AddRectangle(R(4, 4, 8, 6));
+        g.FillPath(brush, screen);
+        if (!locked)
+            g.FillRectangles(brush, [R(6, 5, 1, 2), R(9, 5, 1, 2), R(5, 8, 1, 1), R(10, 8, 1, 1), R(6, 9, 4, 1)]);
     }
 
     /// 保持唤醒中：托盘上的杯子和碟子（Mac 版是 SF Symbol cup.and.saucer.fill）

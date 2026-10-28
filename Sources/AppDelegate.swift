@@ -121,11 +121,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.isVisible = Prefs.showMenuBarIcon
     }
 
-    /// 遮罩盖着 > 保持唤醒中 > 平时。显示器加锁和 App 图标是同一个意思：锁上表示遮罩盖着
+    /// 遮罩盖着 > 保持唤醒中 > 平时。初代 Mac 和 App 图标同一个造型：平时屏幕上是笑脸，遮罩盖着时屏幕涂满、抠出一把锁
     private func updateStatusIcon() {
-        let (symbol, label) = overlay.mode != nil ? ("lock.display", "遮罩显示中")
-            : keepAwake.isOn ? ("cup.and.saucer.fill", "保持唤醒中") : ("lock.open.display", "LockCurtain")
-        let img = NSImage(systemSymbolName: symbol, accessibilityDescription: label)
+        let img = overlay.mode != nil ? MenuBarGlyph.locked
+            : keepAwake.isOn ? NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: "保持唤醒中")
+            : MenuBarGlyph.idle
         img?.isTemplate = true
         statusItem?.button?.image = img
         statusItem?.button?.title = img == nil ? "🌙" : ""

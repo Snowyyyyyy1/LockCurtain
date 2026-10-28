@@ -46,7 +46,7 @@ if (args.Length > 1 && args[1] == "glyphs")
 {
     int[] sizes = [16, 20, 24, 32, 40, 48];
     Action<Graphics, Brush, float>[] glyphs =
-        [(g, b, s) => TrayApp.DrawLock(g, b, s, locked: false), (g, b, s) => TrayApp.DrawLock(g, b, s, locked: true), TrayApp.DrawCup];
+        [(g, b, s) => TrayApp.DrawMac(g, b, s, locked: false), (g, b, s) => TrayApp.DrawMac(g, b, s, locked: true), TrayApp.DrawCup];
     (Color Back, Color Fore)[] taskbars = [(Color.FromArgb(0x20, 0x20, 0x20), Color.White), (Color.FromArgb(0xF3, 0xF3, 0xF3), Color.Black)];
     const int cell = 56;
     using var sheet = new Bitmap(cell * glyphs.Length * taskbars.Length, cell * sizes.Length);

@@ -454,6 +454,7 @@ LockCurtain/
 │   ├── main.swift                入口，命令行参数分发
 │   ├── AppDelegate.swift         主菜单、菜单栏、Dock 图标、reopen、命令分发
 │   ├── StatusPanel.swift         菜单栏左键弹出的面板：常用操作、阻止睡眠和保持唤醒、过去 24 小时
+│   ├── MenuBarGlyph.swift        菜单栏图标：初代 Mac，平时屏幕上是笑脸，遮罩盖着时抠出一把锁
 │   ├── Preferences.swift         通用设置的 UserDefaults key
 │   ├── SettingsWindow.swift      设置窗口（SwiftUI）：通用 / 离开模式 / 远程控制 / 权限
 │   ├── RulesPane.swift           设置窗口的规则页和规则编辑器
@@ -483,7 +484,7 @@ LockCurtain/
 │   ├── SleepLogSelfTest.swift    电源日志解析、区间代数、24 小时统计的自测
 │   └── RulesSelfTest.swift       规则自测，运行方式见文件头
 ├── Tools/
-│   ├── make-icon.swift           用代码画 App 图标（显示器加锁），build.sh 调用；--ico 出 Windows 图标
+│   ├── make-icon.swift           用代码画 App 图标（初代 Macintosh），build.sh 调用；--ico 出 Windows 图标
 │   └── EyePreview.swift          离线渲染动画图案的拼图和 GIF，运行方式见文件头
 ├── windows/                      Windows 版（C#，在 Mac 上用 windows/build.sh 交叉编译）
 ├── proposals/                    未合入的改动提案；已合入的在 archive/

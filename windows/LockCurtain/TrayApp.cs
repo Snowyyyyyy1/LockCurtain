@@ -1,6 +1,6 @@
 // TrayApp.cs —— 通知区域图标和菜单，对应 Mac 版的菜单栏图标
 //
-// 图标（TrayGlyphs.cs）：显示器上的锁开着表示没有遮罩，锁上表示遮罩显示中，杯子表示保持唤醒中（遮罩优先）。
+// 图标（TrayGlyphs.cs）：初代 Mac，屏幕上是笑脸表示没有遮罩，屏幕涂满、抠出一把锁表示遮罩显示中，杯子表示保持唤醒中（遮罩优先）。
 // 左键弹面板（StatusPanel：离开模式、预览、保持唤醒、谁在阻止睡眠），右键弹系统原生菜单。
 
 using System.Drawing;
@@ -19,7 +19,7 @@ internal sealed partial class TrayApp : ApplicationContext
     readonly ControlServer server;
     readonly SessionWatcher watcher;
     readonly NotifyIcon tray;
-    readonly Icon openIcon, closedIcon, cupIcon;
+    readonly Icon idleIcon, lockedIcon, cupIcon;
     readonly KeepAwake keepAwake = new();
     /// 右键菜单的主人：TrackPopupMenu 要一个本线程的窗口
     readonly NativeWindow menuOwner = new();
@@ -40,10 +40,10 @@ internal sealed partial class TrayApp : ApplicationContext
         // NotifyIcon 收不到就不会重新添加图标，托盘图标从此消失
         Native.ChangeWindowMessageFilter(Native.RegisterWindowMessageW("TaskbarCreated"), Native.MSGFLT_ADD);
 
-        openIcon = LockIcon(locked: false);
-        closedIcon = LockIcon(locked: true);
+        idleIcon = MacIcon(locked: false);
+        lockedIcon = MacIcon(locked: true);
         cupIcon = CupIcon();
-        tray = new NotifyIcon { Icon = openIcon, Text = $"LockCurtain · {Status()}", Visible = Settings.Current.ShowTrayIcon };
+        tray = new NotifyIcon { Icon = idleIcon, Text = $"LockCurtain · {Status()}", Visible = Settings.Current.ShowTrayIcon };
         Settings.Changed += () => tray.Visible = Settings.Current.ShowTrayIcon;
         tray.MouseUp += (_, e) =>
         {
@@ -99,7 +99,7 @@ internal sealed partial class TrayApp : ApplicationContext
 
     void UpdateTrayIcon()
     {
-        tray.Icon = overlay.Mode != null ? closedIcon : keepAwake.Mode != null ? cupIcon : openIcon;
+        tray.Icon = overlay.Mode != null ? lockedIcon : keepAwake.Mode != null ? cupIcon : idleIcon;
         tray.Text = $"LockCurtain · {Status()}";
     }
 

@@ -4,8 +4,8 @@
 //   ./make-icon <输出目录>.iconset
 //   ./make-icon --ico windows/LockCurtain/LockCurtain.ico
 //
-// 构图：屏幕加锁。浅灰底上一台显示器（铝边框、黑玻璃、铝支架），屏幕是锁屏那样的蓝紫壁纸，中间一把白色的锁。
-// 质感对标系统自带图标：每样东西都有上亮下暗的渐变、内沿高光和投影，玻璃左上一片斜的反光。
+// 构图：初代 Macintosh。浅灰底上一台米色的一体机（比真机矮胖，屏幕占大半），显像管屏幕上是 1-bit 像素笑脸。
+// 质感对标系统自带图标：每样东西都有上亮下暗的渐变、内沿高光和投影，显像管左上一团反光。
 // 图形按 macOS 图标网格画：1024 画布里方块占 824×824（100…924），圆角半径 185，系统显示时会再按自己的形状裁一次。
 // Windows 不裁形状，整张图按比例放大到几乎铺满画布。
 
@@ -38,51 +38,27 @@ func innerEdge(_ c: CGContext, _ p: CGPath, _ color: CGColor, dy: CGFloat) {
     c.restoreGState()
 }
 
-/// 锁：缎面锁身 + 圆管锁梁 + 挖进去的钥匙孔。(cx, cy) 是锁身中心，w 是锁身宽，sd 把阴影换算成设备像素
-func drawLock(_ c: CGContext, cx: CGFloat, cy: CGFloat, w: CGFloat, sd: CGFloat) {
-    let h = w * 0.80, R = w * 0.29, t = w * 0.15
-    let bodyR = CGRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h)
-    let body = rr(bodyR, w * 0.17)
-    let legTop = cy + h / 2 + w * 0.13
-    let shackle = CGMutablePath()
-    shackle.move(to: CGPoint(x: cx - R, y: cy))
-    shackle.addLine(to: CGPoint(x: cx - R, y: legTop))
-    shackle.addArc(center: CGPoint(x: cx, y: legTop), radius: R, startAngle: .pi, endAngle: 0, clockwise: true)
-    shackle.addLine(to: CGPoint(x: cx + R, y: cy))
+/// 屏幕上的笑脸：1-bit 像素画，# 是黑点，第一行在最上面。自己画的，不是苹果 Happy Mac 的原图
+let face = [
+    ".#....#.",
+    ".#....#.",
+    "....#...",
+    "....#...",
+    "...##...",
+    "........",
+    "#......#",
+    ".######.",
+]
 
-    // 整把锁一起投影，锁梁和锁身的影子不叠两层
-    c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: -10 * sd), blur: 26 * sd, color: black(0.55))
-    c.beginTransparencyLayer(auxiliaryInfo: nil)
-    c.setStrokeColor(rgb(0xBFC3CB)); c.setLineWidth(t); c.addPath(shackle); c.strokePath()
-    c.setFillColor(rgb(0xE6E8EC)); c.addPath(body); c.fillPath()
-    c.endTransparencyLayer()
-    c.restoreGState()
-
-    // 锁梁：整根中灰，再叠一道偏左上的亮面和一道细高光，看起来是圆管
-    for (color, width, shift) in [(rgb(0xA9AEB7), 1.0, 0.0), (rgb(0xE9EBEF), 0.62, 0.1), (white(0.95), 0.2, 0.18)] as [(CGColor, CGFloat, CGFloat)] {
-        var m = CGAffineTransform(translationX: -t * shift * 0.9, y: t * shift)
-        c.setStrokeColor(color); c.setLineWidth(t * width); c.addPath(shackle.copy(using: &m)!); c.strokePath()
+func drawBits(_ c: CGContext, _ rows: [String], center: CGPoint, px: CGFloat, color: CGColor) {
+    let w = CGFloat(rows[0].count), h = CGFloat(rows.count)
+    let x0 = center.x - w * px / 2, top = center.y + h * px / 2
+    c.setFillColor(color)
+    for (r, row) in rows.enumerated() {
+        for (k, ch) in row.enumerated() where ch == "#" {
+            c.fill(CGRect(x: x0 + CGFloat(k) * px, y: top - CGFloat(r + 1) * px, width: px, height: px))
+        }
     }
-
-    // 锁身：上亮下暗，上沿亮边、下沿暗边，顶上被锁梁压出一点影子
-    fillLinear(c, body, [rgb(0xFFFFFF), rgb(0xF1F2F5), rgb(0xCDD1D8)], CGPoint(x: 0, y: bodyR.maxY), CGPoint(x: 0, y: bodyR.minY), [0, 0.45, 1])
-    innerEdge(c, body, white(1), dy: -3)
-    innerEdge(c, body, rgb(0x8E939C, 0.55), dy: 3)
-    c.saveGState(); c.addPath(body); c.clip()
-    c.drawLinearGradient(gradient([black(0.14), black(0)]), start: CGPoint(x: 0, y: bodyR.maxY), end: CGPoint(x: 0, y: bodyR.maxY - h * 0.12), options: [])
-    c.restoreGState()
-
-    // 钥匙孔一笔画完：圆从右下接口绕过顶到左下接口，再往下是上窄下宽的槽。上沿内阴影，下沿反一点光
-    let kr = w * 0.09, kc = CGPoint(x: cx, y: cy + h * 0.07), a = acos(0.38), bottom = cy - h * 0.20
-    let hole = CGMutablePath()
-    hole.addArc(center: kc, radius: kr, startAngle: -a, endAngle: -.pi + a, clockwise: false)
-    hole.addLine(to: CGPoint(x: cx - kr * 0.58, y: bottom))
-    hole.addLine(to: CGPoint(x: cx + kr * 0.58, y: bottom))
-    hole.closeSubpath()
-    fillLinear(c, hole, [rgb(0x15161A), rgb(0x34373F)], CGPoint(x: 0, y: kc.y + kr), CGPoint(x: 0, y: bottom))
-    innerEdge(c, hole, black(0.7), dy: -3)
-    innerEdge(c, hole, white(0.35), dy: 2)
 }
 
 /// 按 macOS 网格（方块 100…924）画整张图标。sd 是设计单位到设备像素的比例：CG 的阴影偏移和模糊不跟着 CTM 缩放，要自己乘
@@ -100,63 +76,71 @@ func drawIcon(_ c: CGContext, corner: CGFloat, sd: CGFloat) {
                          endCenter: CGPoint(x: 512, y: 900), endRadius: 520, options: [])
     c.restoreGState()
 
-    // 支架：铝，左右是圆柱的明暗，顶上被屏幕挡出一截影子；底座贴着底有接触影
-    let base = rr(CGRect(x: 360, y: 236, width: 304, height: 26), 13)
+    // 机身是米色塑料，比真机矮胖，屏幕占大半。从稍高处看：后面露出一窄条顶面，底下往里收一截脚
+    let bodyR = CGRect(x: 222, y: 186, width: 580, height: 622)
+    let body = rr(bodyR, 44)
+    let topR = CGRect(x: bodyR.minX + 16, y: bodyR.maxY - 120, width: bodyR.width - 32, height: 152)
+    let top = rr(topR, 40)
+    let footR = CGRect(x: bodyR.minX + 22, y: 150, width: bodyR.width - 44, height: 60)
+    let foot = rr(footR, 16)
     c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: -6 * sd), blur: 16 * sd, color: black(0.35))
-    c.addPath(base); c.setFillColor(rgb(0xB0B4BB)); c.fillPath()
+    c.setShadow(offset: CGSize(width: 0, height: -14 * sd), blur: 34 * sd, color: black(0.4))
+    c.beginTransparencyLayer(auxiliaryInfo: nil)
+    c.setFillColor(rgb(0xCFC6AE))
+    for p in [foot, body, top] { c.addPath(p); c.fillPath() }
+    c.endTransparencyLayer()
     c.restoreGState()
-    let neck = CGMutablePath()
-    neck.addLines(between: [CGPoint(x: 446, y: 380), CGPoint(x: 578, y: 380), CGPoint(x: 596, y: 262), CGPoint(x: 428, y: 262)])
-    neck.closeSubpath()
-    fillLinear(c, neck, [rgb(0x8C9098), rgb(0xD5D8DD), rgb(0xF4F5F7), rgb(0xC9CCD2), rgb(0x8A8E96)],
-               CGPoint(x: 428, y: 0), CGPoint(x: 596, y: 0), [0, 0.25, 0.45, 0.7, 1])
-    c.saveGState(); c.addPath(neck); c.clip()
-    c.drawLinearGradient(gradient([black(0.35), black(0)]), start: CGPoint(x: 0, y: 380), end: CGPoint(x: 0, y: 330), options: [])
-    c.restoreGState()
-    fillLinear(c, base, [rgb(0xF2F3F5), rgb(0xC6C9CF), rgb(0x9DA1A9)], CGPoint(x: 0, y: 262), CGPoint(x: 0, y: 236), [0, 0.5, 1])
-    innerEdge(c, base, white(0.9), dy: -2)
+    fillLinear(c, top, [rgb(0xE9E2D0), rgb(0xD9D0BA)], CGPoint(x: 0, y: topR.maxY), CGPoint(x: 0, y: topR.maxY - 34))
+    innerEdge(c, top, white(0.8), dy: -2)
+    let handleR = CGRect(x: bodyR.midX - 130, y: topR.maxY - 22, width: 260, height: 12)
+    fillLinear(c, rr(handleR, 6), [rgb(0x6E6656), rgb(0xA49A83)], CGPoint(x: 0, y: handleR.maxY), CGPoint(x: 0, y: handleR.minY))
+    fillLinear(c, foot, [rgb(0x9F957D), rgb(0xB8AE95)], CGPoint(x: 0, y: footR.maxY), CGPoint(x: 0, y: footR.minY))
+    innerEdge(c, foot, black(0.2), dy: 2)
 
-    // 显示器：铝边框 → 黑玻璃 → 屏幕
-    let frameR = CGRect(x: 182, y: 368, width: 660, height: 432)
-    let frame = rr(frameR, 44)
-    let glassR = frameR.insetBy(dx: 8, dy: 8)
-    let glass = rr(glassR, 37)
-    let scr = glassR.insetBy(dx: 16, dy: 16)
+    // 正面：上亮下暗，左沿受光、右沿压暗，看得出是圆角的塑料壳
+    fillLinear(c, body, [rgb(0xF5EFE1), rgb(0xE6DECA), rgb(0xD2C8AF)], CGPoint(x: 0, y: bodyR.maxY), CGPoint(x: 0, y: bodyR.minY), [0, 0.55, 1])
+    c.saveGState(); c.addPath(body); c.clip()
+    c.drawLinearGradient(gradient([white(0.4), white(0)]), start: CGPoint(x: bodyR.minX, y: 0), end: CGPoint(x: bodyR.minX + 36, y: 0), options: [])
+    c.drawLinearGradient(gradient([black(0), black(0.14)]), start: CGPoint(x: bodyR.maxX - 44, y: 0), end: CGPoint(x: bodyR.maxX, y: 0), options: [])
+    c.restoreGState()
+    innerEdge(c, body, white(0.95), dy: -4)
+    innerEdge(c, body, rgb(0x857B66, 0.55), dy: 4)
+
+    // 屏幕凹槽 → 显像管玻璃 → 发光的屏面，屏面上是像素笑脸，四角压暗
+    let bezelR = CGRect(x: bodyR.minX + 40, y: bodyR.maxY - 472, width: bodyR.width - 80, height: 430)
+    let bezel = rr(bezelR, 40)
+    fillLinear(c, bezel, [rgb(0xC9BFA6), rgb(0xDED5BF)], CGPoint(x: 0, y: bezelR.maxY), CGPoint(x: 0, y: bezelR.minY))
+    innerEdge(c, bezel, black(0.25), dy: -7)
+    innerEdge(c, bezel, white(0.75), dy: 3)
+    let crtR = bezelR.insetBy(dx: 24, dy: 24)
+    let crt = rr(crtR, 60)
     c.saveGState()
-    c.setShadow(offset: CGSize(width: 0, height: -14 * sd), blur: 34 * sd, color: black(0.3))
-    c.addPath(frame); c.setFillColor(rgb(0xC0C3C9)); c.fillPath()
+    c.setShadow(offset: CGSize(width: 0, height: 3 * sd), blur: 6 * sd, color: black(0.35))
+    c.addPath(crt); c.setFillColor(rgb(0x2A2B2D)); c.fillPath()
     c.restoreGState()
-    fillLinear(c, frame, [rgb(0xF3F4F6), rgb(0xCDD0D5), rgb(0xA4A8AF)], CGPoint(x: 0, y: frameR.maxY), CGPoint(x: 0, y: frameR.minY), [0, 0.5, 1])
-    innerEdge(c, frame, white(0.95), dy: -2.5)
-    innerEdge(c, frame, black(0.25), dy: 2.5)
-    c.addPath(glass); c.setFillColor(rgb(0x070708)); c.fillPath()
-
-    // 屏幕：锁屏那样的深蓝底，左上一团紫光、右下一团青光，四周压暗，中间是锁
-    c.saveGState(); c.addPath(rr(scr, 22)); c.clip()
-    c.drawLinearGradient(gradient([rgb(0x2B3A8C), rgb(0x161B4A), rgb(0x080A1C)], [0, 0.5, 1]),
-                         start: CGPoint(x: 0, y: scr.maxY), end: CGPoint(x: 0, y: scr.minY), options: [])
-    let glows: [(hex: UInt32, alpha: CGFloat, center: CGPoint, radius: CGFloat)] = [
-        (0x7A5CFF, 0.55, CGPoint(x: scr.minX + 120, y: scr.maxY - 40), 360),
-        (0x22C3E6, 0.35, CGPoint(x: scr.maxX - 80, y: scr.minY + 60), 340),
-    ]
-    for g in glows {
-        c.drawRadialGradient(gradient([rgb(g.hex, g.alpha), rgb(g.hex, 0)]), startCenter: g.center, startRadius: 0,
-                             endCenter: g.center, endRadius: g.radius, options: [])
-    }
-    c.drawRadialGradient(gradient([black(0), black(0.35)]), startCenter: CGPoint(x: scr.midX, y: scr.midY), startRadius: 120,
-                         endCenter: CGPoint(x: scr.midX, y: scr.midY), endRadius: 420, options: [.drawsAfterEndLocation])
-    drawLock(c, cx: scr.midX, cy: scr.midY - 24, w: 176, sd: sd)
+    fillLinear(c, crt, [rgb(0x232426), rgb(0x3C3D40)], CGPoint(x: 0, y: crtR.maxY), CGPoint(x: 0, y: crtR.minY))
+    let scrR = crtR.insetBy(dx: 17, dy: 17)
+    let mid = CGPoint(x: scrR.midX, y: scrR.midY)
+    c.saveGState(); c.addPath(rr(scrR, 46)); c.clip()
+    c.setFillColor(rgb(0xEEF2EE)); c.fill(scrR)
+    drawBits(c, face, center: CGPoint(x: mid.x, y: mid.y + 2), px: 32, color: rgb(0x17191B))
+    c.drawRadialGradient(gradient([black(0), black(0.30)]), startCenter: mid, startRadius: 100,
+                         endCenter: mid, endRadius: 300, options: [.drawsAfterEndLocation])
+    c.restoreGState()
+    // 显像管是鼓的：左上一团反光
+    let glare = CGPoint(x: crtR.minX + 90, y: crtR.maxY - 64)
+    c.saveGState(); c.addPath(crt); c.clip()
+    c.drawRadialGradient(gradient([white(0.38), white(0)]), startCenter: glare, startRadius: 0, endCenter: glare, endRadius: 200, options: [])
     c.restoreGState()
 
-    // 玻璃反光：左上一片斜的淡光，盖住屏幕和黑边
-    c.saveGState(); c.addPath(glass); c.clip()
-    let refl = CGMutablePath()
-    refl.addLines(between: [CGPoint(x: glassR.minX, y: glassR.maxY), CGPoint(x: glassR.minX + glassR.width * 0.58, y: glassR.maxY),
-                            CGPoint(x: glassR.minX + glassR.width * 0.30, y: glassR.minY), CGPoint(x: glassR.minX, y: glassR.minY)])
-    refl.closeSubpath()
-    c.addPath(refl); c.clip()
-    c.drawLinearGradient(gradient([white(0.10), white(0.02)]), start: CGPoint(x: glassR.minX, y: glassR.maxY), end: CGPoint(x: glassR.midX, y: glassR.minY), options: [])
+    // 软驱口：右下一条深缝，下沿亮一线
+    let slotR = CGRect(x: bodyR.midX + 60, y: bodyR.minY + 64, width: 180, height: 20)
+    let slot = rr(slotR, 9)
+    fillLinear(c, slot, [rgb(0x1E1B17), rgb(0x48423A)], CGPoint(x: 0, y: slotR.maxY), CGPoint(x: 0, y: slotR.minY))
+    innerEdge(c, slot, black(0.5), dy: -4)
+    let lip = rr(slotR.offsetBy(dx: 0, dy: -3), 9)
+    c.saveGState(); c.addPath(lip); c.addPath(slot); c.clip(using: .evenOdd)
+    c.setFillColor(white(0.7)); c.fill(lip.boundingBox)
     c.restoreGState()
 
     // 方块内沿一圈高光，外面一道细边，深色 Dock 上看得出轮廓
