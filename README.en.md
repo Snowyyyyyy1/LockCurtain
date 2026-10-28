@@ -21,7 +21,7 @@ Available for Mac and Windows.
 ## Features
 
 - **Away mode.** Turn it on yourself, or let rules do it: idle for N minutes, an app or process is running, an app is keeping the computer awake, a time window, on AC power. Away mode starts when all enabled conditions are met, and keeps the computer awake.
-- **Curtain styles.** Patterns: mechanical eye, demon eye, Taoist talisman, clock, vault door, padlock, or your own picture. Backgrounds: wallpaper, blurred wallpaper, black, or generated starfield, hills and carbon fiber. On the Mac you can also change the curtain text.
+- **Curtain styles.** Patterns: mechanical eye, demon eye, Taoist talisman, clock, vault door, padlock, or your own picture. Backgrounds: wallpaper, blurred wallpaper, black, or generated starfield, hills and carbon fiber. The two lines of text on the curtain can be changed too.
 - **Lock screen curtain** (Mac only). The same curtain also covers the real lock screen.
 - **Panel** (menu bar / notification area). What is keeping the computer awake right now, how long it slept in the last 24 hours, and "Keep awake": no curtain, just no sleep.
 - **Command line.** `--send away` / `hide` / `status`, so agents and scripts can turn on away mode themselves. On the Mac you can also trigger it remotely from an iPhone Shortcut over SSH.
@@ -55,7 +55,7 @@ In this mode, when a window running as administrator is in front, keystrokes rea
 
 To uninstall, run `install.ps1 -Uninstall`. It removes the scheduled task and `C:\Program Files\LockCurtain`. Settings and logs stay in `%LOCALAPPDATA%\LockCurtain`; delete that folder if you don't need them.
 
-Differences from the Mac version: the curtain can't cover the lock screen, and the Start menu and other system pop-ups appear above it. The curtain text can't be changed yet.
+Differences from the Mac version: the curtain can't cover the lock screen, and the Start menu and other system pop-ups appear above it.
 "Last 24 hours" shows only sleep and wake, without per-app history of what kept the PC awake. There is no iPhone Shortcuts remote control, only the command line.
 
 ## Usage
