@@ -82,6 +82,8 @@ Mac 和 Windows 都有。
 **遮罩盖着时，agent 截的图真的不受影响？**
 是。Mac 上遮罩窗口设了 `sharingType = .none`，Windows 上用 `WDA_EXCLUDEFROMCAPTURE`，系统的截屏和录屏都会跳过它。
 在 Mac 上用 ScreenCaptureKit、`screencapture` 和 cua-driver 测过，拍到的都是遮罩下面的桌面，包括遮罩显示之后才打开的窗口。
+在 Windows 上用 BitBlt（pyautogui、mss、PIL 都走这条路）、DXGI 桌面复制和 Windows.Graphics.Capture 测过，遮罩下面的窗口变了色，三种都拍得到。
+`Tests/CaptureProbe.swift` 和 `windows/Tests/CaptureProbe` 可以重跑这些测试。
 
 **这样安全吗？**
 遮罩不是锁。离开模式下桌面并没有锁上，遮罩防的是路过的人：看不到屏幕，碰一下就锁屏。

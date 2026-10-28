@@ -338,6 +338,7 @@ WindowServer 用单精度存透明度，设 0.999 读回来是 0.9990000129：
 | 0.9999999999 | 舍入成 1 | 整屏全黑 ❌ | 否 |
 
 所以取 `Float(1).nextDown`，再高就会被舍入成 1。换上之后用真 App 的预览遮罩（私有空间、两块屏）又跑了 3 次，结果一样。
+测试程序是 `Tests/CaptureProbe.swift`，系统大版本升级后重跑一遍（`probe real` 不通过时退出码为 1）。
 以前的 0.999 透出 0.1%：普通画面里不到 1 个色阶，但 HDR 高光比普通白亮好几倍，暗处可能看得出很淡的影子。
 现在透出约千万分之六，HDR 下也看不出来。
 `--no-stealth` 时用同一个值：app 以为自己被挡住而停止重绘的问题，和抓屏透不透明无关。
@@ -494,7 +495,8 @@ LockCurtain/
 ├── Tests/
 │   ├── ScreenChangeCoalescerSelfTest.swift  合并器自测，运行方式见文件头
 │   ├── SleepLogSelfTest.swift    电源日志解析、区间代数、24 小时统计的自测
-│   └── RulesSelfTest.swift       规则自测，运行方式见文件头
+│   ├── RulesSelfTest.swift       规则自测，运行方式见文件头
+│   └── CaptureProbe.swift        遮罩下面的窗口抓屏拍不拍得到（会真的盖遮罩），运行方式见文件头
 ├── Tools/
 │   ├── make-icon.swift           用代码画 App 图标（初代 Macintosh），build.sh 调用；--ico 出 Windows 图标
 │   └── EyePreview.swift          离线渲染动画图案的拼图和 GIF，运行方式见文件头

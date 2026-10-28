@@ -82,6 +82,8 @@ Rules live on the 「规则」 (Rules) page in settings. A rule fires once, at t
 **Can the agent really take screenshots through the curtain?**
 Yes. The curtain window uses `sharingType = .none` on the Mac and `WDA_EXCLUDEFROMCAPTURE` on Windows, so system screenshots and screen recording skip it.
 On the Mac this was tested with ScreenCaptureKit, `screencapture` and cua-driver: all of them captured the desktop under the curtain, including windows opened after the curtain went up.
+On Windows it was tested with BitBlt (what pyautogui, mss and PIL use), DXGI Desktop Duplication and Windows.Graphics.Capture: each one captured a window under the curtain changing color.
+`Tests/CaptureProbe.swift` and `windows/Tests/CaptureProbe` rerun these checks.
 
 **Is this secure?**
 The curtain is not a lock. In away mode your desktop is unlocked; the curtain protects against people walking by, who can't see the screen and lock it the moment they touch anything.

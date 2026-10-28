@@ -8,3 +8,6 @@ Tests/RulesSelfTest/bin/
 Tests/RulesSelfTest/obj/
 Tests/SleepSelfTest/bin/
 Tests/SleepSelfTest/obj/
+Tests/CaptureProbe/bin/
+Tests/CaptureProbe/obj/
+Tests/CaptureProbe/out/
