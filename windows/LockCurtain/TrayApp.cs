@@ -55,6 +55,8 @@ internal sealed partial class TrayApp : ApplicationContext
 
         server.Start();
         ruleEngine.Start();
+        var ui = SynchronizationContext.Current!;
+        Updater.Start(idle: () => overlay.Mode == null, exit: () => ui.Post(_ => ExitAfterUpdate(), null));
         keepAwake.Restore();
         Log.Write($"LockCurtain started, stealth={stealth}, locked={Session.QueryLocked()?.ToString() ?? "unknown"}");
         if (preview) SynchronizationContext.Current!.Post(_ => overlay.Show(CurtainMode.Preview), null);
@@ -72,7 +74,27 @@ internal sealed partial class TrayApp : ApplicationContext
         menuOwner.DestroyHandle();
         tray.Visible = false;
         tray.Dispose();
+        Updater.Stop();
         base.ExitThreadCore();
+    }
+
+    /// 更新装好了：遮罩没在显示就退出（新版本由计划任务拉起）。WinSparkle 点安装前问过可不可以退出，
+    /// 但这之后规则或命令还可能把遮罩打开，这时等它撤掉再退
+    void ExitAfterUpdate()
+    {
+        if (overlay.Mode == null)
+        {
+            ExitThread();
+            return;
+        }
+        Log.Write("更新已装好，遮罩撤掉后退出");
+        void OnChanged()
+        {
+            if (overlay.Mode != null) return;
+            overlay.StateChanged -= OnChanged;
+            ExitThread();
+        }
+        overlay.StateChanged += OnChanged;
     }
 
     void UpdateTrayIcon()
@@ -93,15 +115,16 @@ internal sealed partial class TrayApp : ApplicationContext
     List<TrayCommand> Commands()
     {
         var idle = overlay.Mode == null;
-        return new()
-        {
+        return
+        [
             new("进入离开模式", () => overlay.Show(CurtainMode.Away), idle),
             new("遮罩预览", () => overlay.Show(CurtainMode.Preview), idle),
             new("紧急关闭遮罩", overlay.Hide, !idle),
             new("设置…", ShowSettings, SeparatorBefore: true),
+            .. Updater.Available ? new[] { new TrayCommand("检查更新…", Updater.CheckNow) } : [],
             new("打开日志文件夹", Log.OpenDir),
             new("退出 LockCurtain", ExitThread, SeparatorBefore: true),
-        };
+        ];
     }
 
     /// settings 命令在这里处理，其余交给遮罩

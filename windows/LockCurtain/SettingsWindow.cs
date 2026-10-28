@@ -169,8 +169,34 @@ internal sealed class SettingsWindow : Form
         v.Section("遮罩背景", () => "壁纸和模糊壁纸用当前的桌面壁纸；星空、远山、碳纤维是程序画的。下次显示遮罩时生效。")
             .Tiles(backgroundTiles);
         _ = LoadThumbnailsAsync(backgroundTiles);
+        var titleBox = CurtainTextBox(v, "标题", Settings.Current.CurtainTitle, text => Settings.Update(s => s.CurtainTitle = text));
+        var subtitleBox = CurtainTextBox(v, "提示", Settings.Current.CurtainSubtitle, text => Settings.Update(s => s.CurtainSubtitle = text));
+        v.Section("遮罩文字", () => "显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示遮罩时生效。")
+            .Controls("标题", null, titleBox)
+            .Controls("提示", null, subtitleBox)
+            .Only(() => Settings.Current.CurtainTitle != Settings.DefaultCurtainTitle
+                        || Settings.Current.CurtainSubtitle != Settings.DefaultCurtainSubtitle, g => g
+                .Button("恢复默认", () =>
+                {
+                    titleBox.Text = Settings.DefaultCurtainTitle;
+                    subtitleBox.Text = Settings.DefaultCurtainSubtitle;
+                }));
         v.Section("关于")
-            .Value("版本", Application.ProductVersion.Split('+')[0]);
+            .Value("版本", Updater.Version)
+            .Only(() => Updater.Available, g => g
+                .Toggle("自动检查更新", () => Settings.Current.AutoCheckUpdates, on => Settings.Update(s => s.AutoCheckUpdates = on)));
+    }
+
+    /// 遮罩文字的输入框：每改一个字就存，「恢复默认」该不该显示跟着变，所以重排
+    static TextBox CurtainTextBox(PageView v, string name, string text, Action<string> save)
+    {
+        var box = new TextBox { Text = text, PlaceholderText = "不显示", Font = v.BodyFont, Width = v.S(300), AccessibleName = name };
+        box.TextChanged += (_, _) =>
+        {
+            save(box.Text);
+            v.Arrange();
+        };
+        return box;
     }
 
     /// 背景缩略图在后台画：程序画的按 480×300 点、0.4 倍画（和 Mac 版一样）；

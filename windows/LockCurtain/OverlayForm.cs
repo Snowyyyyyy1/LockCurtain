@@ -25,9 +25,8 @@ namespace LockCurtain;
 
 internal sealed class OverlayForm : Form
 {
-    const string Title = "LockCurtain is Using Your PC";
-    const string Subtitle = "Press any key or click to unlock";
-
+    /// 标题和提示在设置里改，建窗口时读一次，下次显示遮罩时生效
+    readonly string title = Settings.Current.CurtainTitle.Trim(), subtitle = Settings.Current.CurtainSubtitle.Trim();
     readonly bool stealth;
     readonly CurtainArt art;
     readonly CurtainBackground curtainBackground;
@@ -271,17 +270,23 @@ internal sealed class OverlayForm : Form
         g.DrawImage(image, area.X + (area.Width - dw) / 2, area.Y + (area.Height - dh) / 2, dw, dh);
     }
 
-    /// 两行居中，行高 18 / 14，间距 15，整组中心在屏幕中心往下 33.5
+    /// 标题在上、提示在下，各自水平居中，间距 15，顶边在屏幕中心往下 10，换行只往下长、不压图案；
+    /// 超过 480 宽换行，空的那行不画、也不留空位（和 Mac 版 buildText 一样）
     void DrawText(Graphics g, int w, int h)
     {
         var s = DpiScale;
         g.TextRenderingHint = TextRenderingHint.AntiAlias;
         using var brush = new SolidBrush(Color.FromArgb(128, 255, 255, 255));
-        using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        using var format = new StringFormat { Alignment = StringAlignment.Center };
         using var titleFont = new Font("Segoe UI Semibold", 15 * s, FontStyle.Regular, GraphicsUnit.Pixel);
         using var subFont = new Font("Segoe UI Semibold", 12 * s, FontStyle.Regular, GraphicsUnit.Pixel);
-        var top = h / 2f + 33.5f * s - (18 + 15 + 14) * s / 2;
-        g.DrawString(Title, titleFont, brush, new RectangleF(0, top, w, 18 * s), format);
-        g.DrawString(Subtitle, subFont, brush, new RectangleF(0, top + 33 * s, w, 14 * s), format);
+        float y = h / 2f + 10 * s, maxWidth = 480 * s;
+        foreach (var (text, font) in new[] { (title, titleFont), (subtitle, subFont) })
+        {
+            if (text.Length == 0) continue;
+            var height = g.MeasureString(text, font, (int)maxWidth, format).Height;
+            g.DrawString(text, font, brush, new RectangleF((w - maxWidth) / 2, y, maxWidth, height), format);
+            y += height + 15 * s;
+        }
     }
 }

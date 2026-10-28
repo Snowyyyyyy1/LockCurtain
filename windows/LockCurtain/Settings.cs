@@ -19,12 +19,20 @@ internal sealed class Settings
     public bool CurtainImageRound { get; set; } = true;
     /// 遮罩背景（CurtainBackground.cs），默认当前壁纸
     public CurtainBackground CurtainBackground { get; set; } = CurtainBackground.Wallpaper;
+    /// 遮罩文字：图案下面的标题和提示，空字符串 = 不显示这一行（Mac 版 curtainTitle / curtainSubtitle）。
+    /// settings.json 里手改成 null 也当空的，不然显示遮罩时建窗口出错
+    public string CurtainTitle { get; set => field = value ?? ""; } = DefaultCurtainTitle;
+    public string CurtainSubtitle { get; set => field = value ?? ""; } = DefaultCurtainSubtitle;
+    public const string DefaultCurtainTitle = "LockCurtain is Using Your PC";
+    public const string DefaultCurtainSubtitle = "Press any key or click to unlock";
     /// 离开模式下屏幕常亮；关掉时只防系统休眠，允许熄屏
     public bool AwayKeepDisplayOn { get; set; } = true;
     /// 离开模式下把内置屏亮度调到 0，撤遮罩时恢复
     public bool AwayDimBrightness { get; set; }
     /// 正在进行的保持唤醒，退出 LockCurtain 后下次启动接着来（见 KeepAwake.cs）；null 是没开
     public KeepAwakeSaved? KeepAwake { get; set; }
+    /// 每天自动检查一次更新（Updater.cs），发现新版本时提示
+    public bool AutoCheckUpdates { get; set; } = true;
 
     static readonly string FilePath = Path.Combine(Log.Dir, "settings.json");
     static readonly JsonSerializerOptions Json = new()

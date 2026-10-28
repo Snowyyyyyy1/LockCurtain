@@ -4,14 +4,14 @@
 # 真人的按键会直接打进那个窗口。LockCurtain 以管理员身份运行，钩子就能看到并吞掉。
 #
 # 做两件事：
-#   1. exe 复制到 C:\Program Files\LockCurtain。普通权限写不了这里，别的程序（包括 agent）
-#      没法替换 exe、借下次登录拿到管理员权限
+#   1. exe 和自动更新用的 WinSparkle.dll 复制到 C:\Program Files\LockCurtain。普通权限写不了这里，
+#      别的程序（包括 agent）没法替换它们、借下次登录拿到管理员权限
 #   2. 注册计划任务 LockCurtain：当前用户登录时以最高权限启动，不弹 UAC。
 #      「LockCurtain.exe --send away」在 App 没运行时也通过这个任务拉起它
 #
 # 要求当前账户是管理员。普通账户用不了这种方式，直接运行 LockCurtain.exe 即可。
 #
-#   install.ps1              安装或更新（用同目录下的 LockCurtain.exe）并立即启动
+#   install.ps1              安装或更新（用同目录下的 LockCurtain.exe 和 WinSparkle.dll）并立即启动
 #   install.ps1 -Uninstall   删除计划任务和安装目录
 param([switch]$Uninstall, [string]$ForUser)
 $ErrorActionPreference = 'Stop'
@@ -21,11 +21,12 @@ $admin = ([Security.Principal.WindowsPrincipal]$me).IsInRole([Security.Principal
 # 提权后的进程看不到映射盘（比如 Parallels 共享的 Y:，实测 2026-10-27），
 # 所以先把脚本和 exe 复制到本机的临时目录，从那里提权运行，用完删掉
 $stage = Join-Path $env:TEMP 'LockCurtainInstall'
+$files = 'LockCurtain.exe', 'WinSparkle.dll' | ForEach-Object { Join-Path $PSScriptRoot $_ }
 if (-not $admin) {
     # 以管理员身份重新运行（弹 UAC），带上当前账户，提权后核对没换人
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item $PSCommandPath (Join-Path $stage 'install.ps1') -Force
-    if (-not $Uninstall) { Copy-Item (Join-Path $PSScriptRoot 'LockCurtain.exe') $stage -Force }
+    if (-not $Uninstall) { Copy-Item $files $stage -Force }
     $a = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$(Join-Path $stage 'install.ps1')`" -ForUser $($me.User.Value)"
     if ($Uninstall) { $a += ' -Uninstall' }
     Start-Process powershell -Verb RunAs -ArgumentList $a
@@ -50,7 +51,10 @@ if ($Uninstall) {
 }
 
 New-Item -ItemType Directory -Force $dir | Out-Null
-Copy-Item (Join-Path $PSScriptRoot 'LockCurtain.exe') $exe -Force
+Copy-Item $files $dir -Force
+# 从网上下载、用资源管理器解压出来的文件带「来自网络」标记，复制时跟着过来，
+# 以后在安装目录里双击 exe 会弹 SmartScreen。这里去掉
+Get-ChildItem $dir -File | Unblock-File
 # 设置里开过「登录时打开」的话删掉，不然登录时 Run 键和计划任务各起一个
 Remove-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name LockCurtain -ErrorAction SilentlyContinue
 if ($PSScriptRoot -eq $stage) { Remove-Item $stage -Recurse -Force }

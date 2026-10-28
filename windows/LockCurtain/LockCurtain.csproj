@@ -21,4 +21,14 @@
     <PackageReference Include="System.Management" Version="10.0.14" />
   </ItemGroup>
 
+  <!-- 自动更新（Updater.cs）：公钥由 build.sh 从 LOCKCURTAIN_EDDSA_PUBLIC_KEY 传进来，没有就不检查更新；
+       appcast 地址只能在编译时改（测试时指到本机），运行时改不了 -->
+  <PropertyGroup>
+    <AppcastUrl Condition="'$(AppcastUrl)' == ''">https://github.com/Snowyyyyyy1/LockCurtain/releases/latest/download/appcast-windows.xml</AppcastUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <AssemblyMetadata Include="EdDSAPublicKey" Value="$(EdDSAPublicKey)" />
+    <AssemblyMetadata Include="AppcastUrl" Value="$(AppcastUrl)" />
+  </ItemGroup>
+
 </Project>

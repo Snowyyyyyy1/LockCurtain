@@ -8,6 +8,14 @@
       </requestedPrivileges>
     </security>
   </trustInfo>
+  <!-- 新式控件（圆角按钮等）对整个进程生效：WinForms 只给自己的控件打开，WinSparkle 的更新窗口在它自己的线程里建，
+       不声明就是 Windows 2000 那种老样式 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0"
+                        processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
