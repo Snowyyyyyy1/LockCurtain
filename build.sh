@@ -11,14 +11,25 @@
 #
 # 自动更新（Sparkle）：环境变量 LOCKCURTAIN_EDDSA_PUBLIC_KEY 给了公钥才打开，release.sh 会传；
 # 自己从源码编的版本没有公钥，不检查更新，也就不会被官方版本覆盖。
+#
+# ./build.sh --debug 编调试版 LockCurtain Debug.app：bundle ID 是 dev.local.lockcurtain.debug，
+# 系统权限、设置、运行时目录（~/Library/Application Support/LockCurtain Debug）都和正式版分开，
+# 可以和 /Applications 里的正式版同时开着测试；同一张证书签，永远不检查更新。
 set -euo pipefail
 cd "$(dirname "$0")"
 
 CERT="${LOCKCURTAIN_CERT:-$(cat .signing-cert 2>/dev/null || true)}"
 CERT="${CERT:--}"
-BUNDLE_ID="dev.local.lockcurtain"
+if [ "${1:-}" = "--debug" ]; then
+  NAME="LockCurtain Debug"
+  BUNDLE_ID="dev.local.lockcurtain.debug"
+  LOCKCURTAIN_EDDSA_PUBLIC_KEY=""
+else
+  NAME="LockCurtain"
+  BUNDLE_ID="dev.local.lockcurtain"
+fi
 VERSION="$(cat VERSION)"
-APP="LockCurtain.app"
+APP="$NAME.app"
 BIN="$APP/Contents/MacOS/LockCurtain"
 SRC="Sources"
 # LOCKCURTAIN_APPCAST_URL 只给测试用（换成本机 http 地址），release.sh 会清掉
@@ -56,9 +67,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>               <string>LockCurtain</string>
-    <key>CFBundleDisplayName</key>        <string>LockCurtain</string>
-    <key>CFBundleIdentifier</key>         <string>dev.local.lockcurtain</string>
+    <key>CFBundleName</key>               <string>$NAME</string>
+    <key>CFBundleDisplayName</key>        <string>$NAME</string>
+    <key>CFBundleIdentifier</key>         <string>$BUNDLE_ID</string>
     <key>CFBundleVersion</key>            <string>$VERSION</string>
     <key>CFBundleShortVersionString</key> <string>$VERSION</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
@@ -122,4 +133,5 @@ cat <<'USAGE'
   open -n LockCurtain.app --args --status    # 查看系统权限（一次性进程）
   open -n LockCurtain.app --args --capture   # 抓取壁纸（一次性进程）
   LockCurtain.app/Contents/MacOS/LockCurtain --send away|hide|status|settings
+  调试版（./build.sh --debug）把上面的 LockCurtain.app 换成 "LockCurtain Debug.app"
 USAGE

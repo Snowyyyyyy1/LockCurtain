@@ -1,4 +1,5 @@
 LockCurtain.app/
+LockCurtain Debug.app/
 .claude/settings.local.json
 .claude/.cc-writes/
 .cache/

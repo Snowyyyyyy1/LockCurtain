@@ -25,10 +25,12 @@ struct CurtainInfo: Codable {
 }
 
 /// 运行时文件放在当前用户的 ~/Library/Application Support/LockCurtain/ 下，不放 /tmp：
-/// /tmp 所有用户共享，别的用户能往里写豁免 pid、伪造 overlay.json
+/// /tmp 所有用户共享，别的用户能往里写豁免 pid、伪造 overlay.json。
+/// 调试版（build.sh --debug）用 LockCurtain Debug/，和正式版同时开着也不抢控制套接字、不共用规则
 enum AppPaths {
     static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("LockCurtain", isDirectory: true)
+        .appendingPathComponent(Bundle.main.bundleIdentifier?.hasSuffix(".debug") == true ? "LockCurtain Debug" : "LockCurtain",
+                                isDirectory: true)
 
     static func file(_ name: String) -> URL {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -68,9 +70,9 @@ enum CurtainCapture {
                           userInfo: [NSLocalizedDescriptionKey: "no SCDisplay \(targetID)"])
         }
 
-        // 从两个来源合并遮罩窗口：info 文件 + 按 bundle id 反查
+        // 从两个来源合并遮罩窗口：info 文件 + 按 bundle id 反查（正式版和调试版的都算）
         var excludeIDs = Set<UInt32>(CurtainInfoFile.read()?.windowIDs ?? [])
-        for w in content.windows where (w.owningApplication?.bundleIdentifier ?? "") == "dev.local.lockcurtain" {
+        for w in content.windows where (w.owningApplication?.bundleIdentifier ?? "").hasPrefix("dev.local.lockcurtain") {
             excludeIDs.insert(w.windowID)
         }
         let exclude = content.windows.filter { excludeIDs.contains($0.windowID) }

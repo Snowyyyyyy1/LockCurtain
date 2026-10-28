@@ -418,6 +418,10 @@ ad-hoc（codesign --sign -）
 都没有才用 ad-hoc，并提示每次重新编译都要重新授权。自己建一张：钥匙串访问 → 证书助理 → 创建证书，
 类型选「代码签名」，然后 `echo "证书名" > .signing-cert`。
 
+开发时用 `./build.sh --debug` 编调试版 `LockCurtain Debug.app`：bundle ID 是 `dev.local.lockcurtain.debug`，同一张证书签。
+系统权限、设置、运行时目录（`~/Library/Application Support/LockCurtain Debug/`）都和正式版分开，
+所以可以和 /Applications 里的正式版同时开着，互不抢控制套接字；第一次要单独给它两个权限。调试版永远不检查更新。
+
 ## 系统权限
 
 | 权限 | 用途 | 怎么给 |
