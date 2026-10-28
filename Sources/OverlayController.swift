@@ -413,8 +413,11 @@ final class OverlayController {
     /// 窗口整体不透明度略低于 1，系统就不会认为遮罩挡住了下面的窗口。
     /// 等于 1 时（实测 2026-10-26，macOS 26）：被遮罩完全盖住的窗口会从整屏截图里消失，
     /// 遮罩显示后才打开的窗口和内容变化都截不到；app 也认为自己不可见，可能停止重绘。
-    /// 只设 isOpaque = false 不管用。0.999 透出的最多 0.255 个色阶，8 位颜色里取整为 0
-    private static let curtainAlpha: CGFloat = 0.999
+    /// 只设 isOpaque = false 不管用。
+    /// WindowServer 用单精度存窗口透明度（设 0.999 读回 0.9990000129），所以取单精度里小于 1 的最大值 1 - 2⁻²⁴：
+    /// 实测 2026-10-28，它和 0.999 一样截得到、被盖住的 app 认为自己可见；0.9999999999 会被舍入成 1，整屏全黑。
+    /// 透出约千万分之六，HDR 高光也看不出来
+    private static let curtainAlpha = CGFloat(Float(1).nextDown)
 
     private func buildWindow(for screen: NSScreen) -> (NSWindow, CALayer) {
         let w = OverlayWindow(contentRect: screen.frame, styleMask: [], backing: .buffered, defer: false)
@@ -437,7 +440,7 @@ final class OverlayController {
         //   alpha 1   + 铺满      → 整屏全黑
         //   alpha 1   + 留 1px    → 只拍到壁纸，被盖住的窗口全部消失
         //   alpha 0.999 + 铺满 / 留 1px → 都是真实桌面，盖住的窗口变色也拍得到
-        // 所以原来的 1px 缺口 + 边缘窗已经删掉。--no-stealth 可关闭。
+        // 所以原来的 1px 缺口 + 边缘窗已经删掉（后来 alpha 又从 0.999 提到了 curtainAlpha）。--no-stealth 可关闭。
         w.sharingType = stealthEnabled ? .none : .readOnly
         if CommandLine.arguments.contains("--transparent") {
             w.isOpaque = false
