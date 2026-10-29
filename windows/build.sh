@@ -6,6 +6,7 @@
 #   dist/win-x64/LockCurtain.exe     普通 x64 电脑
 # 每个目录里再放自动更新用的 WinSparkle.dll 和 install.ps1（装成登录时以最高权限运行，见文件头），
 # 三个文件打成 dist/LockCurtain-<版本>-<架构>.zip：发到 GitHub Release，也是自动更新下载的包（LockCurtain/Updater.cs）。
+#   dist/LockCurtain-<版本>-setup.exe  单文件安装器（双击即装，自动识别 x64/ARM64），需 makensis（brew install makensis）
 #
 # 版本号读仓库根目录的 VERSION。环境变量：
 #   LOCKCURTAIN_EDDSA_PUBLIC_KEY   自动更新验签的公钥（release.sh 传进来）；没有时编出来的版本不检查更新
@@ -63,3 +64,15 @@ for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
   (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtain.exe WinSparkle.dll install.ps1 LockCurtainCtl.exe)
   ls -lh "dist/$rid/LockCurtain.exe" "$zip" | awk '{print "  " $5, $9}'
 done
+
+# 把两种架构的产物打成一个「自动识别 CPU」的单文件安装器（NSIS）。
+# File 命令编译期把两份都塞进同一个 exe，运行时按 ${IsNativeARM64} 只解压匹配的那份，再跑 install.ps1。
+# 需要 makensis（brew install makensis）。只有同时编了 x64 和 ARM64 才产出。
+if [ -d dist/win-x64 ] && [ -d dist/win-arm64 ]; then
+  setup="dist/LockCurtain-$VERSION-setup.exe"
+  rm -f "$setup"
+  makensis -DVERSION="$VERSION" installer.nsi | tail -2
+  ls -lh "$setup" | awk '{print "  " $5, $9}'
+else
+  echo "[setup] 跳过单文件安装器：需要同时构建 win-x64 和 win-arm64"
+fi
