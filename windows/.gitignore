@@ -11,3 +11,5 @@ Tests/SleepSelfTest/obj/
 Tests/CaptureProbe/bin/
 Tests/CaptureProbe/obj/
 Tests/CaptureProbe/out/
+LockCurtainCtl/bin/
+LockCurtainCtl/obj/

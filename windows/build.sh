@@ -50,9 +50,16 @@ for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
     -o "dist/$rid" | tail -1
   case "$rid" in win-arm64) arch=ARM64 ;; win-x64) arch=x64 ;; esac
   unzip -p "$WINSPARKLE_ZIP" "WinSparkle-$WINSPARKLE/$arch/Release/WinSparkle.dll" > "dist/$rid/WinSparkle.dll"
+  # 不带 uiAccess 的命令行工具：agent 发命令、计划任务 ShellExecute 启动主程序都用它
+  dotnet publish LockCurtainCtl/LockCurtainCtl.csproj -c Release -r "$rid" --self-contained \
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+    -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
+    -o "dist/$rid-ctl" | tail -1
+  cp "dist/$rid-ctl/LockCurtainCtl.exe" "dist/$rid/"
+  rm -rf "dist/$rid-ctl"
   cp install.ps1 "dist/$rid/"
   zip="dist/LockCurtain-$VERSION-$rid.zip"
   rm -f "$zip"
-  (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtain.exe WinSparkle.dll install.ps1)
+  (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtain.exe WinSparkle.dll install.ps1 LockCurtainCtl.exe)
   ls -lh "dist/$rid/LockCurtain.exe" "$zip" | awk '{print "  " $5, $9}'
 done

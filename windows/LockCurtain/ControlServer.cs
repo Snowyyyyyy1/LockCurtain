@@ -20,8 +20,8 @@ namespace LockCurtain;
 
 internal sealed class ControlServer
 {
-    internal static readonly SecurityIdentifier CurrentUser = WindowsIdentity.GetCurrent().User!;
-    public static readonly string PipeName = "LockCurtain-" + CurrentUser.Value;
+    internal static readonly SecurityIdentifier CurrentUser = ControlProtocol.CurrentUser;
+    public static readonly string PipeName = ControlProtocol.PipeName;
 
     readonly Func<string, Task<Dictionary<string, object>>> handler;
     readonly SynchronizationContext ui;
@@ -122,21 +122,7 @@ internal static class ControlClient
     {
         // 设置窗口要能到前台：前台权限在我们（用户刚双击 / 刚敲的命令）手上，让给 App
         if (cmd == "settings") Native.AllowSetForegroundWindow(Native.ASFW_ANY);
-        try
-        {
-            using var pipe = new NamedPipeClientStream(".", ControlServer.PipeName, PipeDirection.InOut);
-            pipe.Connect(timeoutMs);
-            // 管道名谁都能抢先建，所有者是当前用户才是我们的 App
-            if (pipe.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) != ControlServer.CurrentUser) return null;
-            pipe.Write(Encoding.UTF8.GetBytes(cmd + "\n"));
-            pipe.Flush();
-            using var reader = new StreamReader(pipe, Encoding.UTF8);
-            return reader.ReadLine();
-        }
-        catch (Exception e) when (e is TimeoutException or IOException or UnauthorizedAccessException)
-        {
-            return null;
-        }
+        return ControlProtocol.TrySend(cmd, timeoutMs);
     }
 
     /// GUI 程序没有控制台。输出被重定向（脚本、ssh、管道）时直接写；
