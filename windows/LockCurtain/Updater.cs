@@ -1,7 +1,7 @@
 // Updater.cs —— 自动更新：检查、提示、下载、验签交给 WinSparkle，安装交给 install.ps1
 //
 // 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtainApp.exe（uiAccess 主程序）、
-// LockCurtain.exe（启动器）、WinSparkle.dll、install.ps1、LockCurtainCtl.exe（启动器副本，为兼容 1.0.2 的更新器）），
+// LockCurtain.exe（启动器）、WinSparkle.dll、install.ps1、LockCurtainCtl.exe（占位文件，为兼容 1.0.2 的更新器名字检查）），
 // appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
 // 用户点「安装更新」、WinSparkle 验签通过后：把整个 zip 解压到暂存目录，此刻不动正在用的文件、不杀进程（遮罩可能正升着）。
 // 到了能退出的时候（遮罩没在显示）才起一个独立的 powershell 跑暂存目录里的 install.ps1，然后本进程退出：

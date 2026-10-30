@@ -5,7 +5,7 @@
 #   dist/win-arm64/ 和 dist/win-x64/ 里各有：
 #     LockCurtain.exe      入口启动器（计划任务和双击都从它起主程序），非 uiAccess
 #     LockCurtainApp.exe   uiAccess 主程序（install.ps1 给它签名）
-# 每个目录里再放自动更新用的 WinSparkle.dll、install.ps1，和启动器的同名副本 LockCurtainCtl.exe
+# 每个目录里再放自动更新用的 WinSparkle.dll、install.ps1，和占位文件 LockCurtainCtl.exe
 #（为兼容 1.0.2 的更新器，它写死要求更新包里有这个名字），一起打成 dist/LockCurtain-<版本>-<架构>.zip：
 # 发到 GitHub Release，也是自动更新下载的包（LockCurtain/Updater.cs）。
 #   dist/LockCurtain-<版本>-setup.exe  单文件安装器（双击即装，自动识别 x64/ARM64），需 makensis（brew install makensis）
@@ -59,9 +59,11 @@ for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
     -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
     -o "dist/$rid-ctl" | tail -1
   cp "dist/$rid-ctl/LockCurtain.exe" "dist/$rid/"
-  # 再拷一份叫 LockCurtainCtl.exe：1.0.2 的更新器写死要求更新包里有这个名字，否则 1.0.2 用户更新会失败
-  cp "dist/$rid-ctl/LockCurtain.exe" "dist/$rid/LockCurtainCtl.exe"
   rm -rf "dist/$rid-ctl"
+  # LockCurtainCtl.exe 只是占位：1.0.2 的更新器写死要求更新包里有这个名字，但只查存在、不执行也不校验内容
+  #（1.0.2 的 Updater.cs：zip.GetEntry(name) 查名 + 整包 ExtractToDirectory，没人运行它；1.0.3 里它是死重）。
+  # 所以放个几十字节的占位文件，别再拷一份 ~50MB 的启动器，省掉每个包约 34MB。
+  printf '%s\n' 'LockCurtain compat placeholder. The 1.0.2 updater requires a zip entry named LockCurtainCtl.exe (presence only); nothing executes it. See windows/build.sh.' > "dist/$rid/LockCurtainCtl.exe"
   cp install.ps1 "dist/$rid/"
   zip="dist/LockCurtain-$VERSION-$rid.zip"
   rm -f "$zip"
