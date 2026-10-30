@@ -22,7 +22,8 @@
 //   * 环境变量 LOCKCURTAIN_EXEMPT_PIDS="123,456"
 //
 // 用可拦截的 CGEvent tap：判为真人的输入被吞掉，不会落到 agent 正在操作的窗口上；
-// 合成输入照常放行。tap 只在遮罩显示期间存在，撤遮罩即停。
+// 合成输入照常放行。鼠标移动、拖动和触控板手势也吞掉，光标照样会动（那是系统画的），
+// 只是下层 app 收不到；只有按键、点击、滚轮触发退出。tap 只在遮罩显示期间存在，撤遮罩即停。
 
 import Foundation
 import CoreGraphics
@@ -33,6 +34,15 @@ final class CurtainInputFilter {
     private var source: CFRunLoopSource?
     private var onPhysical: (() -> Void)?
     private var onSynthetic: ((pid_t, String) -> Void)?
+    /// 解锁面板开着时由 OverlayController 设置：返回 true 的真人输入放行（落到面板上），既不吞也不触发 onPhysical
+    var passHuman: ((CGEventType, CGEvent) -> Bool)?
+
+    /// 触控板手势（旋转、缩放、轻扫、智能缩放、用力按压）。CGEventType 里没有，用 NSEvent.EventType 的原始值
+    static let gestureTypes: [UInt32] = [18, 19, 20, 29, 30, 31, 32, 34]
+
+    /// 只有这些真输入触发 onPhysical；其余（抬起、移动、拖动、手势、数位板）只吞
+    static let triggerTypes: Set<UInt32> = Set([CGEventType.keyDown, .flagsChanged, .leftMouseDown,
+                                                .rightMouseDown, .otherMouseDown, .scrollWheel].map(\.rawValue))
 
     /// 路径里出现这些片段的进程视为 agent，输入放行
     static let agentPathHints = ["CuaDriver", "Cua Spaces", "cua-driver", "cua-spacesd"]
@@ -84,13 +94,15 @@ final class CurtainInputFilter {
         cachedExempt = Self.loadExemptPIDs()
         cacheTime = Date()
 
-        // 按下类事件 + 滚轮触发 onPhysical；抬起类事件只拦截，免得落到下层窗口
+        // 按下类事件 + 滚轮触发 onPhysical；抬起、移动、拖动、手势、数位板只拦截
         let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged,
                                     .leftMouseDown, .leftMouseUp,
                                     .rightMouseDown, .rightMouseUp,
                                     .otherMouseDown, .otherMouseUp,
-                                    .scrollWheel]
-        let mask = types.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+                                    .scrollWheel,
+                                    .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged,
+                                    .tabletPointer, .tabletProximity]
+        let mask = (types.map(\.rawValue) + Self.gestureTypes).reduce(CGEventMask(0)) { $0 | (1 << $1) }
 
         let cb: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
@@ -112,8 +124,8 @@ final class CurtainInputFilter {
                 return Unmanaged.passUnretained(event)  // 合成输入：放行
             }
 
-            let isRelease = [.keyUp, .leftMouseUp, .rightMouseUp, .otherMouseUp].contains(type)
-            if !isRelease { me.onPhysical?() }
+            if let pass = me.passHuman, pass(type, event) { return Unmanaged.passUnretained(event) }
+            if CurtainInputFilter.triggerTypes.contains(type.rawValue) { me.onPhysical?() }
             return nil                                  // 真人输入：吞掉
         }
 
@@ -138,6 +150,7 @@ final class CurtainInputFilter {
         if let s = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), s, .commonModes) }
         tap = nil; source = nil
         onPhysical = nil; onSynthetic = nil
+        passHuman = nil
     }
 
     var isRunning: Bool { tap != nil }

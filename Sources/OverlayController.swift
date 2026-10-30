@@ -13,6 +13,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import LocalAuthentication
 import SwiftUI
 
 /// CGSSessionScreenIsLocked 不在公开头文件里，只在锁屏时出现
@@ -77,6 +78,19 @@ final class OverlayController {
     private var suppressLockShow = false
     /// 系统锁屏界面（时钟、密码框）已经显示：lockThenHide 锁屏前清零，收到 com.apple.screenLockUIIsShown 置位
     private var lockUIShown = false
+    /// 离开模式这次用哪种方式撤，show 时读设置
+    private var awayUnlock = AwayUnlock.lockScreen
+    /// 解锁面板（离开模式「回来时：验证」），盖在同一私有空间里；nil = 没开着
+    private var unlockPanel: UnlockPanel?
+    /// 面板的触控 ID 用的 context；没开触控 ID、面板收起或触控 ID 失效后置 nil
+    private var unlockAuth: LAContext?
+    private var unlockFailures = 0
+    /// 面板最后一次有真人操作的时间点，过了就收起面板
+    private var unlockIdleUntil = Date.distantPast
+    private var unlockIdle: Task<Void, Never>?
+    /// 密码连错几次就改成先锁屏再撤，免得面板变成密码爆破入口
+    private static let unlockMaxFailures = 3
+    private static let unlockIdleSeconds: TimeInterval = 60
 
     init() {
         // 接拔显示器、改分辨率、外接屏休眠都会改变屏幕布局，遮罩要跟着重建
@@ -177,7 +191,7 @@ final class OverlayController {
         guard windows.isEmpty else { return }
         self.mode = mode
         armedAt = Date().addingTimeInterval(1)
-        if mode == .away { power.engage() }
+        if mode == .away { power.engage(); awayUnlock = Prefs.awayUnlock }
         currentLevel = overlayLevel.rawValue
         buildWindows()
         NSLog("overlay shown (%@)", "\(mode)")
@@ -244,6 +258,7 @@ final class OverlayController {
     // MARK: - 隐藏
     func hide() {
         NSLog("overlay hide")
+        dismissUnlock("遮罩撤掉")
         removeExitMonitors()
         watchdog?.cancel(); watchdog = nil
         power.release()
@@ -257,6 +272,7 @@ final class OverlayController {
     // MARK: - 退出路径
     private func handlePhysicalInput() {
         guard let mode, Date() >= armedAt else { return }
+        if mode == .away, awayUnlock == .systemAuth { showUnlock(); return }
         NSLog("真人输入 -> 撤遮罩 (%@)", "\(mode)")
         Task { await safeHide() }
     }
@@ -282,6 +298,8 @@ final class OverlayController {
             s["exitPathsHealthy"] = inputFilter.isHealthy
             s["level"] = currentLevel
             s["space"] = space?.holds(windows) ?? false
+            s["unlock"] = awayUnlock.rawValue
+            s["unlocking"] = unlockPanel != nil
         }
         return s
     }
@@ -341,6 +359,7 @@ final class OverlayController {
     /// 动态层级保护：别的工具（录屏/投屏的遮罩、镜像窗）压到我们上面时，抬到它之上。
     /// 层级超过 Int32.max 会溢出成负数沉到最底，所以封顶；到顶后平级的靠重新排到最前
     private func guardLevel() {
+        guard unlockPanel == nil else { return }     // 面板和遮罩在同一层，抬遮罩会把面板盖住
         guard let bottom = windows.first else { return }   // 建窗顺序决定它在我们的窗口里最靠后
         let me = Int(getpid())
         let above = (CGWindowListCopyWindowInfo(.optionOnScreenAboveWindow, CGWindowID(bottom.windowNumber))
@@ -359,6 +378,156 @@ final class OverlayController {
             w.level = NSWindow.Level(rawValue: level)
             w.orderFrontRegardless()
         }
+    }
+
+    // MARK: - 解锁面板（离开模式「回来时：验证」）
+
+    /// 真人一碰：在遮罩下方弹出解锁面板，像系统锁屏一样输密码或用触控 ID，不弹任何系统框。
+    /// 面板和遮罩在同一个私有空间里；点面板外面、按 Esc、60 秒没操作都只收起面板，遮罩留着
+    private func showUnlock() {
+        if let panel = unlockPanel {
+            panel.focusPassword()                 // 点到面板外面也能把焦点拿回来
+            unlockIdleUntil = Date().addingTimeInterval(Self.unlockIdleSeconds)
+            return
+        }
+        guard !locking else { return }
+        // 面板跟着鼠标走：接到哪块屏就在哪块屏上弹
+        guard let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
+                ?? NSScreen.main else { return }
+        let size = NSSize(width: 280, height: 230)
+        let centerY = screen.frame.minY + screen.frame.height * 0.22
+        let frame = NSRect(x: screen.frame.midX - size.width / 2, y: centerY - size.height / 2,
+                           width: size.width, height: size.height)
+
+        let ctx = LAContext()
+        let biometrics = ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        let panel = UnlockPanel(contentRect: frame, ctx: biometrics ? ctx : nil)
+        panel.level = NSWindow.Level(rawValue: currentLevel + 1)
+        panel.sharingType = stealthEnabled ? .none : .readOnly
+        if let space, !space.adopt([panel]) { NSLog("unlock: 面板没进私有空间") }
+        panel.onSubmit = { [weak self] password in self?.submitPassword(password) }
+        panel.onCancel = { [weak self] in self?.dismissUnlock("Esc") }
+        unlockPanel = panel
+        unlockFailures = 0
+        unlockIdleUntil = Date().addingTimeInterval(Self.unlockIdleSeconds)
+        // tap 挂在主线程的 run loop 上，回调本来就在主线程
+        inputFilter.passHuman = { [weak self] type, event in
+            MainActor.assumeIsolated { self?.passToUnlock(type, event) ?? false }
+        }
+        panel.orderFrontRegardless()
+        panel.focusPassword()
+        // 还没实测私有空间里的面板能不能拿到键盘焦点，先记下来
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard self?.unlockPanel === panel else { return }
+            NSLog("unlock: 面板 key=%d appActive=%d 前台=%@", panel.isKeyWindow ? 1 : 0, NSApp.isActive ? 1 : 0,
+                  NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")
+        }
+        unlockIdle = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard let self, self.unlockPanel != nil else { return }
+                if Date() > self.unlockIdleUntil {
+                    self.dismissUnlock("60 秒没操作")
+                    return
+                }
+            }
+        }
+        guard biometrics else { return }
+        unlockAuth = ctx
+        // 回调在别的线程，只带标识回主线程比对，LAContext 本身不能跨线程传
+        let id = ObjectIdentifier(ctx)
+        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "撤掉 LockCurtain 的遮罩") { [weak self] ok, error in
+            let code = (error as? LAError)?.code
+            Task { @MainActor in self?.touchIDFinished(id, ok: ok, code: code) }
+        }
+    }
+
+    private func touchIDFinished(_ id: ObjectIdentifier, ok: Bool, code: LAError.Code?) {
+        guard let auth = unlockAuth, ObjectIdentifier(auth) == id else { return }
+        if ok { unlockSucceeded("触控 ID"); return }
+        if let code {
+            switch code {
+            case .userCancel, .appCancel, .systemCancel:
+                return                        // 自己取消（或系统收起），面板留着继续输密码
+            default:
+                break
+            }
+        }
+        NSLog("unlock: 触控 ID 用不了（%@）", code.map { "\($0.rawValue)" } ?? "?")
+        unlockAuth = nil
+        unlockPanel?.useTouchID(false)
+    }
+
+    /// 密码核对：放到后台线程，面板已经收了就丢掉结果
+    private func submitPassword(_ password: String) {
+        guard !password.isEmpty else { return }
+        let panel = unlockPanel
+        panel?.setBusy(true)
+        unlockIdleUntil = Date().addingTimeInterval(Self.unlockIdleSeconds)
+        Task { @MainActor in
+            let ok = await Task.detached { UnlockPanel.verifyLoginPassword(password) }.value
+            guard self.unlockPanel === panel else { return }
+            if ok {
+                self.unlockSucceeded("密码")
+            } else {
+                self.unlockFailures += 1
+                NSLog("unlock: 密码不对（第 %d 次）", self.unlockFailures)    // 只记次数，不记密码
+                if self.unlockFailures >= Self.unlockMaxFailures {
+                    self.dismissUnlock("连错 \(Self.unlockMaxFailures) 次")
+                    Task { await self.lockThenHide() }
+                } else {
+                    panel?.setBusy(false)
+                    panel?.rejected()
+                }
+            }
+        }
+    }
+
+    private func unlockSucceeded(_ how: String) {
+        NSLog("unlock: %@ 通过，撤遮罩", how)
+        dismissUnlock("验证通过（\(how)）")
+        hide()
+    }
+
+    /// 收起面板，遮罩留着；agent 不受影响
+    private func dismissUnlock(_ why: String) {
+        guard let panel = unlockPanel else { return }
+        NSLog("unlock: 收起面板（%@）", why)
+        unlockIdle?.cancel(); unlockIdle = nil
+        unlockAuth?.invalidate(); unlockAuth = nil
+        inputFilter.passHuman = nil
+        panel.orderOut(nil)
+        unlockPanel = nil
+    }
+
+    /// 面板开着时哪些真人输入放行：
+    ///   按键（不带 ⌘ / ⌃）：面板是 key 才放。面板是 nonactivatingPanel，成为 key 时系统把键盘焦点给它，
+    ///     agent 的 app 留在前台但收不到这些按键
+    ///   鼠标：落在面板里才放；点击、移动也要用，不然拖不动密码框里的选区和光标
+    ///   滚轮、手势和其他：一律吞掉
+    /// 密码框获得焦点后系统会打开安全输入，tap 可能就收不到按键了；⌘ 组合键由
+    /// UnlockPanel.performKeyEquivalent 兜底吞掉，不会漏给主菜单
+    private func passToUnlock(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        var pass = false
+        switch type {
+        case .keyDown, .keyUp, .flagsChanged:
+            pass = event.flags.intersection([.maskCommand, .maskControl]).isEmpty
+                && unlockPanel?.isKeyWindow == true
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp,
+             .otherMouseDown, .otherMouseUp,
+             .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged:
+            if let f = unlockPanel?.frame {
+                // 面板 frame 是 Cocoa 坐标；event.location 是全局坐标（原点主屏左上、y 朝下）
+                let mainMaxY = NSScreen.screens.first?.frame.maxY ?? 0
+                pass = CGRect(x: f.minX, y: mainMaxY - f.maxY, width: f.width, height: f.height)
+                    .contains(event.location)
+            }
+        default:
+            break
+        }
+        if pass { unlockIdleUntil = Date().addingTimeInterval(Self.unlockIdleSeconds) }
+        return pass
     }
 
     /// 先锁屏，等系统锁屏界面真正显示出来（最多等 5 秒）再撤遮罩，撤掉后露出的是锁屏而不是桌面。

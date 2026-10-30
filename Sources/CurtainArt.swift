@@ -86,7 +86,7 @@ struct CurtainArtView: View {
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: paused)) { tl in
                 let t = tl.date.timeIntervalSinceReferenceDate
                 Canvas { g, size in
-                    // 遮罩不拦鼠标也不藏光标，每帧读一次光标位置就够，不用新权限
+                    // 遮罩吞掉鼠标移动，但光标照样动（系统画的），每帧读一次光标位置就够，不用新权限
                     if !paused, art.stares, let center { stare.feed(t, cursor: NSEvent.mouseLocation, eye: center) }
                     draw(&g, size, paused ? art.stillTime(t) : t, paused ? nil : stare)
                 }

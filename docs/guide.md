@@ -67,7 +67,7 @@ defaults write dev.local.lockcurtain showDockIcon -bool true
 defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 ```
 
-**遮罩图案**：机械眼（默认）、魔瞳、镇宅符、机械表、保险库、挂锁、自定义图片、不显示。机械眼和魔瞳会盯光标（Windows 版也会）：光标一动，眼球就转过去看它，光标停在眼睛上时直视，在另一块屏上时斜着看过去；盯着时光圈或竖瞳收窄、不眨眼，光标停下 3 秒后回去东张西望。光标位置每帧读一次 `NSEvent.mouseLocation`，不需要新权限；移动鼠标本来就不会撤遮罩，只有按键、点击、滚轮会。程序挪动光标时眼睛也会跟。开了「减弱动态效果」时不动。镇宅符照《太上秘法镇宅灵符》（正统道藏洞真部神符类）第三十道描的，原注「盗贼不侵，万事称意」。自定义图片默认是账户头像，在通用页可以换成任意图片（缩到 512px 以内存进设置的 `curtainImage`），可以选裁成圆形（`curtainImageRound`）。
+**遮罩图案**：机械眼（默认）、魔瞳、镇宅符、机械表、保险库、挂锁、自定义图片、不显示。机械眼和魔瞳会盯光标（Windows 版也会）：光标一动，眼球就转过去看它，光标停在眼睛上时直视，在另一块屏上时斜着看过去；盯着时光圈或竖瞳收窄、不眨眼，光标停下 3 秒后回去东张西望。光标位置每帧读一次 `NSEvent.mouseLocation`，不需要新权限；移动鼠标不会撤遮罩（移动和触控板手势会被吞掉，下层 app 收不到，但光标照样动），只有按键、点击、滚轮会。程序挪动光标时眼睛也会跟。开了「减弱动态效果」时不动。镇宅符照《太上秘法镇宅灵符》（正统道藏洞真部神符类）第三十道描的，原注「盗贼不侵，万事称意」。自定义图片默认是账户头像，在通用页可以换成任意图片（缩到 512px 以内存进设置的 `curtainImage`），可以选裁成圆形（`curtainImageRound`）。
 通用页里点缩略图切换，下次显示遮罩时生效；也可以 `defaults write dev.local.lockcurtain curtainArt mechEye`
 （取值 `mechEye` / `demonEye` / `talisman` / `clock` / `vault` / `padlock` / `custom` / `none`）。动画图案都按时间实时画，每秒 30 帧，
 加新图案见 `Sources/CurtainArt.swift` 文件头。
@@ -138,6 +138,14 @@ defaults write dev.local.lockcurtain showMenuBarIcon -bool false
 （`com.apple.screenLockUIIsShown` 之后再等 1.5 秒，通知最多等 5 秒）。系统的「已锁」标志在锁屏界面出来前约 2 秒就变了，不能只看它。
 路过的人看不到桌面、碰不到任何窗口，按一下只会进入系统锁屏。
 
+设置窗口「离开模式」页的「回来时」可以改成「验证 Mac 密码或触控 ID」：真人一碰，遮罩不撤，遮罩下方出现解锁面板
+（头像、名字、密码框、触控 ID），全在 LockCurtain 自己的窗口里，不弹任何系统框。密码交给系统在本机核对
+（OpenDirectory 的 `verifyPassword`），LockCurtain 只拿到通过与否，不保存、不记录密码。通过就直接撤遮罩、
+不锁屏，agent 不受影响；连错 3 次改成先锁屏再撤；按 Esc 或 60 秒没操作只收起面板，遮罩留着。
+面板开着时只放行落在面板里的鼠标和面板拿到焦点时的按键（不带 ⌘ / ⌃），其余照样吞掉，遮罩也暂停抬层级。
+触控 ID 用 `LAAuthenticationView` 嵌在面板里。**还没实测完**：私有空间里的面板能不能拿到键盘焦点、
+密码框的安全输入打开后事件 tap 还收不收得到按键，要看日志里那行 `unlock: 面板 key=…`。
+
 防休眠（设置窗口「离开模式」页，只在离开模式生效，真实锁屏时不防，免得锁屏过夜的 Mac 永远不睡）：
 
 | 设置 | 默认 | 作用 |
@@ -167,7 +175,8 @@ $LC --send settings  # 打开设置窗口（App 没运行时会先拉起）
 {"locked":false,"mode":"away","ok":true,"running":true,"exitPathsHealthy":true,"level":2147483629,"space":true}
 ```
 
-`mode` 取值 `none` / `lock` / `preview` / `away`；`exitPathsHealthy`、`level`（遮罩当前层级）和 `space`（遮罩是否在私有空间里）只在遮罩显示时出现。
+`mode` 取值 `none` / `lock` / `preview` / `away`；`exitPathsHealthy`、`level`（遮罩当前层级）、`space`（遮罩是否在私有空间里）、
+`unlock`（`lockScreen` / `systemAuth`）和 `unlocking`（解锁面板是否开着）只在遮罩显示时出现。
 App 没运行时 `status` / `hide` 不会拉起它，直接返回 `{"ok":true,"running":false}`。
 
 **安全约束：任何命令都不会露出已解锁的桌面。** 离开模式下的 `hide` 和真人输入一样先锁屏；

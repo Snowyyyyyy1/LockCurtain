@@ -12,6 +12,8 @@ enum PrefKey {
     static let curtainArt = "curtainArt"
     static let awayKeepDisplayOn = "awayKeepDisplayOn"
     static let awayDimBrightness = "awayDimBrightness"
+    /// 离开模式回来时怎么撤遮罩（AwayUnlock）
+    static let awayUnlock = "awayUnlock"
     /// 开着的保持唤醒会话，下次启动接着开（KeepAwake.swift）
     static let keepAwake = "keepAwake"
     /// 「自定义图片」图案用的图，缩到 512px 以内存成 PNG/JPEG；没有就用账户头像
@@ -39,11 +41,21 @@ enum Prefs {
     static var curtainBackground: CurtainBackground {
         UserDefaults.standard.string(forKey: PrefKey.curtainBackground).flatMap(CurtainBackground.init(rawValue:)) ?? .wallpaper
     }
+    /// 离开模式回来时怎么撤（默认先锁屏）
+    static var awayUnlock: AwayUnlock {
+        UserDefaults.standard.string(forKey: PrefKey.awayUnlock).flatMap(AwayUnlock.init(rawValue:)) ?? .lockScreen
+    }
     static let defaultCurtainTitle = "LockCurtain is Using Your Mac"
     static let defaultCurtainSubtitle = "Press any key or click to unlock"
     /// 没设置过用默认文案；设成空（或只有空白）就不显示
     static var curtainTitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainTitle) ?? defaultCurtainTitle }
     static var curtainSubtitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainSubtitle) ?? defaultCurtainSubtitle }
+}
+
+/// 离开模式下真人碰了键鼠之后怎么撤遮罩
+enum AwayUnlock: String {
+    case lockScreen     // 先锁屏，等锁屏界面出来再撤（默认）
+    case systemAuth     // 遮罩下方弹出解锁面板（Mac 密码或触控 ID），通过就直接撤，不锁屏
 }
 
 /// KVO 用：属性名必须和 key 一致

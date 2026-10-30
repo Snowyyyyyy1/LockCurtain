@@ -343,6 +343,7 @@ private struct AwayPane: View {
     let actions: AppActions
     @AppStorage(PrefKey.awayKeepDisplayOn) private var keepDisplayOn = true
     @AppStorage(PrefKey.awayDimBrightness) private var dimBrightness = false
+    @AppStorage(PrefKey.awayUnlock) private var unlock = AwayUnlock.lockScreen
 
     var body: some View {
         Form {
@@ -356,12 +357,15 @@ private struct AwayPane: View {
                     .foregroundStyle(.secondary)
             }
             Section {
-                LabeledContent("回来时") { Text("碰一下键盘或鼠标：先锁屏，再撤掉遮罩") }
+                Picker("回来时", selection: $unlock) {
+                    Text("先锁屏，再撤掉遮罩").tag(AwayUnlock.lockScreen)
+                    Text("验证 Mac 密码或触控 ID，通过后撤掉遮罩").tag(AwayUnlock.systemAuth)
+                }
                 Button("立即进入离开模式", action: actions.enterAway)
             } header: {
                 Text("离开模式")
             } footer: {
-                Text("遮罩期间你的按键和点击会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。")
+                Text("遮罩期间你的按键、点击、滚动、鼠标移动和触控板手势都会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。选「验证」时，按一下键盘或点一下，遮罩下方出现解锁面板，像锁屏一样输密码或用触控 ID；密码由系统在本机核对，LockCurtain 只拿到通过与否，不保存。通过就直接撤遮罩，连错 3 次改成先锁屏再撤；Esc 或 60 秒没操作只收起面板，遮罩留着。设置在下次进入离开模式时生效。")
                     .foregroundStyle(.secondary)
             }
         }
