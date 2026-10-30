@@ -5,7 +5,6 @@
 //   LockCurtain.exe --no-stealth           遮罩不对屏幕捕获隐藏（希望录屏时对方能看到遮罩）
 //   LockCurtain.exe --send away|preview|hide|status|settings
 //                                          发给正在运行的实例后退出，输出一行 JSON
-//   LockCurtain.exe --relaunch-after <pid> 自动更新换好 exe 后由旧进程启动，见 Updater.cs
 // 已在运行时再打开一次（不带参数）弹出设置窗口，和 Mac 版的 reopen 一样。
 
 using System.Diagnostics;
@@ -21,8 +20,6 @@ static class Program
     {
         var i = Array.IndexOf(args, "--send");
         if (i >= 0) return ControlClient.Send(i + 1 < args.Length ? args[i + 1] : "status");
-        var r = Array.IndexOf(args, "--relaunch-after");
-        if (r >= 0 && r + 1 < args.Length && int.TryParse(args[r + 1], out var oldPid) && Updater.Relaunch(oldPid)) return 0;
 
         if (args.Length == 0)
         {

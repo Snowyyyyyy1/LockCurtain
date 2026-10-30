@@ -78,20 +78,22 @@ internal sealed partial class TrayApp : ApplicationContext
         base.ExitThreadCore();
     }
 
-    /// 更新装好了：遮罩没在显示就退出（新版本由计划任务拉起）。WinSparkle 点安装前问过可不可以退出，
-    /// 但这之后规则或命令还可能把遮罩打开，这时等它撤掉再退
+    /// 可以退出、且更新包已解压到暂存目录：遮罩没在显示才起 install.ps1 安装并退出。
+    /// WinSparkle 点安装前问过可不可以退出（CanShutdown），但这之后规则或命令还可能把遮罩打开，这时等它撤掉再装
     void ExitAfterUpdate()
     {
         if (overlay.Mode == null)
         {
+            Updater.InstallPending();
             ExitThread();
             return;
         }
-        Log.Write("更新已装好，遮罩撤掉后退出");
+        Log.Write("更新已下载，遮罩撤掉后安装并退出");
         void OnChanged()
         {
             if (overlay.Mode != null) return;
             overlay.StateChanged -= OnChanged;
+            Updater.InstallPending();
             ExitThread();
         }
         overlay.StateChanged += OnChanged;

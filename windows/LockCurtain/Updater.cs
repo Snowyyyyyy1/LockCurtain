@@ -1,9 +1,12 @@
-// Updater.cs —— 自动更新：检查、提示、下载、验签交给 WinSparkle，安装在这里做
+// Updater.cs —— 自动更新：检查、提示、下载、验签交给 WinSparkle，安装交给 install.ps1
 //
 // 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtain.exe、WinSparkle.dll、
-// install.ps1），appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
-// 用户点「安装更新」后：从 zip 里取出 exe 和 dll，正在用的改名成 .old，新的放进去；旧进程退出后，
-// 新 exe 通过计划任务以最高权限拉起（没装计划任务时直接接着运行）。遮罩显示中不退出，等撤掉再退。
+// install.ps1、LockCurtainCtl.exe），appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
+// 用户点「安装更新」、WinSparkle 验签通过后：把整个 zip 解压到暂存目录，此刻不动正在用的文件、不杀进程（遮罩可能正升着）。
+// 到了能退出的时候（遮罩没在显示）才起一个独立的 powershell 跑暂存目录里的 install.ps1，然后本进程退出：
+// install.ps1 杀旧进程、复制文件、重新给 exe 签名、重注册计划任务，由计划任务经 LockCurtainCtl ShellExecute 起新版本。
+// 不能像以前那样就地换文件：app.manifest 要求 uiAccess，exe 必须在 Program Files 里且被本机信任的证书签名，
+// 未签名的新 exe 起不来，CreateProcess 起 uiAccess 的 exe 也会被拒（0x800702E4）。
 //
 // 以最高权限运行时，WinSparkle 0.9.4 有三处能被普通权限的程序拿来提权（看过它的源码）：
 // 1. 下载、验签都在用户的 %TEMP% 里，验完不再验，装之前可以被换掉
@@ -33,6 +36,11 @@ internal static unsafe class Updater
     static readonly string Dir = AppContext.BaseDirectory.TrimEnd('\\');
     static readonly string UpdatesDir = Path.Combine(Dir, "updates");
     static readonly bool Elevated = ElevatedTask.IsElevated();
+    /// 暂存目录：更新包整个解压到这里，退出时跑里面的 install.ps1。
+    /// 以最高权限运行时 TMP 指到安装目录下的 updates（见 Start），这里也就是只有管理员能写的目录
+    static string StageDir => Path.Combine(Path.GetTempPath(), "LockCurtainUpdate");
+    /// 已解压、等着退出时安装的暂存目录；null 表示没有待安装的更新
+    static string? stage;
     static Func<bool> idle = () => false;
     static Action exit = () => { };
     static System.Windows.Forms.Timer? timer;
@@ -113,17 +121,30 @@ internal static unsafe class Updater
         win_sparkle_cleanup();
     }
 
-    /// 装好更新后，新 exe 带 --relaunch-after <旧进程 pid> 启动：等旧进程退出，再通过计划任务以最高权限拉起。
-    /// 返回 false 表示没装计划任务，调用方接着正常运行
-    public static bool Relaunch(int oldPid)
+    /// 遮罩没在显示、可以退出了才调用（TrayApp.ExitAfterUpdate 的闸）：
+    /// 起一个独立的 powershell 跑暂存目录里的 install.ps1，然后调用方退出。
+    /// install.ps1 会 Kill 掉名为 LockCurtain 的进程，所以它必须是独立进程，不能等它；
+    /// 本进程以计划任务的最高权限运行，子 powershell 继承管理员令牌，install.ps1 走 admin 分支、不弹 UAC
+    /// （不能传 -Verb RunAs：会二次弹 UAC）。
+    public static void InstallPending()
     {
+        if (stage is not { } dir) return;
+        stage = null;
+        var script = Path.Combine(dir, "install.ps1");
         try
         {
-            using var old = Process.GetProcessById(oldPid);
-            old.WaitForExit();
+            using var p = Process.Start(new ProcessStartInfo("powershell.exe",
+                $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{script}\"")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            }) ?? throw new InvalidOperationException("powershell.exe 没能启动");
+            Log.Write($"自动更新：已启动安装程序 {script}（pid {p.Id}），退出");
         }
-        catch (ArgumentException) { }   // 已经退出了
-        return ElevatedTask.TryRun();
+        catch (Exception e)
+        {
+            Log.Write($"自动更新：启动安装程序失败: {e}");
+        }
     }
 
     internal static string Version => Application.ProductVersion.Split('+')[0];
@@ -142,7 +163,8 @@ internal static unsafe class Updater
         SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, 0, &OnWindowShown, (uint)Environment.ProcessId, 0, WINEVENT_OUTOFCONTEXT);
     }
 
-    /// 上次更新改名留下的 .old、没装成留下的 .new，和 updates 里的下载（只有管理员能写，里面不会有别人放的链接）
+    /// 旧版本就地换文件留下的 .old、.new，没装成的暂存目录，和 updates 里的下载
+    /// （只有管理员能写，里面不会有别人放的链接）
     static void DeleteLeftovers()
     {
         try
@@ -150,6 +172,7 @@ internal static unsafe class Updater
             foreach (var name in new[] { Exe, Dll })
             foreach (var suffix in new[] { ".old", ".new" })
                 File.Delete(Path.Combine(Dir, name + suffix));
+            if (Directory.Exists(StageDir)) Directory.Delete(StageDir, recursive: true);
             if (Elevated && Directory.Exists(UpdatesDir)) Directory.Delete(UpdatesDir, recursive: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -158,36 +181,21 @@ internal static unsafe class Updater
         }
     }
 
-    /// 从更新包里取出 exe 和 dll 换掉正在用的，再起新 exe 等这个进程退出
+    /// WinSparkle 验签通过后调到这里：把更新包的全部条目解压到暂存目录，记下待安装。
+    /// 此刻不动正在用的文件、不杀进程：遮罩可能正升着，真正安装要等退出时（InstallPending）
     static void Install(string package)
     {
         if (Elevated && !Path.GetFullPath(package).StartsWith(UpdatesDir + @"\", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"更新包不在 {UpdatesDir} 里: {package}");
-        string[] names = [Exe, Dll];
+        // 缺文件的话 install.ps1 会在杀掉旧进程之后才失败，先在这里查一遍
+        string[] names = [Exe, Dll, "install.ps1", "LockCurtainCtl.exe"];
         using (var zip = ZipFile.OpenRead(package))
             foreach (var name in names)
-            {
-                var entry = zip.GetEntry(name) ?? throw new InvalidDataException($"更新包里没有 {name}");
-                entry.ExtractToFile(Path.Combine(Dir, name + ".new"), overwrite: true);
-            }
-        // 正在用的 exe 和 dll 删不掉，但能改名。换到一半失败就把换过的都改回去：exe 和 dll 不能一新一旧
-        var renamed = new List<string>();
-        try
-        {
-            foreach (var path in names.Select(name => Path.Combine(Dir, name)))
-            {
-                File.Move(path, path + ".old", overwrite: true);
-                renamed.Add(path);
-                File.Move(path + ".new", path);
-            }
-        }
-        catch
-        {
-            foreach (var path in renamed) File.Move(path + ".old", path, overwrite: true);
-            throw;
-        }
-        Process.Start(Path.Combine(Dir, Exe), $"--relaunch-after {Environment.ProcessId}").Dispose();
-        Log.Write("自动更新：已换成新版本，等退出");
+                if (zip.GetEntry(name) is null) throw new InvalidDataException($"更新包里没有 {name}");
+        if (Directory.Exists(StageDir)) Directory.Delete(StageDir, recursive: true);
+        ZipFile.ExtractToDirectory(package, StageDir);
+        stage = StageDir;
+        Log.Write($"自动更新：已解压到 {stage}，退出时安装");
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
@@ -214,7 +222,8 @@ internal static unsafe class Updater
         catch (Exception e) { Log.Write($"自动更新：退出失败: {e}"); }
     }
 
-    /// 返回 1 表示装好了（WinSparkle 接着请求退出），-1 时它提示「无法启动安装程序」
+    /// 返回 1 表示已解压好、可以装（WinSparkle 接着请求退出，真正安装见 InstallPending），
+    /// -1 时它提示「无法启动安装程序」
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int RunInstaller(char* path)
     {
