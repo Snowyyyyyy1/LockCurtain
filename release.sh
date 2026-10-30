@@ -71,7 +71,8 @@ ditto -c -k --keepParent LockCurtain.app "dist/LockCurtain-$VERSION-mac.zip"
 echo "== Windows $VERSION"
 rm -f windows/dist/LockCurtain-*.zip
 windows/build.sh | grep -E "^\[|zip"
-cp "windows/dist/LockCurtain-$VERSION-win-x64.zip" "windows/dist/LockCurtain-$VERSION-win-arm64.zip" dist/
+cp "windows/dist/LockCurtain-$VERSION-win-x64.zip" "windows/dist/LockCurtain-$VERSION-win-arm64.zip" \
+   "windows/dist/LockCurtain-$VERSION-setup.exe" dist/
 
 echo "== 签名、appcast"
 # sign_update 输出 sparkle:edSignature="…" length="…"，原样塞进 enclosure
@@ -125,7 +126,7 @@ appcast "$MAC_HTML" \
   "<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>" \
   "<enclosure url=\"$DL/$M\" $(sig "dist/$M") type=\"application/octet-stream\"/>" > dist/appcast.xml
 
-W64="LockCurtain-$VERSION-win-x64.zip"; WA="LockCurtain-$VERSION-win-arm64.zip"
+W64="LockCurtain-$VERSION-win-x64.zip"; WA="LockCurtain-$VERSION-win-arm64.zip"; SETUP="LockCurtain-$VERSION-setup.exe"
 appcast "$WIN_HTML" \
   "<enclosure url=\"$DL/$W64\" sparkle:os=\"windows-x64\" $(sig "dist/$W64") type=\"application/octet-stream\"/>" \
   "<enclosure url=\"$DL/$WA\" sparkle:os=\"windows-arm64\" $(sig "dist/$WA") type=\"application/octet-stream\"/>" > dist/appcast-windows.xml
@@ -135,7 +136,7 @@ xmllint --noout dist/appcast.xml dist/appcast-windows.xml
 ls -lh dist | awk 'NR > 1 {print "  " $5, $9}'
 
 CMD=(gh release create "$TAG" -R "$REPO" --target "$(git rev-parse HEAD)" --title "LockCurtain $VERSION" --notes-file dist/release-notes.md
-     "dist/$M" "dist/$W64" "dist/$WA" dist/appcast.xml dist/appcast-windows.xml)
+     "dist/$M" "dist/$W64" "dist/$WA" "dist/$SETUP" dist/appcast.xml dist/appcast-windows.xml)
 if [ $PUBLISH = 1 ]; then
   git fetch -q origin
   git merge-base --is-ancestor HEAD origin/main || { echo "HEAD 还没推送到 origin/main"; exit 1; }
