@@ -91,7 +91,7 @@ internal sealed class ControlServer
     }
 }
 
-/// 命令行客户端：LockCurtain.exe --send away|preview|hide|status|settings
+/// 命令行客户端：LockCurtainApp.exe --send away|preview|hide|status|settings
 internal static class ControlClient
 {
     public static int Send(string cmd)

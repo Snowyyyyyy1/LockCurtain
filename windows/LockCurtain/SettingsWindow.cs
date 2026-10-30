@@ -128,7 +128,7 @@ internal sealed class SettingsWindow : Form
             .Toggle("登录时打开 LockCurtain", () => installed || LoginItem.IsEnabled(), LoginItem.Set, enabled: !installed);
         v.Section("图标", () => Settings.Current.ShowTrayIcon
                 ? ""
-                : "隐藏后，再打开一次 LockCurtain 即可回到这里，也可以运行 LockCurtain.exe --send settings。")
+                : "隐藏后，再打开一次 LockCurtain 即可回到这里，也可以运行 LockCurtain.exe settings。")
             .Toggle("在通知区域显示", () => Settings.Current.ShowTrayIcon, on => Settings.Update(s => s.ShowTrayIcon = on));
         var tiles = Enum.GetValues<CurtainArt>().Select(a => new ArtTile(a, theme) { Checked = a == Settings.Current.CurtainArt }).ToList();
         var customTile = tiles.Single(t => t.Art == CurtainArt.Custom);
@@ -240,7 +240,7 @@ internal sealed class SettingsWindow : Form
 
     void BuildRemote(PageView v)
     {
-        var exe = Environment.ProcessPath ?? "LockCurtain.exe";
+        var exe = Path.Combine(AppContext.BaseDirectory, "LockCurtain.exe");
         var section = v.Section("命令行", () => "一行命令进，一行 JSON 出；成功时退出码 0。App 本身不监听任何网络端口，只接受本机当前用户的连接。"
                                                + "在 PowerShell 里调用要在路径前加 &。")
             .Value("路径", exe, mono: true, button: ("拷贝", () => Clipboard.SetText(exe)));

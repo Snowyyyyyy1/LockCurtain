@@ -1,9 +1,9 @@
 // Program.cs —— 入口
 //
-//   LockCurtain.exe                        运行（通知区域图标）
-//   LockCurtain.exe --preview              运行并立即显示预览遮罩
-//   LockCurtain.exe --no-stealth           遮罩不对屏幕捕获隐藏（希望录屏时对方能看到遮罩）
-//   LockCurtain.exe --send away|preview|hide|status|settings
+//   LockCurtainApp.exe                     运行（通知区域图标）；用户一般不直接跑它，而是经启动器 LockCurtain.exe
+//   LockCurtainApp.exe --preview           运行并立即显示预览遮罩
+//   LockCurtainApp.exe --no-stealth        遮罩不对屏幕捕获隐藏（希望录屏时对方能看到遮罩）
+//   LockCurtainApp.exe --send away|preview|hide|status|settings
 //                                          发给正在运行的实例后退出，输出一行 JSON
 // 已在运行时再打开一次（不带参数）弹出设置窗口，和 Mac 版的 reopen 一样。
 

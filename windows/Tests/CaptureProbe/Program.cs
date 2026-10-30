@@ -5,7 +5,7 @@
 //   CaptureProbe.exe            用已安装的 LockCurtain 的预览遮罩（--send preview / hide）；全部透过去返回 0，否则 1
 //   CaptureProbe.exe control    对照：起一个 --no-stealth --preview 的临时实例，抓屏应该拍到遮罩。
 //                               先停掉正式实例（它以最高权限运行，要管理员 taskkill），测完 schtasks /run /tn LockCurtain
-// LockCurtain.exe 默认在 C:\Program Files\LockCurtain，别处用环境变量 LOCKCURTAIN_EXE 指定。
+// LockCurtainApp.exe 默认在 C:\Program Files\LockCurtain，别处用环境变量 LOCKCURTAIN_EXE 指定。
 //
 // 开一块绿色的置顶窗口，拉起遮罩，变色（洋红）前后各抓一次：BitBlt（SRCCOPY | CAPTUREBLT，pyautogui、mss、PIL 的抓法）、
 // DXGI 桌面复制、Windows.Graphics.Capture、PrintWindow（只画目标窗口自己，不受遮罩影响）。
@@ -21,7 +21,7 @@ using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Graphics.Imaging;
 using WinRT;
 
-string exe = Environment.GetEnvironmentVariable("LOCKCURTAIN_EXE") ?? @"C:\Program Files\LockCurtain\LockCurtain.exe";
+string exe = Environment.GetEnvironmentVariable("LOCKCURTAIN_EXE") ?? @"C:\Program Files\LockCurtain\LockCurtainApp.exe";
 string resultFile = Path.Combine(AppContext.BaseDirectory, "capture-probe.txt");
 bool control = args.Contains("control");
 

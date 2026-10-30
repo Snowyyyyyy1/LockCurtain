@@ -2,10 +2,12 @@
 # build.sh —— 在 Mac 上交叉编译 Windows 版
 #
 # 输出两个自带 .NET 运行时的单文件 exe，目标机器不用装 .NET：
-#   dist/win-arm64/LockCurtain.exe   ARM 版 Windows（Apple Silicon 上的虚拟机、Snapdragon 笔记本）
-#   dist/win-x64/LockCurtain.exe     普通 x64 电脑
-# 每个目录里再放自动更新用的 WinSparkle.dll 和 install.ps1（装成登录时以最高权限运行，见文件头），
-# 三个文件打成 dist/LockCurtain-<版本>-<架构>.zip：发到 GitHub Release，也是自动更新下载的包（LockCurtain/Updater.cs）。
+#   dist/win-arm64/ 和 dist/win-x64/ 里各有：
+#     LockCurtain.exe      入口启动器（计划任务和双击都从它起主程序），非 uiAccess
+#     LockCurtainApp.exe   uiAccess 主程序（install.ps1 给它签名）
+# 每个目录里再放自动更新用的 WinSparkle.dll、install.ps1，和启动器的同名副本 LockCurtainCtl.exe
+#（为兼容 1.0.2 的更新器，它写死要求更新包里有这个名字），一起打成 dist/LockCurtain-<版本>-<架构>.zip：
+# 发到 GitHub Release，也是自动更新下载的包（LockCurtain/Updater.cs）。
 #   dist/LockCurtain-<版本>-setup.exe  单文件安装器（双击即装，自动识别 x64/ARM64），需 makensis（brew install makensis）
 #
 # 版本号读仓库根目录的 VERSION。环境变量：
@@ -51,18 +53,20 @@ for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
     -o "dist/$rid" | tail -1
   case "$rid" in win-arm64) arch=ARM64 ;; win-x64) arch=x64 ;; esac
   unzip -p "$WINSPARKLE_ZIP" "WinSparkle-$WINSPARKLE/$arch/Release/WinSparkle.dll" > "dist/$rid/WinSparkle.dll"
-  # 不带 uiAccess 的命令行工具：agent 发命令、计划任务 ShellExecute 启动主程序都用它
+  # 不带 uiAccess 的入口启动器（AssemblyName=LockCurtain → LockCurtain.exe）：计划任务 ShellExecute 起主程序，也给 agent 发命令
   dotnet publish LockCurtainCtl/LockCurtainCtl.csproj -c Release -r "$rid" --self-contained \
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
     -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
     -o "dist/$rid-ctl" | tail -1
-  cp "dist/$rid-ctl/LockCurtainCtl.exe" "dist/$rid/"
+  cp "dist/$rid-ctl/LockCurtain.exe" "dist/$rid/"
+  # 再拷一份叫 LockCurtainCtl.exe：1.0.2 的更新器写死要求更新包里有这个名字，否则 1.0.2 用户更新会失败
+  cp "dist/$rid-ctl/LockCurtain.exe" "dist/$rid/LockCurtainCtl.exe"
   rm -rf "dist/$rid-ctl"
   cp install.ps1 "dist/$rid/"
   zip="dist/LockCurtain-$VERSION-$rid.zip"
   rm -f "$zip"
-  (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtain.exe WinSparkle.dll install.ps1 LockCurtainCtl.exe)
-  ls -lh "dist/$rid/LockCurtain.exe" "$zip" | awk '{print "  " $5, $9}'
+  (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtainApp.exe LockCurtain.exe WinSparkle.dll install.ps1 LockCurtainCtl.exe)
+  ls -lh "dist/$rid/LockCurtainApp.exe" "dist/$rid/LockCurtain.exe" "$zip" | awk '{print "  " $5, $9}'
 done
 
 # 把两种架构的产物打成一个「自动识别 CPU」的单文件安装器（NSIS）。

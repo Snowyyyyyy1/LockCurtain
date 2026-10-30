@@ -1,10 +1,11 @@
 // Updater.cs —— 自动更新：检查、提示、下载、验签交给 WinSparkle，安装交给 install.ps1
 //
-// 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtain.exe、WinSparkle.dll、
-// install.ps1、LockCurtainCtl.exe），appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
+// 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtainApp.exe（uiAccess 主程序）、
+// LockCurtain.exe（启动器）、WinSparkle.dll、install.ps1、LockCurtainCtl.exe（启动器副本，为兼容 1.0.2 的更新器）），
+// appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
 // 用户点「安装更新」、WinSparkle 验签通过后：把整个 zip 解压到暂存目录，此刻不动正在用的文件、不杀进程（遮罩可能正升着）。
 // 到了能退出的时候（遮罩没在显示）才起一个独立的 powershell 跑暂存目录里的 install.ps1，然后本进程退出：
-// install.ps1 杀旧进程、复制文件、重新给 exe 签名、重注册计划任务，由计划任务经 LockCurtainCtl ShellExecute 起新版本。
+// install.ps1 杀旧进程、复制文件、重新给 LockCurtainApp.exe 签名、重注册计划任务，由计划任务经启动器 LockCurtain.exe ShellExecute 起主程序。
 // 不能像以前那样就地换文件：app.manifest 要求 uiAccess，exe 必须在 Program Files 里且被本机信任的证书签名，
 // 未签名的新 exe 起不来，CreateProcess 起 uiAccess 的 exe 也会被拒（0x800702E4）。
 //
@@ -29,7 +30,7 @@ namespace LockCurtain;
 
 internal static unsafe class Updater
 {
-    const string Dll = "WinSparkle.dll", Exe = "LockCurtain.exe";
+    const string Dll = "WinSparkle.dll", Exe = "LockCurtainApp.exe";
     const string RegistryPath = @"Software\LockCurtain\WinSparkle";
     const int CheckIntervalSeconds = 24 * 60 * 60;
 
@@ -188,7 +189,7 @@ internal static unsafe class Updater
         if (Elevated && !Path.GetFullPath(package).StartsWith(UpdatesDir + @"\", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"更新包不在 {UpdatesDir} 里: {package}");
         // 缺文件的话 install.ps1 会在杀掉旧进程之后才失败，先在这里查一遍
-        string[] names = [Exe, Dll, "install.ps1", "LockCurtainCtl.exe"];
+        string[] names = [Exe, "LockCurtain.exe", Dll, "install.ps1", "LockCurtainCtl.exe"];
         using (var zip = ZipFile.OpenRead(package))
             foreach (var name in names)
                 if (zip.GetEntry(name) is null) throw new InvalidDataException($"更新包里没有 {name}");
