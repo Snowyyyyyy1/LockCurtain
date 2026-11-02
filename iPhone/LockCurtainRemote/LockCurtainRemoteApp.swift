@@ -1,10 +1,14 @@
 import SwiftUI
 
 @main
+@MainActor
 struct LockCurtainRemoteApp: App {
+    @State private var model = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environment(model)
         }
     }
 }

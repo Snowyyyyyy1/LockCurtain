@@ -14,17 +14,15 @@ struct ContentView: View {
     }()
 
     var body: some View {
-        NavigationStack {
-            List {
-                identitySection
-                discoverySection
-                connectionSection
-                logSection
-                notesSection
-            }
-            .navigationTitle("BLE probe")
-            .navigationBarTitleDisplayMode(.inline)
+        List {
+            identitySection
+            discoverySection
+            connectionSection
+            logSection
+            notesSection
         }
+        .navigationTitle("BLE probe")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     // MARK: - Identity
@@ -183,5 +181,7 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    NavigationStack {
+        ContentView()
+    }
 }

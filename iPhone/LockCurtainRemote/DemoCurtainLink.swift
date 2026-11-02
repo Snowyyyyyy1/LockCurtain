@@ -1,0 +1,94 @@
+import Foundation
+
+/// A fully local curtain. It never imports CoreBluetooth and never sends a
+/// command anywhere; every state change is produced by the demo itself.
+@MainActor
+final class DemoCurtainLink: CurtainLink {
+    private(set) var snapshot: CurtainSnapshot
+    var onSnapshotChange: ((CurtainSnapshot) -> Void)?
+
+    private var awayTask: Task<Void, Never>?
+
+    init(
+        macName: String = "Studio 的 MacBook Pro",
+        phase: CurtainPhase = .open,
+        auto: CurtainAuto = .on
+    ) {
+        snapshot = CurtainSnapshot(
+            connection: .connected,
+            phase: phase,
+            auto: auto,
+            macName: macName,
+            isAway: false
+        )
+    }
+
+    func activate() {
+        // Nothing to start: the demo does not touch the radios.
+    }
+
+    func cover() async -> CoverOutcome {
+        guard snapshot.connection == .connected, snapshot.phase != .closing else {
+            return .unavailable
+        }
+        awayTask?.cancel()
+        snapshot.isAway = false
+        snapshot.phase = .closing
+        publish()
+
+        try? await Task.sleep(for: .milliseconds(800))
+        guard !Task.isCancelled else { return .unavailable }
+
+        snapshot.phase = .closed
+        publish()
+        return .covered
+    }
+
+    func setAutoEnabled(_ isOn: Bool) {
+        snapshot.auto = isOn ? .on : .off
+        publish()
+    }
+
+    // MARK: - Demo switcher
+
+    /// 已连上这台 Mac
+    func showConnected() {
+        awayTask?.cancel()
+        snapshot.connection = .connected
+        snapshot.phase = .open
+        snapshot.auto = .on
+        snapshot.isAway = false
+        publish()
+    }
+
+    /// 幕布已盖上
+    func showCovered() {
+        awayTask?.cancel()
+        snapshot.connection = .connected
+        snapshot.phase = .closed
+        snapshot.isAway = false
+        publish()
+    }
+
+    /// 走远自动盖上: show "已走远" for three seconds, then cover.
+    func showAway() {
+        awayTask?.cancel()
+        snapshot.connection = .connected
+        snapshot.phase = .open
+        snapshot.auto = .on
+        snapshot.isAway = true
+        publish()
+
+        awayTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            self.snapshot.phase = .closed
+            self.snapshot.isAway = false
+            self.publish()
+        }
+    }
+
+    private func publish() {
+        onSnapshotChange?(snapshot)
+    }
+}
