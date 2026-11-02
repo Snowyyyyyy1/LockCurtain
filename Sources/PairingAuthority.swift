@@ -2,6 +2,9 @@
 //
 //   * 配对码：窗口打开时给一个码；一个窗口最多错 5 次，第 5 次错完这个码作废，
 //     「换一个码」也换不出新的，要关掉窗口重新打开。码只用一次：握手过了就作废。
+//   * 握手是 CPace（见 PairingCrypto）：Mac 回 Yb/Tb 的那一刻就把这一轮记成一次错码，
+//     只有手机的确认标签 Ta 验过才算成。Ta 不对、手机放弃、半路不来都算错，这一轮作废。
+//     同一时间只有一轮在进行；sid 用过就不再收；换码 / 关窗口时进行中的那一轮也作废。
 //   * 握手过了的手机先记在内存里（pending），等它用新密钥签的第一条命令验过，
 //     才写进钥匙串、算真的配上 —— 这样 Mac 说「配上了」时，两边一定算出了同一把钥匙。
 //   * 命令：签名对、手机认识、计数比上次大，才收；收之前先把新计数写进钥匙串。
@@ -115,6 +118,10 @@ final class PairingAuthority {
     private(set) var isLocked = false
     /// 握手过了、还没用新钥匙签过命令的手机
     private var pending: [UUID: SymmetricKey] = [:]
+    /// 回过 Yb/Tb、还在等 Ta 的那一轮
+    private var inFlight: PairingCrypto.MacSession?
+    /// 收过的 sid（本次运行内），同一个 sid 不收第二次
+    private var usedSessions: Set<Data> = []
 
     init(store: PairingRecordStore, log: @escaping (String) -> Void) {
         self.store = store
@@ -131,11 +138,16 @@ final class PairingAuthority {
         self.code = code
         attemptsLeft = PairingCrypto.maxCodeAttempts
         isLocked = false
+        inFlight = nil
     }
 
     /// 「换一个码」：错码次数不清零；已经作废的窗口换不出新码
     @discardableResult
     func refresh(code: String) -> Bool {
+        guard !isLocked else { return false }
+        if inFlight != nil { log("code refreshed: run in progress burned") }
+        inFlight = nil
+        lockIfExhausted()
         guard !isLocked else { return false }
         self.code = code
         return true
@@ -144,42 +156,111 @@ final class PairingAuthority {
     func closeWindow() {
         code = ""
         pending = [:]
+        inFlight = nil
     }
 
     // MARK: - 握手
 
     enum PairOutcome: Equatable {
-        /// reply 发回手机；phoneID 是谁
+        /// 回了 Yb/Tb（这一轮已经记成一次错码），等手机的 Ta
+        case responded(reply: Data)
+        /// Ta 验过：reply（签名的 PairAccepted）发回手机；phoneID 是谁
         case accepted(reply: Data, phoneID: UUID)
         case rejected(reply: Data, attemptsLeft: Int)
+        /// 手机自己放弃了这一轮（它验 Tb 没过）：不回话
+        case aborted(attemptsLeft: Int)
         case noCode(reply: Data)
         case malformed(reply: Data)
     }
 
+    /// 握手消息（PairRequest / PairConfirm / PairAbort）都从这里进
     func handlePair(_ data: Data) -> PairOutcome {
+        switch PairingCrypto.kind(of: data) {
+        case .pairRequest: return handleRequest(data)
+        case .pairConfirm: return handleConfirm(data)
+        case .pairAbort: return handleAbort(data)
+        default:
+            log("pair message malformed")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
+    }
+
+    /// 这一轮没成：错码次数已经在回 Yb/Tb 时扣过，扣完了就锁
+    private func lockIfExhausted() {
+        guard attemptsLeft <= 0, !isLocked else { return }
+        code = ""
+        isLocked = true
+        inFlight = nil
+        log("code invalidated after \(PairingCrypto.maxCodeAttempts) wrong attempts; reopen the window for a new one")
+    }
+
+    private func handleRequest(_ data: Data) -> PairOutcome {
         log("pair request received")
         guard let request = try? PairingCrypto.PairRequest(decoding: data) else {
             log("pair request malformed")
             return .malformed(reply: PairingCrypto.pairReject(.noCode))
         }
+        let who = request.phoneID.uuidString
+        guard !usedSessions.contains(request.sid) else {
+            log("pair request from \(who) reuses a session id; refused")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
+        // 上一轮没等到 Ta 就来了新的：上一轮作废（它的次数已经扣了）
+        if inFlight != nil {
+            log("previous pairing run abandoned; it stays counted")
+            inFlight = nil
+        }
+        lockIfExhausted()
         guard !code.isEmpty, !isLocked else {
-            log("pair request from \(request.phoneID.uuidString) but no code open\(isLocked ? " (locked after \(PairingCrypto.maxCodeAttempts) wrong codes)" : "")")
+            log("pair request from \(who) but no code open\(isLocked ? " (locked after \(PairingCrypto.maxCodeAttempts) wrong codes)" : "")")
             return .noCode(reply: PairingCrypto.pairReject(.noCode))
         }
-        guard let (response, key) = PairingCrypto.macAnswer(request, code: code) else {
-            attemptsLeft -= 1
-            log("pair tag bad from \(request.phoneID.uuidString), attempts left \(attemptsLeft)")
-            if attemptsLeft <= 0 {
-                code = ""
-                isLocked = true
-                log("code invalidated after \(PairingCrypto.maxCodeAttempts) wrong attempts; reopen the window for a new one")
-            }
+        usedSessions.insert(request.sid)
+        guard let (response, session) = PairingCrypto.macRespond(request, code: code) else {
+            log("pair request from \(who) has an invalid point; refused")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
+        attemptsLeft -= 1
+        inFlight = session
+        log("pair run started with \(who); counted as an attempt until confirmed (attempts left \(attemptsLeft))")
+        return .responded(reply: response.encoded())
+    }
+
+    private func handleConfirm(_ data: Data) -> PairOutcome {
+        guard let confirm = try? PairingCrypto.PairConfirm(decoding: data) else {
+            log("pair confirmation malformed")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
+        let who = confirm.phoneID.uuidString
+        guard let session = inFlight, session.phoneID == confirm.phoneID, session.sid == confirm.sid else {
+            log("pair confirmation from \(who) for no running session; refused")
             return .rejected(reply: PairingCrypto.pairReject(.wrongCode), attemptsLeft: attemptsLeft)
         }
-        log("pair tag ok from \(request.phoneID.uuidString); code used up, waiting for first signed command")
+        // 不管成不成，这一轮都用完了
+        inFlight = nil
+        guard PairingCrypto.macCheckConfirm(confirm, session: session) else {
+            log("pair confirmation bad from \(who), attempts left \(attemptsLeft)")
+            lockIfExhausted()
+            return .rejected(reply: PairingCrypto.pairReject(.wrongCode), attemptsLeft: attemptsLeft)
+        }
+        log("pair confirmation ok from \(who); code used up, waiting for first signed command")
         code = ""
-        pending[request.phoneID] = key
-        return .accepted(reply: response.encoded(), phoneID: request.phoneID)
+        pending[confirm.phoneID] = session.sharedKey
+        let reply = PairingCrypto.pairAccepted(phoneID: confirm.phoneID, sid: confirm.sid, key: session.sharedKey)
+        return .accepted(reply: reply, phoneID: confirm.phoneID)
+    }
+
+    private func handleAbort(_ data: Data) -> PairOutcome {
+        guard let (phoneID, sid) = PairingCrypto.decodePairAbort(data) else {
+            log("pair abort malformed")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
+        if let session = inFlight, session.phoneID == phoneID, session.sid == sid {
+            inFlight = nil
+            log("phone \(phoneID.uuidString) gave up the run (code mismatch), attempts left \(attemptsLeft)")
+            lockIfExhausted()
+        }
+        return .aborted(attemptsLeft: attemptsLeft)
     }
 
     // MARK: - 命令

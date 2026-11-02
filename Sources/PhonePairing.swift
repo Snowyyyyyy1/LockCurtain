@@ -2,7 +2,7 @@
 //
 // Mac 不再广播。手机广播 LockCurtain 的服务，Mac 扫描、连上去、订阅手机的「发件箱」，
 // 往手机的「收件箱」写回复和幕布状态：
-//   * 发件箱（…5A70，notify）：手机 → Mac，配对请求、签名命令
+//   * 发件箱（…5A70，notify）：手机 → Mac，配对握手（请求 / 确认 / 放弃）、签名命令
 //   * 收件箱（…5A71，write）：Mac → 手机，配对应答 / 拒绝、命令收据、幕布状态、撤销通知
 // 每条消息都按 PairingFraming 切块。安全全在 PairingCrypto / PairingAuthority，不靠系统蓝牙加密。
 //
@@ -176,6 +176,7 @@ final class PhonePairing: NSObject, ObservableObject {
             code = fresh
             Self.log("code refreshed")
         } else {
+            code = ""
             Self.log("refresh refused: code locked after \(PairingCrypto.maxCodeAttempts) wrong attempts, reopen the window")
         }
     }
@@ -270,18 +271,22 @@ final class PhonePairing: NSObject, ObservableObject {
     private func receive(_ message: Data, from peer: Peer) {
         let who = peer.peripheral.identifier.uuidString
         switch PairingCrypto.kind(of: message) {
-        case .pairRequest:
-            Self.log("pair request received from peripheral \(who)")
+        case .pairRequest, .pairConfirm, .pairAbort:
+            Self.log("pair message received from peripheral \(who)")
             switch authority.handlePair(message) {
+            case .responded(let reply):
+                send(reply, to: peer)
             case .accepted(let reply, _):
                 send(reply, to: peer)
                 code = ""
             case .rejected(let reply, _):
                 send(reply, to: peer)
-                if authority.isLocked { code = "" }
+            case .aborted:
+                break
             case .noCode(let reply), .malformed(let reply):
                 send(reply, to: peer)
             }
+            if authority.isLocked { code = "" }
         case .command:
             switch authority.handleCommand(message) {
             case .accepted(let command, let phoneID, _, let confirmed, let ack):

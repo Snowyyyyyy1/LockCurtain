@@ -4,7 +4,6 @@ import UIKit
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openURL) private var openURL
 
     @State private var showUnpairConfirmation = false
     @State private var showPairing = false
@@ -13,8 +12,10 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 macSection
-                autoSection
-                readOnlySection
+                if AppModel.autoCoverVisible {
+                    autoSection
+                    readOnlySection
+                }
                 demoSection
                 aboutSection
                 Section {
@@ -67,8 +68,11 @@ struct SettingsView: View {
         } header: {
             Text("这台 Mac")
         } footer: {
-            if !model.demoMode && !model.paired {
-                Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+            VStack(alignment: .leading, spacing: 8) {
+                if !model.demoMode && !model.paired {
+                    Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                }
+                Text("第一次连上、或者断开以后重新连上，要在手机上把 LockCurtain 打开一下。")
             }
         }
     }
@@ -84,9 +88,6 @@ struct SettingsView: View {
             )
             .disabled(!model.canToggleAuto)
 
-            if !model.hasAlwaysLocation {
-                LabeledContent("定位", value: model.locationValue)
-            }
         } header: {
             Text("自动")
         } footer: {
@@ -94,24 +95,8 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
     private var autoFooter: some View {
-        if model.demoMode || model.hasAlwaysLocation {
-            Text("只有走远会盖。回来不会自动撤。")
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                if model.locationStatus == .denied || model.locationStatus == .restricted {
-                    Text("想开自动，去系统设置里把定位改成“始终”。")
-                } else {
-                    Text("自动模式要一直知道你在哪，所以要“始终”定位。不想给也行，那就每次自己按一下。")
-                }
-                Button("前往“设置”") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) {
-                        openURL(url)
-                    }
-                }
-            }
-        }
+        Text("只有走远会盖。回来不会自动撤。")
     }
 
     private var readOnlySection: some View {

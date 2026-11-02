@@ -2,7 +2,6 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Group {
@@ -12,11 +11,6 @@ struct RootView: View {
                 NavigationStack {
                     HomeView()
                 }
-            }
-        }
-        .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                model.refreshLocationStatus()
             }
         }
     }

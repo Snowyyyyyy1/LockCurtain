@@ -4,7 +4,7 @@
 //   * 发件箱（…5A70，notify + read）：手机 → Mac，配对请求、签名命令
 //   * 收件箱（…5A71，write）       ：Mac → 手机，配对应答 / 拒绝、命令收据、幕布状态、撤销通知
 // 每条消息按 PairingFraming 切块（块大小看 Mac 的 maximumUpdateValueLength）。
-// 安全全在 PairingCrypto：配对用 6 位码认证的 X25519 握手，命令带 HMAC 和递增计数。
+// 安全全在 PairingCrypto：配对用 6 位码的 CPace 握手（双向确认），命令带 HMAC 和递增计数。
 //
 // 屏幕上说的话全部来自 Mac 的回报，没有一处是猜的：
 //   * 「已连接」= Mac 订阅了发件箱，并且 Mac 用共享钥匙签了收据（握手 / 身份确认真的成了）；
@@ -150,7 +150,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     // MARK: - 配对
 
-    /// 等 Mac 来连，把配对请求发过去；Mac 的应答验过、Mac 又签收了第一条命令，才算配上。
+    /// 等 Mac 来连，走 CPace 握手：Mac 的 Tb 验过、Mac 验过我们的 Ta 并签了 PairAccepted，才存钥匙；
+    /// Mac 又签收了第一条命令，才算配上。
     func pair(code: String) async -> PairResult {
         activate()
         if gaveUp { return .connectFailed }
@@ -163,20 +164,45 @@ final class BLECurtainLink: NSObject, CurtainLink {
         guard mac != nil, let macID = mac?.identifier else { return .connectFailed }
 
         let phoneID = PhoneKeychain.phoneID()
-        let (request, secret) = PairingCrypto.makePairRequest(code: code, phoneID: phoneID)
-        let reply = await requestReply(request.encoded(), seconds: 8)
+        guard let (request, session) = PairingCrypto.phoneStart(code: code, phoneID: phoneID) else { return .macRefused }
+
+        // 第一步：Ya → Mac，等 Yb 和 Mac 的确认标签 Tb
         let message: Data
-        switch reply {
+        switch await requestReply(request.encoded(), seconds: 8) {
         case .timeout: return .noResponse
         case .disconnected: return .disconnected
         case .message(let data): message = data
         }
-
         if let reason = PairingCrypto.decodePairReject(message) {
             return reason == .wrongCode ? .wrongCode : .macRefused
         }
-        guard let response = try? PairingCrypto.PairResponse(decoding: message),
-              let key = PairingCrypto.phoneFinish(response, request: request, secret: secret, code: code) else {
+        guard let response = try? PairingCrypto.PairResponse(decoding: message) else { return .macRefused }
+        let confirm: PairingCrypto.PairConfirm
+        let key: SymmetricKey
+        switch PairingCrypto.phoneFinish(response, session: session) {
+        case .confirm(let c, let k):
+            confirm = c
+            key = k
+        case .wrongCode:
+            // Tb 不对：两边的码不一样。告诉 Mac 这一轮作废，什么都不存
+            send(PairingCrypto.pairAbort(phoneID: phoneID, sid: session.sid))
+            return .wrongCode
+        case .invalid:
+            send(PairingCrypto.pairAbort(phoneID: phoneID, sid: session.sid))
+            return .macRefused
+        }
+
+        // 第二步：Ta → Mac，等 Mac 用新钥匙签的 PairAccepted，见到了才存钥匙
+        let accepted: Data
+        switch await requestReply(confirm.encoded(), seconds: 8) {
+        case .timeout: return .noResponse
+        case .disconnected: return .disconnected
+        case .message(let data): accepted = data
+        }
+        if let reason = PairingCrypto.decodePairReject(accepted) {
+            return reason == .wrongCode ? .wrongCode : .macRefused
+        }
+        guard PairingCrypto.verifyPairAccepted(accepted, phoneID: phoneID, sid: session.sid, key: key) else {
             return .macRefused
         }
         let record = PhoneLinkRecord(key: key.withUnsafeBytes { Data($0) },
@@ -335,7 +361,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     private func receive(_ message: Data) {
         switch PairingCrypto.kind(of: message) {
-        case .pairResponse, .pairReject:
+        case .pairResponse, .pairReject, .pairAccepted:
             finishReply(.message(message))
         case .ack:
             guard let ack = try? PairingCrypto.Ack(decoding: message),

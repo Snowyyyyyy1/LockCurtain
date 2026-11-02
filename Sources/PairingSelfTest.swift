@@ -1,7 +1,9 @@
 // PairingSelfTest.swift —— 配对加密层的自测（进程内跑，两端都是纯函数，不碰蓝牙、不碰钥匙串）
 //
 // 一台 Mac 没法在空中同时当手机和 Mac，所以握手、验签都在内存里两边各走一遍：
-//   握手两边算出同一把钥匙；错码被拒；错 5 次码作废；签名命令收下；
+//   CPace 测试向量（草案附录 B.1 + 独立 Python 参考实现算的 Elligator2）；
+//   握手两边算出同一把钥匙；冒充的手机 / 冒充的 Mac 用错码都过不了、什么都不存；
+//   一轮握手只能试一个码、录下来的数据没法离线验别的码；错 5 次码作废；签名命令收下；
 //   同一个计数重放被拒；改过的命令被拒；不认识的手机被拒；明文命令被拒；
 //   确认收据 / 幕布状态 / 撤销通知的签名；分帧切块再拼回来。
 //
@@ -29,49 +31,61 @@ enum PairingSelfTest {
         let code = "482913"
         let phoneID = UUID()
 
+        // 0. CPace / Elligator2 测试向量
+        CPaceVectors.run(expect)
+
         // 1. 完整握手：两边同一把钥匙，第一条签名命令确认配对
         let store = MemoryPairingStore()
         let mac = PairingAuthority(store: store, log: log)
         mac.openWindow(code: code)
-        let (request, secret) = PairingCrypto.makePairRequest(code: code, phoneID: phoneID)
-        var phoneKey: SymmetricKey?
-        var macKeyMatches = false
-        if case .accepted(let reply, let id) = mac.handlePair(request.encoded()), id == phoneID,
-           let response = try? PairingCrypto.PairResponse(decoding: reply) {
-            phoneKey = PairingCrypto.phoneFinish(response, request: request, secret: secret, code: code)
-        }
-        expect(phoneKey != nil, "握手：手机核对 Mac 的 tag2 通过")
+        let honest = handshake(mac, code: code, phoneID: phoneID)
+        expect(honest.responded, "握手：Mac 回了 Yb 和确认标签 Tb")
+        expect(honest.phoneKey != nil, "握手：手机核对 Mac 的 Tb 通过，Mac 核对手机的 Ta 通过，PairAccepted 验过")
+        ImpostorTests.honest(expect, code: code)
         expect(mac.code.isEmpty, "握手：码用过一次就作废")
         expect(!mac.isPaired, "握手：没收到签名命令前 Mac 不算配上")
 
-        guard let key = phoneKey else {
+        guard let key = honest.phoneKey else {
             lines.append("结论：握手没成，后面的测不了")
             return (lines, false)
         }
+        var macKeyMatches = false
         let ping = PairingCrypto.sealCommand("ping", phoneID: phoneID, counter: 1, key: key)!
         if case .accepted(let cmd, _, let counter, let confirmed, let ackData) = mac.handleCommand(ping) {
             let ack = try? PairingCrypto.Ack(decoding: ackData)
             macKeyMatches = cmd == "ping" && counter == 1 && confirmed
                 && ack.map { PairingCrypto.verifyAck($0, key: key) } == true
         }
-        expect(macKeyMatches, "握手：两边算出同一把钥匙（Mac 验过手机签的第一条命令，手机验过 Mac 的签名收据）")
+        expect(macKeyMatches, "握手：Mac 验过手机签的第一条命令，手机验过 Mac 的签名收据")
         expect(store.load(phoneID)?.key == key && store.load(phoneID)?.lastCounter == 1, "握手：钥匙和计数写进存储")
         expect(mac.isPaired, "握手：确认后 Mac 算配上")
 
-        // 2. 错码被拒
+        // 1b. 握手消息的版本是 2；老的 v1 请求不认
+        var v1 = [UInt8](PairingCrypto.phoneStart(code: code, phoneID: phoneID)!.request.encoded())
+        expect(v1[0] == 2, "线格式：握手消息版本是 2")
+        v1[0] = 1
+        expect(PairingCrypto.kind(of: Data(v1)) == nil, "线格式：版本 1 的配对请求不认")
+        expect(PairingCrypto.kind(of: ping) == .command && [UInt8](ping)[0] == 1, "线格式：命令还是版本 1，格式不变")
+
+        // 2. 冒充的手机（错码）：Mac 拒绝，什么都不存
+        ImpostorTests.phone(expect, log: log, code: code)
+        // 3. 冒充的 Mac（错码）：手机不接受，什么都不存
+        ImpostorTests.mac(expect, code: code)
+        // 4. 录下来的一轮没法离线验码
+        ImpostorTests.offline(expect, log: log, code: code)
+        // 5. sid 用过不再收；一轮作废后不能再用
+        ImpostorTests.sessionReuse(expect, log: log, code: code)
+
+        // 6. 错码被拒（老实的手机输错码：Tb 不对 → 放弃这一轮）
         let wrong = PairingAuthority(store: MemoryPairingStore(), log: log)
         wrong.openWindow(code: code)
-        let bad = PairingCrypto.makePairRequest(code: "000000", phoneID: UUID()).request
-        if case .rejected(let reply, let left) = wrong.handlePair(bad.encoded()) {
-            expect(PairingCrypto.decodePairReject(reply) == .wrongCode && left == 4, "错码：被拒，还剩 4 次")
-        } else {
-            expect(false, "错码：被拒，还剩 4 次")
-        }
+        let typo = handshake(wrong, code: "000000", phoneID: UUID())
+        expect(typo.phoneResult == .wrongCode && typo.abortLeft == 4, "错码：手机说码不对，Mac 记一次，还剩 4 次")
 
-        // 3. 错 5 次码作废：之后真码也不行，换码也换不出来
-        for _ in 0..<4 { _ = wrong.handlePair(bad.encoded()) }
+        // 7. 错 5 次码作废：之后真码也不行，换码也换不出来
+        for _ in 0..<4 { _ = handshake(wrong, code: "000000", phoneID: UUID()) }
         expect(wrong.isLocked && wrong.code.isEmpty, "错 5 次：码作废")
-        let late = PairingCrypto.makePairRequest(code: code, phoneID: UUID()).request
+        let late = PairingCrypto.phoneStart(code: code, phoneID: UUID())!.request
         if case .noCode = wrong.handlePair(late.encoded()) {
             expect(true, "错 5 次：之后用真码也被拒")
         } else {
@@ -81,7 +95,20 @@ enum PairingSelfTest {
         wrong.openWindow(code: "654321")
         expect(!wrong.isLocked && wrong.attemptsLeft == 5, "错 5 次：重开窗口才有新码")
 
-        // 4. 签名命令收下
+        // 7b. 半路不来（回了 Tb 就没下文）也算一次；第 5 轮没下文，下一次请求就锁
+        let ghost = PairingAuthority(store: MemoryPairingStore(), log: log)
+        ghost.openWindow(code: code)
+        for _ in 0..<5 {
+            _ = ghost.handlePair(PairingCrypto.phoneStart(code: "000000", phoneID: UUID())!.request.encoded())
+        }
+        expect(ghost.attemptsLeft == 0, "放着不确认：每一轮都扣一次")
+        if case .noCode = ghost.handlePair(PairingCrypto.phoneStart(code: code, phoneID: UUID())!.request.encoded()) {
+            expect(ghost.isLocked && ghost.code.isEmpty, "放着不确认：5 轮之后真码也被拒，码作废")
+        } else {
+            expect(false, "放着不确认：5 轮之后真码也被拒，码作废")
+        }
+
+        // 8. 签名命令收下
         let away = PairingCrypto.sealCommand("away", phoneID: phoneID, counter: 2, key: key)!
         if case .accepted(let cmd, _, let counter, let confirmed, _) = mac.handleCommand(away) {
             expect(cmd == "away" && counter == 2 && !confirmed && store.load(phoneID)?.lastCounter == 2,
@@ -90,12 +117,12 @@ enum PairingSelfTest {
             expect(false, "签名命令：收下，计数存成 2")
         }
 
-        // 5. 重放（同一个计数）被拒
+        // 9. 重放（同一个计数）被拒
         expect(rejected(mac.handleCommand(away), .replay), "重放：同一条命令再来一次被拒")
         let older = PairingCrypto.sealCommand("away", phoneID: phoneID, counter: 1, key: key)!
         expect(rejected(mac.handleCommand(older), .replay), "重放：更小的计数被拒")
 
-        // 6. 改过的命令被拒
+        // 10. 改过的命令被拒
         var tampered = [UInt8](PairingCrypto.sealCommand("away", phoneID: phoneID, counter: 3, key: key)!)
         tampered[27] ^= 0x01   // 命令文字第一个字节
         expect(rejected(mac.handleCommand(Data(tampered)), .badSignature), "篡改：改了命令文字被拒")
@@ -107,14 +134,14 @@ enum PairingSelfTest {
         expect(rejected(mac.handleCommand(forged), .badSignature), "篡改：别的钥匙签的被拒")
         expect(store.load(phoneID)?.lastCounter == 2, "篡改：被拒的命令不动计数")
 
-        // 7. 不认识的手机被拒
+        // 11. 不认识的手机被拒
         let stranger = PairingCrypto.sealCommand("away", phoneID: UUID(), counter: 1, key: key)!
         expect(rejected(mac.handleCommand(stranger), .unknownPhone), "陌生手机：被拒")
 
-        // 8. 明文命令（老格式）被拒
+        // 12. 明文命令（老格式）被拒
         expect(rejected(mac.handleCommand(Data("away".utf8)), .malformed), "明文命令：被拒")
 
-        // 9. 收据 / 状态 / 撤销
+        // 13. 收据 / 状态 / 撤销
         let unsignedOK = PairingCrypto.Ack(phoneID: phoneID, counter: 5, status: .accepted, mac: nil)
         expect(!PairingCrypto.verifyAck(unsignedOK, key: key), "收据：不带签名的「收下」不算数")
         let state = mac.stateMessage(closed: true, for: phoneID)!
@@ -127,13 +154,10 @@ enum PairingSelfTest {
         let afterRevoke = PairingCrypto.sealCommand("away", phoneID: phoneID, counter: 10, key: key)!
         expect(rejected(mac.handleCommand(afterRevoke), .unknownPhone), "撤销：之后这台手机的命令被拒")
 
-        // 10. 手机发「unpair」后 Mac 删钥匙（由 PhonePairing 调 revoke，这里直接走一遍）
+        // 14. 手机发「unpair」后 Mac 删钥匙（由 PhonePairing 调 revoke，这里直接走一遍）
         let m2 = PairingAuthority(store: MemoryPairingStore(), log: log)
         m2.openWindow(code: code)
-        let (r2, s2) = PairingCrypto.makePairRequest(code: code, phoneID: phoneID)
-        if case .accepted(let reply, _) = m2.handlePair(r2.encoded()),
-           let resp = try? PairingCrypto.PairResponse(decoding: reply),
-           let k2 = PairingCrypto.phoneFinish(resp, request: r2, secret: s2, code: code) {
+        if let k2 = handshake(m2, code: code, phoneID: phoneID).phoneKey {
             _ = m2.handleCommand(PairingCrypto.sealCommand("ping", phoneID: phoneID, counter: 1, key: k2)!)
             let unpair = m2.handleCommand(PairingCrypto.sealCommand("unpair", phoneID: phoneID, counter: 2, key: k2)!)
             if case .accepted(let cmd, let id, _, _, _) = unpair, cmd == "unpair" { _ = m2.revoke(id) }
@@ -142,7 +166,7 @@ enum PairingSelfTest {
             expect(false, "手机解除配对：Mac 收到签名的 unpair 后删钥匙")
         }
 
-        // 11. 分帧
+        // 15. 分帧
         let long = Data((0..<200).map { UInt8($0 & 0xFF) })
         var assembler = PairingFraming.Assembler()
         var rebuilt: Data?
@@ -164,6 +188,44 @@ enum PairingSelfTest {
         return (lines, failures == 0)
     }
 
+    /// 一轮握手的记录（手机这边按 BLECurtainLink.pair 的步骤走）
+    struct Run {
+        var responded = false
+        var phoneResult: PhoneResult?
+        var phoneKey: SymmetricKey?
+        var abortLeft: Int?
+    }
+
+    enum PhoneResult: Equatable { case accepted, wrongCode, refused }
+
+    /// 手机用 code 和 Mac 走一遍完整握手
+    static func handshake(_ mac: PairingAuthority, code: String, phoneID: UUID) -> Run {
+        var run = Run()
+        guard let (request, session) = PairingCrypto.phoneStart(code: code, phoneID: phoneID),
+              case .responded(let reply) = mac.handlePair(request.encoded()),
+              let response = try? PairingCrypto.PairResponse(decoding: reply) else {
+            run.phoneResult = .refused
+            return run
+        }
+        run.responded = true
+        switch PairingCrypto.phoneFinish(response, session: session) {
+        case .wrongCode, .invalid:
+            run.phoneResult = .wrongCode
+            if case .aborted(let left) = mac.handlePair(PairingCrypto.pairAbort(phoneID: phoneID, sid: session.sid)) {
+                run.abortLeft = left
+            }
+        case .confirm(let confirm, let key):
+            if case .accepted(let accepted, let id) = mac.handlePair(confirm.encoded()), id == phoneID,
+               PairingCrypto.verifyPairAccepted(accepted, phoneID: phoneID, sid: session.sid, key: key) {
+                run.phoneResult = .accepted
+                run.phoneKey = key
+            } else {
+                run.phoneResult = .refused
+            }
+        }
+        return run
+    }
+
     private static func rejected(_ outcome: PairingAuthority.CommandOutcome, _ reason: PairingAuthority.RejectReason) -> Bool {
         if case .rejected(let r, _, _) = outcome { return r == reason }
         return false
@@ -173,5 +235,327 @@ enum PairingSelfTest {
     static func runAndWrite() {
         let (lines, _) = run()
         try? lines.joined(separator: "\n").write(toFile: outPath, atomically: true, encoding: .utf8)
+    }
+}
+
+// MARK: - CPace 测试向量
+
+/// 草案 draft-irtf-cfrg-cpace（-21）附录 A、B.1 的向量，外加用草案附录 A.5 的 Python 参考实现独立算的 Elligator2 向量
+enum CPaceVectors {
+    static func hex(_ s: String) -> Data {
+        var out = Data()
+        var i = s.startIndex
+        while i < s.endIndex {
+            let j = s.index(i, offsetBy: 2)
+            out.append(UInt8(s[i..<j], radix: 16)!)
+            i = j
+        }
+        return out
+    }
+
+    static func run(_ expect: (Bool, String) -> Void) {
+        // A.1 prepend_len / lv_cat，A.3.5 transcript_ir
+        expect(CPace.prependLen(Data()) == hex("00")
+               && CPace.prependLen(Data("1234".utf8)) == hex("0431323334")
+               && CPace.prependLen(Data(0..<127)) == hex("7f") + Data(0..<127)
+               && CPace.prependLen(Data(0..<128)) == hex("8001") + Data(0..<128),
+               "向量：prepend_len（LEB128）")
+        expect(CPace.lvCat(Data("1234".utf8), Data("5".utf8), Data(), Data("678".utf8)) == hex("043132333401350003363738"),
+               "向量：lv_cat")
+        let tir = CPace.lvCat(Data("123".utf8), Data("PartyA".utf8)) + CPace.lvCat(Data("234".utf8), Data("PartyB".utf8))
+        expect(tir == hex("03313233065061727479410332333406506172747942"), "向量：transcript_ir")
+
+        // B.1.1 calculate_generator
+        let prs = Data("Password".utf8)
+        let ci = hex("0b415f696e69746961746f720b425f726573706f6e646572")
+        let sid = hex("7e4b4791d6a8ef019b936c79fb7f2c57")
+        let genStr = CPace.generatorString(prs: prs, ci: ci, sid: sid)
+        expect(genStr == hex("0843506163653235350850617373776f72646d" + String(repeating: "00", count: 109)
+                             + "180b415f696e69746961746f720b425f726573706f6e646572107e4b4791d6a8ef019b936c79fb7f2c57"),
+               "向量：generator_string（ZPAD 109）")
+        let genHash = Data(SHA512.hash(data: genStr)).prefix(32)
+        expect(genHash == hex("03998087bdb1a2617bbe25ef5a7c18cd4f84f902328701790958755ee4aed1d3"), "向量：generator string 的哈希")
+        expect(Data(Field25519(bytes: [UInt8](genHash)).bytes)
+               == hex("03998087bdb1a2617bbe25ef5a7c18cd4f84f902328701790958755ee4aed153"), "向量：decodeUCoordinate（去最高位）")
+        let g = CPace.calculateGenerator(prs: prs, ci: ci, sid: sid)
+        expect(g == hex("d04bf6d41f6a289632a2e929fa29bebd51092512a7829fdde7d314b62f05a73f"), "向量：生成元 g（Elligator2）")
+
+        // B.1.2–B.1.5 两边的消息、K、ISK
+        let ya = try! Curve25519.KeyAgreement.PrivateKey(rawRepresentation:
+            hex("21b4f4bd9e64ed355c3eb676a28ebedaf6d8f17bdc365995b3190971" + "53044080"))
+        let yb = try! Curve25519.KeyAgreement.PrivateKey(rawRepresentation:
+            hex("848b0779ff415f0af4ea14df9dd1d3c29ac41d836c7808896c4eba19" + "c51ac40a"))
+        let bigYa = CPace.scalarMult(ya, g)
+        let bigYb = CPace.scalarMult(yb, g)
+        expect(bigYa == hex("1d13c89278cdadd826f6d8d7f887701430f8380ddc17611cdd6dc989ce0c9f32"), "向量：Ya")
+        expect(bigYb == hex("248cccf6d5cdc3646f0ad593f9e6cef4e69d4945f8372e623512ecea32185623"), "向量：Yb")
+        let kA = bigYb.flatMap { CPace.scalarMult(ya, $0) }
+        let kB = bigYa.flatMap { CPace.scalarMult(yb, $0) }
+        let k = hex("5b067effbdc0b2a0e1d907b21ebb25cfedb96a852179a847c37e43ee71322c6b")
+        expect(kA == k && kB == k, "向量：K（两边一样）")
+        if let bigYa, let bigYb {
+            let isk = CPace.isk(sid: sid, k: k, ya: bigYa, ada: Data("ADa".utf8), yb: bigYb, adb: Data("ADb".utf8))
+            expect(isk == hex("6e19b875f7a561d6b3ca3dbb9ef42ac55de3e717881018204b8922b4d5e53bb2"
+                              + "aa82c300bea7b65d2b671da71922ddf6472301b79bc270adfa8bf413285f2263"), "向量：ISK（发起方-应答方）")
+        } else {
+            expect(false, "向量：ISK（发起方-应答方）")
+        }
+
+        // B.1.10 低阶点：u0…u5、u7 必须中止，其余给出指定结果
+        let s = try! Curve25519.KeyAgreement.PrivateKey(rawRepresentation:
+            hex("af46e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449aff"))
+        let lowOrder: [(String, String?)] = [
+            ("0000000000000000000000000000000000000000000000000000000000000000", nil),
+            ("0100000000000000000000000000000000000000000000000000000000000000", nil),
+            ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", nil),
+            ("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800", nil),
+            ("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157", nil),
+            ("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", nil),
+            ("daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "d8e2c776bbacd510d09fd9278b7edcd25fc5ae9adfba3b6e040e8d3b71b21806"),
+            ("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", nil),
+            ("dbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "c85c655ebe8be44ba9c0ffde69f2fe10194458d137f09bbff725ce58803cdb38"),
+            ("d9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "db64dafa9b8fdd136914e61461935fe92aa372cb056314e1231bc4ec12417456"),
+            ("cdeb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880", "e062dcd5376d58297be2618c7498f55baa07d7e03184e8aada20bca28888bf7a"),
+            ("4c9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7", "993c6ad11c4c29da9a56f7691fd0ff8d732e49de6250b6c2e80003ff4629a175"),
+        ]
+        let lowOK = lowOrder.allSatisfy { u, q in CPace.scalarMult(s, hex(u)) == q.map(hex) }
+        expect(lowOK, "向量：低阶点 u0…ub（u0–u5、u7 中止，u6、u8–ub 结果对）")
+
+        // Elligator2：独立的 Python 参考实现（草案附录 A.5 的公式，大整数）算出来的
+        let ell: [(String, String)] = [
+            ("0000000000000000000000000000000000000000000000000000000000000000", "0000000000000000000000000000000000000000000000000000000000000000"),
+            ("0100000000000000000000000000000000000000000000000000000000000000", "9cdb525555555555555555555555555555555555555555555555555555555555"),
+            ("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "9cdb525555555555555555555555555555555555555555555555555555555555"),
+            ("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f", "0000000000000000000000000000000000000000000000000000000000000000"),
+            ("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "1e5942dd97c756040d27755f1e5b11349cd47d796c45d07052f7e5b11541c349"),
+            ("86ef3110c37b8ca53ef79f8fa4c2ee6872938823efbd9251b19c500f8a22b309", "12fffb4a9b077a46e4a46670f344f0b998761f589f40ecb6a7d91c5ec6ab8065"),
+            ("4f711d2a3130d48e241a88e9b5261d444e0bf4bb561680da1648101946bd760b", "abd8547b367a8c0f64fde89e2bb310c8b2513a2b25b6a1b51bf592d7deb5484e"),
+            ("6c0ddf2c181e6b4ff3ae44fdf1a92108c5c653d8ef75af813430ae2799c57f98", "4d5ed5d65b4d8f84eb415af5ec16381febfc21cf279a64577d96235bac46471a"),
+            ("791116d9d2d15324f20c498eba6607d243d2f87361271774147a0daf6f7dba53", "1fa54dec65d0f6889b02a0270b9698b7a4d1cd29dc0e13bb5b6572ee8f0cba2c"),
+            ("724865375e1202945f9012f381c16e43b024d3a21802a268a6c6308ebef98c88", "ab04f20aa9dc1b2ef95cecefb766790c02d7f837c031cd8f1e1371ca00918f15"),
+            ("c261fefbbb38cda71c9c4ca992a4f484ab1544b3a38e5c584be88b6e0ba08949", "68e05c04604beb4ed4a8fdf850afe6f2fac095c5261bccb841882567cf62b53d"),
+        ]
+        let ellOK = ell.allSatisfy { input, output in CPace.elligator2([UInt8](hex(input))) == hex(output) }
+        expect(ellOK, "向量：Elligator2 映射 11 组（含 0、p−1、p、全 1 这些边界）")
+
+        // 域运算自检：a·a⁻¹ = 1，(p−1)² = 1
+        let a = Field25519(bytes: [UInt8](hex("86ef3110c37b8ca53ef79f8fa4c2ee6872938823efbd9251b19c500f8a22b309")))
+        let minusOne = Field25519.zero - Field25519.one
+        expect(Field25519.equal(a * a.inverse, .one) && Field25519.equal(minusOne * minusOne, .one), "域运算：求逆、−1 的平方")
+    }
+}
+
+// MARK: - 冒充 / 离线攻击
+
+enum ImpostorTests {
+    /// 攻击者只用自己手里的东西（自己的标量 + 收到的消息）能算出的「钥匙」
+    static func attackerKeys(secret: Curve25519.KeyAgreement.PrivateKey, sid: Data, ya: Data, yb: Data)
+        -> PairingCrypto.HandshakeKeys? {
+        guard let k = CPace.scalarMult(secret, yb) else { return nil }
+        return PairingCrypto.handshakeKeys(sid: sid, k: k, ya: ya, yb: yb)
+    }
+
+    /// (4) 老实的一轮：两边钥匙一样
+    static func honest(_ expect: (Bool, String) -> Void, code: String) {
+        let phoneID = UUID()
+        guard let (request, phone) = PairingCrypto.phoneStart(code: code, phoneID: phoneID),
+              let (response, mac) = PairingCrypto.macRespond(request, code: code),
+              case .confirm(let confirm, let phoneKey) = PairingCrypto.phoneFinish(response, session: phone) else {
+            expect(false, "老实握手：两边算出同一把钥匙，双向确认都过")
+            return
+        }
+        expect(PairingCrypto.macCheckConfirm(confirm, session: mac) && phoneKey == mac.sharedKey,
+               "老实握手：两边算出同一把钥匙，双向确认都过")
+    }
+
+    /// (1) 冒充的手机，码猜错：Mac 拒绝，什么都不存
+    static func phone(_ expect: (Bool, String) -> Void, log: @escaping (String) -> Void, code: String) {
+        let store = MemoryPairingStore()
+        let mac = PairingAuthority(store: store, log: log)
+        mac.openWindow(code: code)
+        let phoneID = UUID()
+        let (request, session) = PairingCrypto.phoneStart(code: "000000", phoneID: phoneID)!
+        guard case .responded(let reply) = mac.handlePair(request.encoded()),
+              let response = try? PairingCrypto.PairResponse(decoding: reply),
+              let keys = attackerKeys(secret: session.secret, sid: session.sid, ya: session.ya, yb: response.yb) else {
+            expect(false, "冒充手机：Mac 拒绝它的确认，什么都不存")
+            return
+        }
+        // 不管 Tb 对不对，照样把自己算的 Ta 发过去
+        let ta = CPace.tag(keys.macKey, y: session.ya, ad: Data())
+        let confirm = PairingCrypto.PairConfirm(phoneID: phoneID, sid: session.sid, tag: ta)
+        var ok = false
+        if case .rejected(let r, let left) = mac.handlePair(confirm.encoded()) {
+            ok = PairingCrypto.decodePairReject(r) == .wrongCode && left == 4
+        }
+        // 它自以为的钥匙签的命令：Mac 不认识这台手机
+        let forged = PairingCrypto.sealCommand("ping", phoneID: phoneID, counter: 1, key: keys.sharedKey)!
+        var unknown = false
+        if case .rejected(.unknownPhone, _, _) = mac.handleCommand(forged) { unknown = true }
+        expect(ok && unknown && store.allPhoneIDs().isEmpty && !mac.isPaired && !mac.code.isEmpty,
+               "冒充手机：Mac 拒绝它的确认（记一次错），什么都不存，签的命令也不认")
+
+        // 随便编一个 Ta 也不行
+        let (r2, s2) = PairingCrypto.phoneStart(code: "999999", phoneID: phoneID)!
+        _ = mac.handlePair(r2.encoded())
+        let junk = PairingCrypto.PairConfirm(phoneID: phoneID, sid: s2.sid, tag: Data(count: 64))
+        if case .rejected(_, let left) = mac.handlePair(junk.encoded()) {
+            expect(left == 3 && store.allPhoneIDs().isEmpty, "冒充手机：编造的 Ta 被拒，又记一次错")
+        } else {
+            expect(false, "冒充手机：编造的 Ta 被拒，又记一次错")
+        }
+    }
+
+    /// (2) 冒充的 Mac，码猜错：手机不接受，什么都不存
+    static func mac(_ expect: (Bool, String) -> Void, code: String) {
+        let phoneID = UUID()
+        let (request, session) = PairingCrypto.phoneStart(code: code, phoneID: phoneID)!
+        let (fake, fakeSession) = PairingCrypto.macRespond(request, code: "111111")!
+        var refused = false
+        if case .wrongCode = PairingCrypto.phoneFinish(fake, session: session) { refused = true }
+        expect(refused, "冒充 Mac：手机验它的 Tb 不过，不发 Ta、不存钥匙")
+        // 就算它跳过 Tb 直接发 PairAccepted（用它自己那把钥匙签），手机也不认
+        let forgedAccept = PairingCrypto.pairAccepted(phoneID: phoneID, sid: session.sid, key: fakeSession.sharedKey)
+        let otherKey = SymmetricKey(size: .bits256)
+        expect(!PairingCrypto.verifyPairAccepted(forgedAccept, phoneID: phoneID, sid: session.sid, key: otherKey),
+               "冒充 Mac：伪造的 PairAccepted 验不过")
+        // 拿另一轮真 Mac 的应答来回放：sid 不对，手机直接拒
+        let (otherRequest, _) = PairingCrypto.phoneStart(code: code, phoneID: phoneID)!
+        let (replayed, _) = PairingCrypto.macRespond(otherRequest, code: code)!
+        var invalid = false
+        if case .invalid = PairingCrypto.phoneFinish(replayed, session: session) { invalid = true }
+        expect(invalid, "冒充 Mac：回放别的一轮的应答，手机拒绝")
+        // 低阶点当 Yb：中止
+        var lowOrder = fake
+        lowOrder.yb = Data(count: 32)
+        var aborted = false
+        if case .invalid = PairingCrypto.phoneFinish(lowOrder, session: session) { aborted = true }
+        expect(aborted, "冒充 Mac：Yb 是低阶点，手机中止")
+    }
+
+    /// (3) 录下来的一轮：攻击者只验了自己猜的那一个码，没有能离线验别的码的东西
+    static func offline(_ expect: (Bool, String) -> Void, log: @escaping (String) -> Void, code: String) {
+        let guess = "000000"
+        let phoneID = UUID()
+        let mac = PairingAuthority(store: MemoryPairingStore(), log: log)
+        mac.openWindow(code: code)
+        let (request, session) = PairingCrypto.phoneStart(code: guess, phoneID: phoneID)!
+        guard case .responded(let reply) = mac.handlePair(request.encoded()),
+              let response = try? PairingCrypto.PairResponse(decoding: reply) else {
+            expect(false, "离线：攻击者拿到 Mac 的应答")
+            return
+        }
+
+        // a. 它猜的码：确认不过
+        var guessFails = false
+        if case .wrongCode = PairingCrypto.phoneFinish(response, session: session) { guessFails = true }
+        expect(guessFails, "离线：攻击者猜的码，Tb 验不过（这一轮只告诉它「这个码不对」）")
+
+        // b. 不同的码给出毫无关系的生成元；同一个标量在不同生成元上的结果也毫无关系
+        let candidates = [code, guess] + (1...30).map { String(format: "%06d", $0 * 33_331 % 1_000_000) }
+        let generators = candidates.map { PairingCrypto.generator(code: $0, phoneID: phoneID, sid: session.sid) }
+        let probe = CPace.sampleScalar()
+        let products = generators.compactMap { CPace.scalarMult(probe, $0) }
+        expect(Set(generators).count == candidates.count && Set(products).count == candidates.count,
+               "离线：\(candidates.count) 个不同的码 → 互不相同的生成元和 y·g")
+
+        // c. 它手里能算的钥匙只有 K = ya·Yb，和「真码是哪个」无关：对每个候选码，拿录下的 Tb 去核对，结果都一样（都不过）
+        guard let mine = attackerKeys(secret: session.secret, sid: session.sid, ya: session.ya, yb: response.yb) else {
+            expect(false, "离线：攻击者的视角里没有能验别的码的值")
+            return
+        }
+        let tbChecks = candidates.map { _ in
+            CPace.tagValid(response.tag, key: mine.macKey, y: response.yb, ad: Data())
+        }
+        // 再试「用候选码重算 Ya、把录下的 Yb 当共享点」这类不需要 Mac 标量的办法：真码也验不出来
+        let naive = candidates.indices.map { i -> Bool in
+            guard let yaC = CPace.scalarMult(session.secret, generators[i]) else { return false }
+            let tries = [response.yb, generators[i], yaC].map { kGuess in
+                PairingCrypto.handshakeKeys(sid: session.sid, k: kGuess, ya: session.ya, yb: response.yb)
+            } + [PairingCrypto.handshakeKeys(sid: session.sid, k: CPace.scalarMult(session.secret, response.yb) ?? Data(),
+                                            ya: yaC, yb: response.yb)]
+            return tries.contains { CPace.tagValid(response.tag, key: $0.macKey, y: response.yb, ad: Data()) }
+        }
+        expect(!tbChecks.contains(true) && !naive.contains(true),
+               "离线：录下的 Tb 对 \(candidates.count) 个候选码（含真码）一个都对不上 —— 没有离线核对的办法")
+
+        // d. 换一台码不同的 Mac，同样的猜测：攻击者能做的核对结果完全一样（视角和真码无关）
+        let mac2 = PairingAuthority(store: MemoryPairingStore(), log: log)
+        mac2.openWindow(code: "271828")
+        let (request2, session2) = PairingCrypto.phoneStart(code: guess, phoneID: phoneID)!
+        var same = false
+        if case .responded(let reply2) = mac2.handlePair(request2.encoded()),
+           let response2 = try? PairingCrypto.PairResponse(decoding: reply2),
+           let mine2 = attackerKeys(secret: session2.secret, sid: session2.sid, ya: session2.ya, yb: response2.yb) {
+            let checks2 = candidates.map { _ in CPace.tagValid(response2.tag, key: mine2.macKey, y: response2.yb, ad: Data()) }
+            same = checks2 == tbChecks
+        }
+        expect(same, "离线：真码是 \(String(repeating: "•", count: 6)) 还是别的，攻击者的核对结果都一样")
+
+        // e. 这一轮用掉了：再交一个 Ta（换个猜测）不给任何新信息，也不再扣次数；想再猜就得开新的一轮（再扣一次）
+        let ta = CPace.tag(mine.macKey, y: session.ya, ad: Data())
+        let first = mac.handlePair(PairingCrypto.PairConfirm(phoneID: phoneID, sid: session.sid, tag: ta).encoded())
+        let leftAfterFirst = mac.attemptsLeft
+        let secondGuess = PairingCrypto.PairConfirm(phoneID: phoneID, sid: session.sid, tag: Data(count: 64))
+        let second = mac.handlePair(secondGuess.encoded())
+        expect(first == second && mac.attemptsLeft == leftAfterFirst,
+               "离线：同一轮的第二次确认只得到同样的拒绝，没有第二次猜的机会")
+        let (request3, _) = PairingCrypto.phoneStart(code: guess, phoneID: phoneID)!
+        var fresh = false
+        if case .responded(let reply3) = mac.handlePair(request3.encoded()),
+           let response3 = try? PairingCrypto.PairResponse(decoding: reply3) {
+            fresh = response3.yb != response.yb && mac.attemptsLeft == leftAfterFirst - 1
+        }
+        expect(fresh, "离线：再猜要开新的一轮（Mac 换新的 Yb，再扣一次）")
+
+        // 对照：v1 的 tag = HMAC(SHA256(码), pub‖id) 能离线把码试出来
+        let v1Key = { (c: String) in SymmetricKey(data: Data(SHA256.hash(data: Data(c.utf8)))) }
+        let pub = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation
+        let v1Tag = PairingCrypto.hmac(pub + PairingCrypto.bytes(phoneID), key: v1Key(code))
+        let found = candidates.filter { PairingCrypto.hmacValid(v1Tag, for: pub + PairingCrypto.bytes(phoneID), key: v1Key($0)) }
+        expect(found == [code], "对照：v1 录下一个 tag 就能离线试出码（v2 不行）")
+    }
+
+    /// sid 用过不再收；作废的一轮不能再用
+    static func sessionReuse(_ expect: (Bool, String) -> Void, log: @escaping (String) -> Void, code: String) {
+        let mac = PairingAuthority(store: MemoryPairingStore(), log: log)
+        mac.openWindow(code: code)
+        let phoneID = UUID()
+        let (request, session) = PairingCrypto.phoneStart(code: code, phoneID: phoneID)!
+        guard case .responded(let reply) = mac.handlePair(request.encoded()),
+              let response = try? PairingCrypto.PairResponse(decoding: reply),
+              case .confirm(let confirm, _) = PairingCrypto.phoneFinish(response, session: session) else {
+            expect(false, "会话：同一个 sid 不收第二次")
+            return
+        }
+        // 同一个 sid 再来一次（比如重放请求）：不收，不扣次数，也不打扰进行中的那一轮
+        let left = mac.attemptsLeft
+        var refused = false
+        if case .malformed = mac.handlePair(request.encoded()) { refused = true }
+        expect(refused && mac.attemptsLeft == left, "会话：同一个 sid 不收第二次，不扣次数")
+        var accepted = false
+        if case .accepted = mac.handlePair(confirm.encoded()) { accepted = true }
+        expect(accepted, "会话：重放的请求不打扰进行中的那一轮")
+        // 用过的一轮：同一个 Ta 再交一次不收
+        if case .rejected = mac.handlePair(confirm.encoded()) {
+            expect(true, "会话：用过的一轮，同一个 Ta 再交不收")
+        } else {
+            expect(false, "会话：用过的一轮，同一个 Ta 再交不收")
+        }
+        mac.openWindow(code: code)
+        // 换码：进行中的一轮作废
+        let (r2, s2) = PairingCrypto.phoneStart(code: code, phoneID: phoneID)!
+        if case .responded(let reply2) = mac.handlePair(r2.encoded()),
+           let resp2 = try? PairingCrypto.PairResponse(decoding: reply2),
+           case .confirm(let c2, _) = PairingCrypto.phoneFinish(resp2, session: s2) {
+            _ = mac.refresh(code: "135790")
+            if case .rejected = mac.handlePair(c2.encoded()) {
+                expect(true, "会话：换码后，进行中的那一轮作废")
+            } else {
+                expect(false, "会话：换码后，进行中的那一轮作废")
+            }
+        } else {
+            expect(false, "会话：换码后，进行中的那一轮作废")
+        }
     }
 }

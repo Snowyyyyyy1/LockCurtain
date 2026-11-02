@@ -3,14 +3,22 @@
 // 不再依赖系统蓝牙的链路加密，安全全在这一层做；这里只有作用在 Data 上的纯函数，
 // 不知道底下是 BLE（谁当中心都行）还是 Wi-Fi。
 //
-// 握手（6 位码认证 + X25519 密钥协商，旁听的人算不出密钥）：
-//   手机 → Mac  PairRequest  = ver | 0x01 | phoneID(16) | phonePub(32) | tag(32)
-//               tag  = HMAC-SHA256(key: SHA256(code), phonePub || phoneID)
-//   Mac  → 手机 PairResponse = ver | 0x02 | macPub(32) | tag2(32)
-//               tag2 = HMAC-SHA256(key: SHA256(code), macPub || phonePub)
-//   Mac  → 手机 PairReject   = ver | 0x07 | reason(1)          1 = 码不对，2 = 没有可用的码
-//   sharedKey = HKDF-SHA256(X25519(priv, peerPub), salt: phonePub || macPub,
-//                           info: "LockCurtain pairing v1", 32 字节)
+// 握手（CPace，draft-irtf-cfrg-cpace，X25519 + SHA-512；见 CPace.swift）：
+//   握手消息的版本字节是 2（pairingVersion），握手之后的消息还是 1，格式不变。
+//   双方都由码推出同一个生成元 g = Elligator2(SHA-512(generator_string("CPace255", 码, CI, sid)))，
+//     CI  = lv_cat("LockCurtain pairing v2", "initiator:phone" ‖ phoneID, "responder:mac")，ADa = ADb = 空
+//     sid = 手机随机给的 16 字节，Mac 记着用过的，同一个 sid 不收第二次
+//   手机 → Mac  PairRequest  = ver2 | 0x01 | phoneID(16) | sid(16) | Ya(32)        Ya = ya·g
+//   Mac  → 手机 PairResponse = ver2 | 0x02 | sid(16) | Yb(32) | Tb(64)             Yb = yb·g
+//   手机 → Mac  PairConfirm  = ver2 | 0x08 | phoneID(16) | sid(16) | Ta(64)
+//   Mac  → 手机 PairAccepted = ver2 | 0x09 | phoneID(16) | sid(16) | mac(32)       mac = HMAC-SHA256(sharedKey, 前面所有字节)
+//   手机 → Mac  PairAbort    = ver2 | 0x0A | phoneID(16) | sid(16)                 手机验 Tb 没过（码不对），告诉 Mac 这一轮作废
+//   Mac  → 手机 PairReject   = ver2 | 0x07 | reason(1)          1 = 码不对，2 = 没有可用的码
+//   K = X25519(y_自己, Y_对方)，全零就中止；ISK = SHA-512(lv_cat("CPace255_ISK", sid, K) ‖ lv_cat(Ya, ADa) ‖ lv_cat(Yb, ADb))
+//   mac_key = SHA-512("CPaceMac" ‖ sid ‖ ISK)；Tb = HMAC-SHA512(mac_key, lv_cat(Yb, ADb))，Ta = HMAC-SHA512(mac_key, lv_cat(Ya, ADa))
+//   sharedKey = HKDF-SHA256(ISK, salt: sid, info: "LockCurtain pairing v2", 32 字节)
+//   一轮握手里，攻击者（不管冒充哪一边）最多试一个码；拿到的东西里没有能离线核对别的码的值。
+//   Mac 在回 PairResponse 时就把这一轮记成一次错码，只有 Ta 验过才算成；半路不来、Ta 不对、手机放弃都算错。
 //
 // 握手之后：
 //   手机 → Mac  Command   = ver | 0x03 | phoneID(16) | counter(8, 大端) | len(1) | command(UTF-8) | mac(32)
@@ -27,10 +35,14 @@ import CryptoKit
 import Foundation
 
 enum PairingCrypto {
+    /// 握手之后的消息（命令 / 收据 / 状态 / 撤销）的版本，格式没变
     static let version: UInt8 = 1
+    /// 握手消息的版本（v1 是 HMAC(码) 认证，v2 是 CPace）
+    static let pairingVersion: UInt8 = 2
     /// 一次打开的配对窗口里最多错几次码
     static let maxCodeAttempts = 5
-    static let hkdfInfo = Data("LockCurtain pairing v1".utf8)
+    static let hkdfInfo = Data("LockCurtain pairing v2".utf8)
+    static let sidLength = 16
     static let maxCommandBytes = 200
 
     enum Kind: UInt8 {
@@ -41,6 +53,19 @@ enum PairingCrypto {
         case state = 0x05
         case ack = 0x06
         case pairReject = 0x07
+        case pairConfirm = 0x08
+        case pairAccepted = 0x09
+        case pairAbort = 0x0A
+
+        var isHandshake: Bool {
+            switch self {
+            case .pairRequest, .pairResponse, .pairReject, .pairConfirm, .pairAccepted, .pairAbort: return true
+            case .command, .revoke, .state, .ack: return false
+            }
+        }
+
+        /// 这一类消息该带的版本字节
+        var wireVersion: UInt8 { isHandshake ? pairingVersion : version }
     }
 
     enum WireError: Error, Equatable {
@@ -53,8 +78,8 @@ enum PairingCrypto {
     /// 消息头：版本 + 类型，解码前先看这个
     static func kind(of data: Data) -> Kind? {
         let b = [UInt8](data)
-        guard b.count >= 2, b[0] == version else { return nil }
-        return Kind(rawValue: b[1])
+        guard b.count >= 2, let kind = Kind(rawValue: b[1]), b[0] == kind.wireVersion else { return nil }
+        return kind
     }
 
     // MARK: - 小工具
@@ -78,16 +103,12 @@ enum PairingCrypto {
         bytes.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
     }
 
-    static func header(_ kind: Kind) -> Data { Data([version, kind.rawValue]) }
+    static func header(_ kind: Kind) -> Data { Data([kind.wireVersion, kind.rawValue]) }
 
     private static func check(_ b: [UInt8], _ kind: Kind) throws {
         guard b.count >= 2 else { throw WireError.wrongLength }
-        guard b[0] == version else { throw WireError.wrongVersion }
+        guard b[0] == kind.wireVersion else { throw WireError.wrongVersion }
         guard b[1] == kind.rawValue else { throw WireError.wrongKind }
-    }
-
-    static func codeKey(_ code: String) -> SymmetricKey {
-        SymmetricKey(data: Data(SHA256.hash(data: Data(code.utf8))))
     }
 
     static func hmac(_ message: Data, key: SymmetricKey) -> Data {
@@ -102,19 +123,19 @@ enum PairingCrypto {
     // MARK: - 消息
 
     struct PairRequest: Equatable {
-        static let length = 2 + 16 + 32 + 32
+        static let length = 2 + 16 + 16 + 32
         var phoneID: UUID
-        var phonePub: Data
-        var tag: Data
+        var sid: Data
+        var ya: Data
 
         func encoded() -> Data {
-            header(.pairRequest) + bytes(phoneID) + phonePub + tag
+            header(.pairRequest) + bytes(phoneID) + sid + ya
         }
 
-        init(phoneID: UUID, phonePub: Data, tag: Data) {
+        init(phoneID: UUID, sid: Data, ya: Data) {
             self.phoneID = phoneID
-            self.phonePub = phonePub
-            self.tag = tag
+            self.sid = sid
+            self.ya = ya
         }
 
         init(decoding data: Data) throws {
@@ -122,30 +143,83 @@ enum PairingCrypto {
             try check(b, .pairRequest)
             guard b.count == Self.length else { throw WireError.wrongLength }
             phoneID = uuid(b[2..<18])
-            phonePub = Data(b[18..<50])
-            tag = Data(b[50..<82])
+            sid = Data(b[18..<34])
+            ya = Data(b[34..<66])
         }
     }
 
     struct PairResponse: Equatable {
-        static let length = 2 + 32 + 32
-        var macPub: Data
-        var tag2: Data
+        static let length = 2 + 16 + 32 + 64
+        var sid: Data
+        var yb: Data
+        /// Mac 的确认标签 Tb
+        var tag: Data
 
-        func encoded() -> Data { header(.pairResponse) + macPub + tag2 }
+        func encoded() -> Data { header(.pairResponse) + sid + yb + tag }
 
-        init(macPub: Data, tag2: Data) {
-            self.macPub = macPub
-            self.tag2 = tag2
+        init(sid: Data, yb: Data, tag: Data) {
+            self.sid = sid
+            self.yb = yb
+            self.tag = tag
         }
 
         init(decoding data: Data) throws {
             let b = [UInt8](data)
             try check(b, .pairResponse)
             guard b.count == Self.length else { throw WireError.wrongLength }
-            macPub = Data(b[2..<34])
-            tag2 = Data(b[34..<66])
+            sid = Data(b[2..<18])
+            yb = Data(b[18..<50])
+            tag = Data(b[50..<114])
         }
+    }
+
+    struct PairConfirm: Equatable {
+        static let length = 2 + 16 + 16 + 64
+        var phoneID: UUID
+        var sid: Data
+        /// 手机的确认标签 Ta
+        var tag: Data
+
+        func encoded() -> Data { header(.pairConfirm) + bytes(phoneID) + sid + tag }
+
+        init(phoneID: UUID, sid: Data, tag: Data) {
+            self.phoneID = phoneID
+            self.sid = sid
+            self.tag = tag
+        }
+
+        init(decoding data: Data) throws {
+            let b = [UInt8](data)
+            try check(b, .pairConfirm)
+            guard b.count == Self.length else { throw WireError.wrongLength }
+            phoneID = uuid(b[2..<18])
+            sid = Data(b[18..<34])
+            tag = Data(b[34..<98])
+        }
+    }
+
+    /// 手机放弃这一轮（Mac 的 Tb 没验过）：ver2 | 0x0A | phoneID | sid
+    static func pairAbort(phoneID: UUID, sid: Data) -> Data {
+        header(.pairAbort) + bytes(phoneID) + sid
+    }
+
+    static func decodePairAbort(_ data: Data) -> (phoneID: UUID, sid: Data)? {
+        let b = [UInt8](data)
+        guard (try? check(b, .pairAbort)) != nil, b.count == 2 + 16 + 16 else { return nil }
+        return (uuid(b[2..<18]), Data(b[18..<34]))
+    }
+
+    /// Mac 验过 Ta 之后的回执，用新钥匙签：手机见到它才存钥匙
+    static func pairAccepted(phoneID: UUID, sid: Data, key: SymmetricKey) -> Data {
+        let signed = header(.pairAccepted) + bytes(phoneID) + sid
+        return signed + hmac(signed, key: key)
+    }
+
+    static func verifyPairAccepted(_ data: Data, phoneID: UUID, sid: Data, key: SymmetricKey) -> Bool {
+        let b = [UInt8](data)
+        guard (try? check(b, .pairAccepted)) != nil, b.count == 2 + 16 + 16 + 32,
+              uuid(b[2..<18]) == phoneID, Data(b[18..<34]) == sid else { return false }
+        return hmacValid(Data(b[34...]), for: Data(b[0..<34]), key: key)
     }
 
     enum PairRejectReason: UInt8 {
@@ -243,42 +317,99 @@ enum PairingCrypto {
 
     // MARK: - 握手
 
-    /// 手机：生成一次性密钥，造配对请求。私钥只留在内存里，握手完就丢。
-    static func makePairRequest(code: String, phoneID: UUID)
-        -> (request: PairRequest, secret: Curve25519.KeyAgreement.PrivateKey) {
-        let secret = Curve25519.KeyAgreement.PrivateKey()
-        let pub = secret.publicKey.rawRepresentation
-        let tag = hmac(pub + bytes(phoneID), key: codeKey(code))
-        return (PairRequest(phoneID: phoneID, phonePub: pub, tag: tag), secret)
+    /// CPace 的通道标识：两边的身份和角色（手机永远是发起方，Mac 永远是应答方）
+    static func channelID(phoneID: UUID) -> Data {
+        CPace.lvCat(Data("LockCurtain pairing v2".utf8),
+                    Data("initiator:phone".utf8) + bytes(phoneID),
+                    Data("responder:mac".utf8))
     }
 
-    /// Mac：码对得上就回应答并算出共享密钥；对不上（或公钥不合法）返回 nil
-    static func macAnswer(_ request: PairRequest, code: String) -> (response: PairResponse, sharedKey: SymmetricKey)? {
-        let key = codeKey(code)
-        guard hmacValid(request.tag, for: request.phonePub + bytes(request.phoneID), key: key),
-              let phonePub = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: request.phonePub) else {
-            return nil
+    static func generator(code: String, phoneID: UUID, sid: Data) -> Data {
+        CPace.calculateGenerator(prs: Data(code.utf8), ci: channelID(phoneID: phoneID), sid: sid)
+    }
+
+    /// ADa、ADb 都是空：身份已经在 CI 里
+    static let associatedData = Data()
+
+    /// 握手的结果：确认标签用的 mac_key 和最终的共享钥匙
+    struct HandshakeKeys {
+        let macKey: SymmetricKey
+        let sharedKey: SymmetricKey
+    }
+
+    static func handshakeKeys(sid: Data, k: Data, ya: Data, yb: Data) -> HandshakeKeys {
+        let isk = CPace.isk(sid: sid, k: k, ya: ya, ada: associatedData, yb: yb, adb: associatedData)
+        let shared = HKDF<SHA256>.deriveKey(inputKeyMaterial: SymmetricKey(data: isk), salt: sid,
+                                            info: hkdfInfo, outputByteCount: 32)
+        return HandshakeKeys(macKey: CPace.macKey(sid: sid, isk: isk), sharedKey: shared)
+    }
+
+    /// 手机这一轮的状态：只在内存里，握手完就丢
+    struct PhoneSession {
+        let phoneID: UUID
+        let sid: Data
+        let secret: Curve25519.KeyAgreement.PrivateKey
+        let ya: Data
+    }
+
+    /// 手机：随机 sid 和标量，Ya = ya·g。生成元退化（概率可忽略）时返回 nil。
+    static func phoneStart(code: String, phoneID: UUID,
+                           sid: Data = Data((0..<sidLength).map { _ in UInt8.random(in: 0...255) }))
+        -> (request: PairRequest, session: PhoneSession)? {
+        let g = generator(code: code, phoneID: phoneID, sid: sid)
+        let secret = CPace.sampleScalar()
+        guard let ya = CPace.scalarMult(secret, g) else { return nil }
+        return (PairRequest(phoneID: phoneID, sid: sid, ya: ya),
+                PhoneSession(phoneID: phoneID, sid: sid, secret: secret, ya: ya))
+    }
+
+    enum PhoneStep {
+        /// Mac 的 Tb 验过：把 Ta 发过去，等 PairAccepted
+        case confirm(PairConfirm, sharedKey: SymmetricKey)
+        /// Tb 不对：两边的码不一样（或者对面不是知道码的 Mac）
+        case wrongCode
+        /// sid 对不上或 Yb 是低阶点 / 非法
+        case invalid
+    }
+
+    /// 手机：收到 Mac 的 Yb 和 Tb
+    static func phoneFinish(_ response: PairResponse, session: PhoneSession) -> PhoneStep {
+        guard response.sid == session.sid,
+              let k = CPace.scalarMult(session.secret, response.yb) else { return .invalid }
+        let keys = handshakeKeys(sid: session.sid, k: k, ya: session.ya, yb: response.yb)
+        guard CPace.tagValid(response.tag, key: keys.macKey, y: response.yb, ad: associatedData) else {
+            return .wrongCode
         }
-        let secret = Curve25519.KeyAgreement.PrivateKey()
-        guard let shared = try? secret.sharedSecretFromKeyAgreement(with: phonePub) else { return nil }
-        let macPub = secret.publicKey.rawRepresentation
-        let tag2 = hmac(macPub + request.phonePub, key: key)
-        return (PairResponse(macPub: macPub, tag2: tag2),
-                deriveKey(shared, phonePub: request.phonePub, macPub: macPub))
+        let ta = CPace.tag(keys.macKey, y: session.ya, ad: associatedData)
+        return .confirm(PairConfirm(phoneID: session.phoneID, sid: session.sid, tag: ta), sharedKey: keys.sharedKey)
     }
 
-    /// 手机：核对 Mac 的 tag2，对上了才得到共享密钥
-    static func phoneFinish(_ response: PairResponse, request: PairRequest,
-                            secret: Curve25519.KeyAgreement.PrivateKey, code: String) -> SymmetricKey? {
-        guard hmacValid(response.tag2, for: response.macPub + request.phonePub, key: codeKey(code)),
-              let macPub = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: response.macPub),
-              let shared = try? secret.sharedSecretFromKeyAgreement(with: macPub) else { return nil }
-        return deriveKey(shared, phonePub: request.phonePub, macPub: response.macPub)
+    /// Mac 这一轮的状态：等手机的 Ta
+    struct MacSession {
+        let phoneID: UUID
+        let sid: Data
+        let ya: Data
+        let macKey: SymmetricKey
+        let sharedKey: SymmetricKey
     }
 
-    static func deriveKey(_ shared: SharedSecret, phonePub: Data, macPub: Data) -> SymmetricKey {
-        shared.hkdfDerivedSymmetricKey(using: SHA256.self, salt: phonePub + macPub,
-                                       sharedInfo: hkdfInfo, outputByteCount: 32)
+    /// Mac：用自己的码算 g、Yb、K，回 Yb 和 Tb。Ya 不合法（低阶点等）返回 nil。
+    static func macRespond(_ request: PairRequest, code: String) -> (response: PairResponse, session: MacSession)? {
+        let g = generator(code: code, phoneID: request.phoneID, sid: request.sid)
+        let secret = CPace.sampleScalar()
+        guard let yb = CPace.scalarMult(secret, g),
+              let k = CPace.scalarMult(secret, request.ya) else { return nil }
+        let keys = handshakeKeys(sid: request.sid, k: k, ya: request.ya, yb: yb)
+        let tb = CPace.tag(keys.macKey, y: yb, ad: associatedData)
+        return (PairResponse(sid: request.sid, yb: yb, tag: tb),
+                MacSession(phoneID: request.phoneID, sid: request.sid, ya: request.ya,
+                           macKey: keys.macKey, sharedKey: keys.sharedKey))
+    }
+
+    /// Mac：核对手机的 Ta（常数时间）
+    static func macCheckConfirm(_ confirm: PairConfirm, session: MacSession) -> Bool {
+        confirm.phoneID == session.phoneID && confirm.sid == session.sid
+            && CPace.tagValid(confirm.tag, key: session.macKey, y: session.ya, ad: associatedData)
     }
 
     // MARK: - 命令

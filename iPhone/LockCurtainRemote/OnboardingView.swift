@@ -22,6 +22,13 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
+
+                    Text("第一次连上、或者断开以后重新连上，要在手机上把 LockCurtain 打开一下。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                        .padding(.top, -8)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 32)

@@ -1,5 +1,4 @@
 import Combine
-import CoreLocation
 import Foundation
 import Observation
 import UIKit
@@ -9,6 +8,10 @@ import UIKit
 @MainActor
 @Observable
 final class AppModel {
+    /// 「自动」（走远自动盖上）先不在界面上露面：设置、主屏、演示里都藏起来，也不碰定位。
+    /// 代码都留着，改成 true 就回来。
+    static let autoCoverVisible = false
+
     enum DemoScenario: Hashable {
         case connected
         case closed
@@ -31,12 +34,13 @@ final class AppModel {
     private(set) var isCovering = false
     private(set) var didTimeOut = false
     private(set) var isAway = false
-    private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
     private(set) var lastEventText = "没连上"
     private(set) var lastEventDate = Date()
     private(set) var isPreviewFixture = false
     /// 连续 5 次连上又断，已经不再广播；界面走「找到了，但连不上」那条路，等用户点「再试一次」
     private(set) var connectionGaveUp = false
+    /// 这次启动里刚配对成功：主屏在连接那一行下面提示一句「以后会自己连上」，下次启动就不再显示
+    private(set) var justPaired = false
 
     var demoScenario: DemoScenario = .connected
     var showDemoExitNotice = false
@@ -45,7 +49,7 @@ final class AppModel {
 
     @ObservationIgnored private var link: any CurtainLink
     @ObservationIgnored private var demoLink: DemoCurtainLink?
-    @ObservationIgnored private let locationManager = CLLocationManager()
+    /// 只有「自动」露面时才建：藏起来的时候一次都不碰定位
     @ObservationIgnored private var coverTask: Task<Void, Never>?
     @ObservationIgnored private var timeoutTask: Task<Void, Never>?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
@@ -82,7 +86,6 @@ final class AppModel {
         }
 
         observeCurrentLink()
-        refreshLocationStatus()
         recordEvent(from: link.snapshot)
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         if paired && !demoMode { link.activate() }
@@ -94,24 +97,12 @@ final class AppModel {
         !paired && !demoMode && !isPreviewFixture
     }
 
-    var hasAlwaysLocation: Bool {
-        locationStatus == .authorizedAlways
-    }
-
-    var locationValue: String {
-        switch locationStatus {
-        case .authorizedAlways: "始终"
-        case .authorizedWhenInUse: "使用 App 期间"
-        default: "从不"
-        }
-    }
-
     var autoEnabled: Bool {
         auto == .on
     }
 
     var canToggleAuto: Bool {
-        demoMode || hasAlwaysLocation
+        true  // 走没走远由 Mac 看信号判断，手机不需要定位
     }
 
     var autoDisplayValue: String {
@@ -271,6 +262,7 @@ final class AppModel {
         if paired, self.macName != nil { return }
         paired = true
         self.macName = macName
+        if !demoMode { justPaired = true }
         UserDefaults.standard.set(macName, forKey: Keys.macName)
         if !demoMode, !(link is BLECurtainLink) {
             adopt(BLECurtainLink(paired: true, macName: macName))
@@ -280,6 +272,7 @@ final class AppModel {
     /// 撤销配对：连着 Mac 就先发一条签名的 unpair 让 Mac 也删钥匙，再删手机自己的钥匙
     func unpair() {
         paired = false
+        justPaired = false
         macName = nil
         UserDefaults.standard.removeObject(forKey: Keys.macName)
         if let ble = link as? BLECurtainLink {
@@ -295,12 +288,9 @@ final class AppModel {
     /// Mac 发来签名的撤销通知：手机的钥匙已经在连接里删掉了，这里只改界面状态
     private func handleRevokedByMac() {
         paired = false
+        justPaired = false
         macName = nil
         UserDefaults.standard.removeObject(forKey: Keys.macName)
-    }
-
-    func refreshLocationStatus() {
-        locationStatus = locationManager.authorizationStatus
     }
 
     // MARK: - Link plumbing

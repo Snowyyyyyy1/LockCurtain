@@ -57,6 +57,17 @@ final class PairingSession {
         start()
     }
 
+    /// 连续断了几次、停下以后点「再试一次」：清掉错误，重新开始连接
+    func restart() {
+        task?.cancel()
+        isVerifying = false
+        errorMessage = nil
+        onRetry()
+        started = false
+        step = .searching
+        start()
+    }
+
     func cancel() {
         task?.cancel()
     }
@@ -108,10 +119,11 @@ struct PairingSheet: View {
                 Color(.systemGroupedBackground)
                     .ignoresSafeArea()
                 content
-                    .id(session.step)
+                    .id(showsGaveUp ? nil : session.step)
                     .transition(.opacity)
             }
             .animation(.easeInOut(duration: 0.25), value: session.step)
+            .animation(.easeInOut(duration: 0.25), value: showsGaveUp)
             .navigationTitle("配对")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -144,8 +156,11 @@ struct PairingSheet: View {
                 codeFocused = false
             }
         }
+        .onChange(of: model.connectionGaveUp) { _, gaveUp in
+            if gaveUp { codeFocused = false }
+        }
         .onChange(of: session.errorMessage) { _, message in
-            guard message != nil else { return }
+            guard message != nil, !model.connectionGaveUp else { return }
             code = ""
             codeFocused = true
         }
@@ -164,8 +179,25 @@ struct PairingSheet: View {
 
     // MARK: - Steps
 
+    /// 连续断了 5 次、已经不再重连：换掉一般的失败提示
+    private var showsGaveUp: Bool {
+        model.connectionGaveUp && session.step != .success
+    }
+
     @ViewBuilder
     private var content: some View {
+        if showsGaveUp {
+            GaveUpNotice {
+                session.restart()
+            }
+            .padding(.horizontal, 32)
+        } else {
+            stepContent
+        }
+    }
+
+    @ViewBuilder
+    private var stepContent: some View {
         switch session.step {
         case .searching:
             searchingView

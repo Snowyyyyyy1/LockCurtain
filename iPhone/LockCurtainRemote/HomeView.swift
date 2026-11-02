@@ -20,7 +20,9 @@ struct HomeView: View {
             Section {
                 curtainRow
                 macRow
-                autoRow
+                if AppModel.autoCoverVisible {
+                    autoRow
+                }
             } footer: {
                 sectionFooter
             }
@@ -53,6 +55,14 @@ struct HomeView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView()
         }
+        #if DEBUG
+        .onAppear {
+            // 截图用：-lcOpenSettings 一启动就打开设置
+            if ProcessInfo.processInfo.arguments.contains("-lcOpenSettings") {
+                showSettings = true
+            }
+        }
+        #endif
         .sheet(isPresented: $showPairing) {
             PairingSheet()
         }
@@ -133,8 +143,27 @@ struct HomeView: View {
 
     // MARK: - Footer
 
+    /// 连续断了 5 次、已经停下不再重连：主屏换成「连不上这台 Mac。」那一套，不再显示一般的排查提示
+    private var showsGaveUp: Bool {
+        model.connectionGaveUp && model.paired && !model.demoMode && model.connection != .connected
+    }
+
     @ViewBuilder
     private var sectionFooter: some View {
+        if showsGaveUp {
+            EmptyView()
+        } else if model.justPaired && model.connection != .notPaired {
+            VStack(alignment: .leading, spacing: 8) {
+                genericFooter
+                Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
+            }
+        } else {
+            genericFooter
+        }
+    }
+
+    @ViewBuilder
+    private var genericFooter: some View {
         switch model.connection {
         case .notPaired:
             Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
@@ -145,22 +174,25 @@ struct HomeView: View {
         case .bluetoothOff:
             Text("打开 iPhone 的蓝牙，才能找到这台 Mac。")
         case .connected:
-            if model.phase != .closed && !model.didTimeOut && !model.hasAlwaysLocation && !model.demoMode {
-                Text("定位没给“始终”，现在只能手动。")
-            }
+            EmptyView()
         }
     }
 
     // MARK: - Bottom bar
 
     private var showsBottomBar: Bool {
-        model.connection == .connected || model.connection == .notPaired
+        model.connection == .connected || model.connection == .notPaired || showsGaveUp
     }
 
     private var bottomBar: some View {
         GlassEffectContainer {
             VStack(spacing: 10) {
-                if model.connection == .notPaired {
+                if showsGaveUp {
+                    GaveUpNotice(prominent: true) {
+                        model.prepareForPairing()
+                    }
+                    .transition(.opacity)
+                } else if model.connection == .notPaired {
                     Button {
                         showPairing = true
                     } label: {
@@ -195,6 +227,7 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.isPending)
         .animation(.smooth(duration: 0.35), value: model.didTimeOut)
         .animation(.smooth(duration: 0.35), value: model.connection)
+        .animation(.smooth(duration: 0.35), value: model.connectionGaveUp)
     }
 
     @ViewBuilder
@@ -299,10 +332,52 @@ struct HomeView: View {
             ) {
                 Text("已连上这台 Mac").tag(AppModel.DemoScenario.connected)
                 Text("幕布已盖上").tag(AppModel.DemoScenario.closed)
-                Text("走远自动盖上").tag(AppModel.DemoScenario.away)
+                if AppModel.autoCoverVisible {
+                    Text("走远自动盖上").tag(AppModel.DemoScenario.away)
+                }
             }
             .pickerStyle(.inline)
             .labelsHidden()
+        }
+    }
+}
+
+/// 连续断了几次、已经不再自己重连时显示：主屏和配对页共用同一套文字
+struct GaveUpNotice: View {
+    /// 主屏底栏用玻璃大按钮；配对页里用普通的 bordered 按钮
+    var prominent = false
+    var retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            VStack(spacing: 4) {
+                Text("连不上这台 Mac。")
+                    .font(prominent ? .subheadline.weight(.semibold) : .title2.bold())
+                Text("已经试了 5 次，先停在这儿。")
+                    .font(prominent ? .subheadline : .body)
+                    .foregroundStyle(.secondary)
+            }
+            .multilineTextAlignment(.center)
+            .accessibilityElement(children: .combine)
+
+            if prominent {
+                Button(action: retry) {
+                    Text("再试一次")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 3)
+                }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+            } else {
+                Button("再试一次", action: retry)
+                    .buttonStyle(.bordered)
+                    .padding(.top, 6)
+            }
+
+            Text("在你回来之前，我不会自己在后台重连。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
     }
 }
