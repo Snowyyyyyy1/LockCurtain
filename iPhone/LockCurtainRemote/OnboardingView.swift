@@ -42,24 +42,32 @@ struct OnboardingView: View {
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 16) {
-                Button {
-                    model.prepareForPairing()
-                    showPairing = true
-                } label: {
-                    Text("去配对")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
+            GlassEffectContainer(spacing: 12) {
+                VStack(spacing: 12) {
+                    Button {
+                        model.prepareForPairing()
+                        showPairing = true
+                    } label: {
+                        Text("去配对")
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 50)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
 
-                Button("手上没有 Mac？先看看演示") {
-                    model.setDemoMode(true)
+                    Button {
+                        model.setDemoMode(true)
+                    } label: {
+                        Text("手上没有 Mac？先看看演示")
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 50)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.borderless)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 8)
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 8)
         }
         .animation(.easeInOut(duration: 0.3), value: model.showDemoExitNotice)
         .sheet(isPresented: $showPairing) {

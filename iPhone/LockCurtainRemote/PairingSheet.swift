@@ -262,8 +262,9 @@ struct PairingSheet: View {
             } label: {
                 Text("完成")
                     .frame(maxWidth: .infinity)
+                    .frame(minHeight: 50)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .controlSize(.large)
         }
         .padding(.horizontal, 20)

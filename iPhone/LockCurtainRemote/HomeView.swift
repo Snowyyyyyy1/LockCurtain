@@ -4,6 +4,7 @@ struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var showSettings = false
     @State private var showPairing = false
+    @Namespace private var glassNS
 
     var body: some View {
         List {
@@ -29,6 +30,7 @@ struct HomeView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .navigationTitle("LockCurtain")
         .navigationBarTitleDisplayMode(.large)
         .toolbar {
@@ -156,48 +158,59 @@ struct HomeView: View {
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if model.connection == .notPaired {
-                Button {
-                    showPairing = true
-                } label: {
-                    Text("去配对")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .transition(.opacity)
-            } else if model.phase == .closed && !model.isPending {
-                closedNote
+        GlassEffectContainer {
+            VStack(spacing: 10) {
+                if model.connection == .notPaired {
+                    Button {
+                        showPairing = true
+                    } label: {
+                        Text("去配对")
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 50)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
+                    .glassEffectID("action", in: glassNS)
                     .transition(.opacity)
-            } else {
-                if model.didTimeOut {
-                    Text("Mac 没有回应，状态没变。")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                } else if model.phase == .closed && !model.isPending {
+                    closedNote
+                        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+                        .glassEffectID("action", in: glassNS)
                         .transition(.opacity)
+                } else {
+                    if model.didTimeOut {
+                        Text("Mac 没有回应，状态没变。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .transition(.opacity)
+                    }
+                    coverButton
                 }
-                coverButton
             }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 12)
-        .padding(.bottom, 8)
-        .frame(maxWidth: .infinity)
-        .background(.bar)
-        .animation(.snappy(duration: 0.25), value: model.phase)
-        .animation(.snappy(duration: 0.25), value: model.isPending)
-        .animation(.snappy(duration: 0.25), value: model.didTimeOut)
-        .animation(.snappy(duration: 0.25), value: model.connection)
+        .animation(.smooth(duration: 0.35), value: model.phase)
+        .animation(.smooth(duration: 0.35), value: model.isPending)
+        .animation(.smooth(duration: 0.35), value: model.didTimeOut)
+        .animation(.smooth(duration: 0.35), value: model.connection)
     }
 
     @ViewBuilder
     private var coverButton: some View {
         if model.isPending {
-            HStack(spacing: 8) {
-                ProgressView()
-                Text("正在盖上…")
+            Button {
+            } label: {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("正在盖上…")
+                }
             }
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
+            .disabled(true)
+            .glassEffectID("action", in: glassNS)
             .frame(maxWidth: .infinity)
             .frame(minHeight: 50)
             .accessibilityElement(children: .combine)
@@ -212,8 +225,9 @@ struct HomeView: View {
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 50)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .controlSize(.large)
+            .glassEffectID("action", in: glassNS)
             .accessibilityHint("发给这台 Mac，盖上幕布")
         }
     }
@@ -227,8 +241,9 @@ struct HomeView: View {
                 .foregroundStyle(.secondary)
         }
         .multilineTextAlignment(.center)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 20)
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
     }
 
