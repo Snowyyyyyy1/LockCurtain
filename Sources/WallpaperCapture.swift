@@ -83,19 +83,14 @@ enum WallpaperCapture {
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: cfg)
     }
 
-    /// 抓单屏并写盘到 /tmp/lockcurtain-wallpaper-<idx>.png（供菜单用）
+    /// 重新抓一块屏的壁纸，只刷新内存里的图（设置页「抓取当前壁纸」用）。
+    /// 不写任何文件：截到的画面只在这台机器的内存里，落盘的东西一样都不留。
     @discardableResult
-    static func captureOne(screen: NSScreen) async -> Bool {
+    static func refreshOne(screen: NSScreen) async -> Bool {
         guard let img = await WallpaperStore.shared.image(for: screen, content: nil,
                                                           scale: screen.backingScaleFactor) else { return false }
-        let idx = NSScreen.screens.firstIndex(of: screen) ?? 0
-        let path = "/tmp/lockcurtain-wallpaper-menu-\(idx).png"
-        if let d = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) {
-            try? d.write(to: URL(fileURLWithPath: path))
-            NSLog("saved %@ %dx%d", path, img.width, img.height)
-            return true
-        }
-        return false
+        NSLog("refresh display=%u %dx%d", screen.displayID, img.width, img.height)
+        return true
     }
 
     /// 设置页缩略图用：有缓存用缓存，没有就按 1 倍抓一张。不写进缓存，缓存留给遮罩用全分辨率的

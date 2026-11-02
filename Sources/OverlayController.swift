@@ -713,7 +713,7 @@ final class OverlayController {
         Task { @MainActor in
             await WallpaperCapture.invalidate()
             for (i, screen) in NSScreen.screens.enumerated() {
-                let ok = await WallpaperCapture.captureOne(screen: screen)
+                let ok = await WallpaperCapture.refreshOne(screen: screen)
                 NSLog("grab screen[%d] display=%u -> %@", i, screen.displayID, ok ? "OK" : "FAIL")
             }
         }

@@ -17,7 +17,6 @@ final class RunMode {
 enum Blob { static let nl = String(Character(UnicodeScalar(10))) }
 
 let statusPath = "/tmp/lockcurtain-status.txt"
-let captureLog = "/tmp/lockcurtain-capture.txt"
 
 func collectStatus(_ tag: String) -> String {
     """
@@ -51,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSLog("LockCurtain launched")
+        removeLegacyWallpaperDumps()
 
         switch RunMode.shared {
         case .status:
@@ -235,10 +235,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// 老版本把抓到的壁纸存成 /tmp/lockcurtain-wallpaper*.png，现在不写了；
+    /// 启动时把之前留下的删掉，别让旧文件继续躺在公共临时目录里。
+    private func removeLegacyWallpaperDumps() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: tmp.path) else { return }
+        for name in names where name.hasPrefix("lockcurtain-wallpaper") {
+            let url = tmp.appendingPathComponent(name)
+            if (try? FileManager.default.removeItem(at: url)) != nil {
+                NSLog("removed legacy wallpaper dump %@", url.path)
+            }
+        }
+    }
+
     // ---------- 壁纸采集自测 ----------
     private func runCapture() {
         var log = collectStatus("capture-start") + Blob.nl
-        let out = "/tmp/lockcurtain-capture.txt"
+        let out = AppPaths.file("capture.txt").path
         func w(_ s: String) {
             log.append(s); log.append(Blob.nl)
             try? log.write(toFile: out, atomically: true, encoding: .utf8)
@@ -254,17 +267,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             var saved = 0
             for (i, s) in screens.enumerated() {
                 if let img = images[s.displayID] {
-                    let path = "/tmp/lockcurtain-wallpaper-\(i).png"
-                    if let d = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]) {
-                        try? d.write(to: URL(fileURLWithPath: path))
-                    }
-                    w("screen[\(i)] display=\(s.displayID) -> \(img.width)x\(img.height) \(path)")
+                    // 只报尺寸，不写盘：自测也不该把屏幕画面留在磁盘上
+                    w("screen[\(i)] display=\(s.displayID) -> \(img.width)x\(img.height)")
                     saved += 1
                 } else {
                     w("screen[\(i)] display=\(s.displayID) -> 失败（会退化成黑底）")
                 }
             }
             w(saved == screens.count ? "全部 \(saved) 块屏成功" : "只有 \(saved)/\(screens.count) 成功")
+
+            // 设置页那个「抓取当前壁纸」按钮走的也是这条：只刷新内存，不写盘
+            var refreshed = 0
+            for s in screens where await WallpaperCapture.refreshOne(screen: s) {
+                refreshed += 1
+            }
+            w("refreshOne 成功 \(refreshed)/\(screens.count)（不写文件）")
 
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { NSApp.terminate(nil) }
         }
