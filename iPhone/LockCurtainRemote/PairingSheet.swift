@@ -17,18 +17,15 @@ final class PairingSession {
     private(set) var step: Step = .searching
     private(set) var isVerifying = false
     private(set) var errorMessage: String?
+    private(set) var retryTitle = "重试"
     private(set) var shakeToken = 0
 
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var started = false
-    @ObservationIgnored private let verify: @MainActor (String) async -> Bool
-
-    init(verify: @escaping @MainActor (String) async -> Bool = { _ in
-        try? await Task.sleep(for: .milliseconds(600))
-        return true
-    }) {
-        self.verify = verify
-    }
+    /// 由界面在出现时接上真的配对：把码交给 Mac 的那一步
+    @ObservationIgnored var verify: @MainActor (String) async -> PairResult = { _ in .notFound }
+    /// 「再找一次 / 再试一次」时重新开始连接（连续失败停下之后，只有这里能让它重新来）
+    @ObservationIgnored var onRetry: @MainActor () -> Void = {}
 
     func start() {
         guard !started else { return }
@@ -38,6 +35,26 @@ final class PairingSession {
             guard let self, !Task.isCancelled else { return }
             self.step = .code
         }
+    }
+
+    /// 失败：一句说卡在哪，配一颗下一步该按的按钮（copy v6.2 §8.5）
+    private func fail(_ message: String, _ action: String) {
+        errorMessage = message
+        retryTitle = action
+        shakeToken += 1
+    }
+
+    /// 那颗「再找一次 / 再试一次 / 重新输入」：前两个重走一遍流程，最后一个只是清空重输
+    func retry() {
+        if retryTitle == "重新输入" {
+            errorMessage = nil
+            return
+        }
+        errorMessage = nil
+        onRetry()
+        started = false
+        step = .searching
+        start()
     }
 
     func cancel() {
@@ -51,14 +68,24 @@ final class PairingSession {
         task?.cancel()
         task = Task { [weak self] in
             guard let self else { return }
-            let accepted = await self.verify(code)
+            let result = await self.verify(code)
             guard !Task.isCancelled else { return }
             self.isVerifying = false
-            if accepted {
+            switch result {
+            case .accepted:
                 self.step = .success
-            } else {
-                self.errorMessage = "码不对，再看一眼 Mac 上那 6 位。"
-                self.shakeToken += 1
+            case .notFound:
+                self.fail("没找到这台 Mac。Mac 要醒着、在附近，蓝牙也要开着。", "再找一次")
+            case .connectFailed:
+                self.fail("找到了，但连不上。走近一点，或者把 Mac 上的「配对手机」重新点开一次。", "再试一次")
+            case .wrongCode:
+                self.fail("码不对，再看一眼 Mac 上那 6 位。", "重新输入")
+            case .macRefused:
+                self.fail("Mac 没有接受这次配对。回 Mac 上点「换一个码」，再输一次。", "重新输入")
+            case .noResponse:
+                self.fail("这次作废了。回 Mac 上点「换一个码」。", "再试一次")
+            case .disconnected:
+                self.fail("和这台 Mac 断开了。刚才那 6 位不能用了。", "再试一次")
             }
         }
     }
@@ -98,6 +125,9 @@ struct PairingSheet: View {
         }
         .presentationDetents([.large])
         .onAppear {
+            model.prepareForPairing()
+            session.verify = { [model] code in await model.pair(code: code) }
+            session.onRetry = { [model] in model.prepareForPairing() }
             session.start()
         }
         .onDisappear {
@@ -149,9 +179,9 @@ struct PairingSheet: View {
     private var searchingView: some View {
         VStack(spacing: 16) {
             ProgressView()
-            Text("找这台 Mac…")
+            Text("等这台 Mac 来连")
                 .font(.title2.bold())
-            Text("Mac 要醒着、在附近，蓝牙也要开着。")
+            Text("Mac 上点开「配对手机」，把 6 位输进来")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -177,6 +207,10 @@ struct PairingSheet: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
+                Button(session.retryTitle) {
+                    session.retry()
+                }
+                .buttonStyle(.bordered)
             }
 
             if session.isVerifying {

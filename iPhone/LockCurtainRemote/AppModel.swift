@@ -35,6 +35,8 @@ final class AppModel {
     private(set) var lastEventText = "没连上"
     private(set) var lastEventDate = Date()
     private(set) var isPreviewFixture = false
+    /// 连续 5 次连上又断，已经不再广播；界面走「找到了，但连不上」那条路，等用户点「再试一次」
+    private(set) var connectionGaveUp = false
 
     var demoScenario: DemoScenario = .connected
     var showDemoExitNotice = false
@@ -49,6 +51,8 @@ final class AppModel {
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
 
     init() {
+        // 删了重装 = 从没配过对：第一次启动先清掉钥匙串里残留的东西
+        PhoneKeychain.wipeIfFreshInstall()
         let defaults = UserDefaults.standard
         // Clear any value written by earlier builds that persisted demo mode.
         defaults.removeObject(forKey: Keys.legacyDemo)
@@ -67,17 +71,21 @@ final class AppModel {
             self.link = link
             demoLink = link
         } else {
-            let storedPaired = defaults.bool(forKey: Keys.paired)
-            let storedName = defaults.string(forKey: Keys.macName)
+            // 配没配对只看钥匙串里有没有共享钥匙；老版本明文配对留下的标记不算数
+            defaults.removeObject(forKey: Keys.paired)
+            let storedPaired = PhoneKeychain.loadLink() != nil
+            let storedName = storedPaired ? defaults.string(forKey: Keys.macName) : nil
             paired = storedPaired
             demoMode = false
             macName = storedName
-            link = BLEPlaceholderCurtainLink(paired: storedPaired, macName: storedName)
+            link = BLECurtainLink(paired: storedPaired, macName: storedName)
         }
 
         observeCurrentLink()
         refreshLocationStatus()
         recordEvent(from: link.snapshot)
+        // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
+        if paired && !demoMode { link.activate() }
     }
 
     // MARK: - Derived UI state
@@ -168,7 +176,11 @@ final class AppModel {
     // MARK: - User actions
 
     func prepareForPairing() {
-        link.activate()
+        if let ble = link as? BLECurtainLink {
+            ble.resumeConnecting()
+        } else {
+            link.activate()
+        }
     }
 
     func cover() {
@@ -232,7 +244,7 @@ final class AppModel {
         } else {
             demoLink = nil
             demoScenario = .connected
-            adopt(BLEPlaceholderCurtainLink(paired: paired, macName: macName))
+            adopt(BLECurtainLink(paired: paired, macName: macName))
             if !paired {
                 showDemoExitNotice = true
                 scheduleNoticeClear()
@@ -240,24 +252,51 @@ final class AppModel {
         }
     }
 
+    /// 把 6 位码真的交给 Mac；只有 Mac 认可才记成已配对
+    func pair(code: String) async -> PairResult {
+        if demoMode { setDemoMode(false) }
+        let ble = link as? BLECurtainLink ?? BLECurtainLink(paired: false, macName: nil)
+        if link as? BLECurtainLink == nil { adopt(ble) }
+        let result = await ble.pair(code: code)
+        if result == .accepted {
+            completePairing(macName: ble.snapshot.macName ?? "这台 Mac")
+        }
+        return result
+    }
+
     func completePairing(macName: String) {
+        // 只有 Mac 真的接受了握手（钥匙串里有共享钥匙）才记成已配对
+        guard demoMode || PhoneKeychain.loadLink() != nil else { return }
+        // 已经配上过就别再改名字、别换连接（配对页「完成」会再调一次，带的是占位名）
+        if paired, self.macName != nil { return }
         paired = true
         self.macName = macName
-        UserDefaults.standard.set(true, forKey: Keys.paired)
         UserDefaults.standard.set(macName, forKey: Keys.macName)
-        if !demoMode {
-            adopt(BLEPlaceholderCurtainLink(paired: true, macName: macName))
+        if !demoMode, !(link is BLECurtainLink) {
+            adopt(BLECurtainLink(paired: true, macName: macName))
         }
     }
 
+    /// 撤销配对：连着 Mac 就先发一条签名的 unpair 让 Mac 也删钥匙，再删手机自己的钥匙
     func unpair() {
         paired = false
         macName = nil
-        UserDefaults.standard.removeObject(forKey: Keys.paired)
         UserDefaults.standard.removeObject(forKey: Keys.macName)
-        if !demoMode {
-            adopt(BLEPlaceholderCurtainLink(paired: false, macName: nil))
+        if let ble = link as? BLECurtainLink {
+            ble.unpair()
+        } else {
+            PhoneKeychain.deleteLink()
+            if !demoMode {
+                adopt(BLECurtainLink(paired: false, macName: nil))
+            }
         }
+    }
+
+    /// Mac 发来签名的撤销通知：手机的钥匙已经在连接里删掉了，这里只改界面状态
+    private func handleRevokedByMac() {
+        paired = false
+        macName = nil
+        UserDefaults.standard.removeObject(forKey: Keys.macName)
     }
 
     func refreshLocationStatus() {
@@ -277,6 +316,9 @@ final class AppModel {
         link.onSnapshotChange = { [weak self] snapshot in
             self?.apply(snapshot)
         }
+        if let ble = link as? BLECurtainLink {
+            ble.onRevoked = { [weak self] in self?.handleRevokedByMac() }
+        }
         apply(link.snapshot)
     }
 
@@ -288,6 +330,7 @@ final class AppModel {
             macName = name
         }
         isAway = snapshot.isAway
+        connectionGaveUp = snapshot.gaveUpConnecting
         if snapshot.phase == .closed || snapshot.connection != .connected {
             isCovering = false
         }

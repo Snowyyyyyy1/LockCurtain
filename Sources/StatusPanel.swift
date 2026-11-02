@@ -11,6 +11,7 @@ import SwiftUI
 struct StatusPanelActions {
     let enterAway: () -> Void
     let preview: () -> Void
+    let openPairing: () -> Void
     let openSettings: () -> Void
 }
 
@@ -26,6 +27,7 @@ final class StatusPanelController {
         let host = NSHostingController(rootView: StatusPanelView(
             enterAway: { close(); actions.enterAway() },
             preview: { close(); actions.preview() },
+            openPairing: { close(); actions.openPairing() },
             openSettings: { close(); actions.openSettings() },
             ledger: ledger, keepAwake: keepAwake))
         host.sizingOptions = [.preferredContentSize]
@@ -49,6 +51,7 @@ private let warmYellow = Color(nsColor: NSColor(name: nil) { appearance in
 private struct StatusPanelView: View {
     let enterAway: () -> Void
     let preview: () -> Void
+    let openPairing: () -> Void
     let openSettings: () -> Void
     @ObservedObject var ledger: SleepLedgerStore
     @ObservedObject var keepAwake: KeepAwake
@@ -59,6 +62,7 @@ private struct StatusPanelView: View {
                 Button(action: enterAway) { Label("进入离开模式", systemImage: "figure.walk.departure") }
                     .buttonStyle(.borderedProminent)
                 Button("预览遮罩", action: preview)
+                Button("配对手机", action: openPairing)
                 Spacer()
                 Button(action: openSettings) { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)

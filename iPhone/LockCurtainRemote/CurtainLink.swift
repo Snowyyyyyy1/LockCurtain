@@ -40,6 +40,8 @@ struct CurtainSnapshot: Equatable, Sendable {
     /// Demo-only: the user has "walked away" and the demo is counting down
     /// before it covers the curtain.
     var isAway: Bool = false
+    /// 连续 5 次连上又在握手前断开，已经停止广播；等用户点「再试一次」/ 重新打开配对
+    var gaveUpConnecting: Bool = false
 }
 
 /// The only door between the UI and a curtain. HomeView, SettingsView and

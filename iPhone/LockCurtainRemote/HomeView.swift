@@ -174,7 +174,7 @@ struct HomeView: View {
                     .transition(.opacity)
                 } else if model.phase == .closed && !model.isPending {
                     closedNote
-                        .glassEffect(.regular, in: .rect(cornerRadius: 26))
+                        .glassEffect(.clear, in: .rect(cornerRadius: 26))
                         .glassEffectID("action", in: glassNS)
                         .transition(.opacity)
                 } else {

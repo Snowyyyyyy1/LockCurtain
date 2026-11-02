@@ -81,6 +81,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key>     <string>14.0</string>
     <key>LSUIElement</key>                <true/>
     <key>NSHighResolutionCapable</key>    <true/>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>LockCurtain 用蓝牙和你的 iPhone 配对，让手机能盖上幕布、解锁。</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>LockCurtain 用蓝牙和你的 iPhone 配对，让手机能盖上幕布、解锁。</string>
     <key>NSScreenCaptureUsageDescription</key>
     <string>LockCurtain 需要屏幕录制权限来读取当前壁纸，用于绘制遮罩背景。</string>
     <key>SUFeedURL</key>                  <string>$FEED</string>

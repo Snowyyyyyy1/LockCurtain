@@ -36,8 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var panel = StatusPanelController(actions: StatusPanelActions(
         enterAway: { [overlay] in overlay.enterAway() },
         preview: { [overlay] in overlay.togglePreview() },
+        openPairing: { [weak self] in self?.pairingWindow.show() },
         openSettings: { [weak self] in self?.settings.show() }), keepAwake: keepAwake)
     private let overlay = OverlayController()
+    private let pairing = PhonePairing()
+    private lazy var pairingWindow = PairingWindowController(pairing: pairing)
     private let keepAwake = KeepAwake()
     private lazy var control = ControlServer { [weak self] cmd in await self?.handleCommand(cmd) ?? [:] }
     private var permissionTimer: Timer?
@@ -79,10 +82,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlay.onModeChange = { [weak self] mode in
                 self?.updateStatusIcon()
                 if mode == nil { Updater.shared.curtainHidden() }
+                // 幕布开关状态同步给已连上的手机
+                self?.pairing.reportCurtainState(mode == nil ? "open" : "closed")
             }
+            // 已经配过对的手机要能随时找回来，所以这时就开始找它（第一次配对才弹蓝牙权限）
+            if pairing.isPaired { pairing.prepare() }
             keepAwake.onChange = { [weak self] in self?.updateStatusIcon() }
             keepAwake.restore()
             overlay.watchLockState()
+            pairing.onCommand = { [weak self] cmd in _ = await self?.handleCommand(cmd) }
             control.start()
             ruleEngine.start()
             // KVO 也能收到其他进程（defaults write）的修改，didChangeNotification 只管本进程
@@ -106,8 +114,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleCommand(_ cmd: String) async -> [String: Any] {
-        guard cmd == "settings" else { return await overlay.handleCommand(cmd) }
-        settings.show()
+        switch cmd {
+        case "settings":
+            settings.show()
+        case "pairing":
+            pairingWindow.show()
+        case "pairselftest":
+            // 配对加密层自测：进程内跑，结果写到 /tmp/lockcurtain-pairtest.txt，不碰蓝牙、不退出
+            PairingSelfTest.runAndWrite()
+        default:
+            return await overlay.handleCommand(cmd)
+        }
         return ["ok": true, "running": true]
     }
 
@@ -176,6 +193,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() { settings.show() }
+    @objc private func openPairing() { pairingWindow.show() }
+
+    /// 撤销配对：丢了手机、别人用过这台机器时一键断开
+    @objc private func revokePairing() {
+        guard pairing.isPaired else { return }
+        let alert = NSAlert()
+        alert.messageText = "撤销这台手机的配对？"
+        alert.informativeText = "撤销后要在这台手机上重新输码，才能再盖上幕布。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "撤销配对")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn {
+            pairing.unpairAll()
+            pairingWindow.show()
+        }
+    }
     @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
 
     // ---------- 权限申请 ----------
@@ -299,6 +332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let pv = NSMenuItem(title: "锁屏遮罩预览", action: #selector(toggleOverlay), keyEquivalent: "")
         pv.target = self; menu.addItem(pv)
+
+        let pair = NSMenuItem(title: "配对手机…", action: #selector(openPairing), keyEquivalent: "")
+        pair.target = self; menu.addItem(pair)
+
+        let revoke = NSMenuItem(title: "撤销配对", action: #selector(revokePairing), keyEquivalent: "")
+        revoke.target = self; menu.addItem(revoke)
 
         let fh = NSMenuItem(title: "紧急关闭遮罩", action: #selector(forceHideOverlay), keyEquivalent: "")
         fh.target = self; menu.addItem(fh)
