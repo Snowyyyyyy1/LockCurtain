@@ -14,7 +14,7 @@ struct HomeView: View {
                     showsDemoBadge: model.demoMode
                 )
                 .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 20, trailing: 0))
+                .listRowInsets(EdgeInsets(top: 20, leading: 0, bottom: 16, trailing: 0))
             }
 
             Section {
@@ -166,7 +166,7 @@ struct HomeView: View {
                     } label: {
                         Text("去配对")
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 50)
+                            .padding(.vertical, 3)
                     }
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
@@ -187,7 +187,7 @@ struct HomeView: View {
                     coverButton
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, 16)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity)
         }
@@ -206,13 +206,13 @@ struct HomeView: View {
                     ProgressView()
                     Text("正在盖上…")
                 }
+                .padding(.vertical, 3)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .disabled(true)
             .glassEffectID("action", in: glassNS)
             .frame(maxWidth: .infinity)
-            .frame(minHeight: 50)
             .accessibilityElement(children: .combine)
         } else {
             Button {
@@ -223,7 +223,7 @@ struct HomeView: View {
                     systemImage: "curtains.closed"
                 )
                 .frame(maxWidth: .infinity)
-                .frame(minHeight: 50)
+                .padding(.vertical, 3)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)

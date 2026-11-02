@@ -50,7 +50,7 @@ struct OnboardingView: View {
                     } label: {
                         Text("去配对")
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 50)
+                            .padding(.vertical, 3)
                     }
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
@@ -60,12 +60,12 @@ struct OnboardingView: View {
                     } label: {
                         Text("手上没有 Mac？先看看演示")
                             .frame(maxWidth: .infinity)
-                            .frame(minHeight: 50)
+                            .padding(.vertical, 3)
                     }
                     .buttonStyle(.glass)
                     .controlSize(.large)
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 16)
                 .padding(.bottom, 8)
             }
         }

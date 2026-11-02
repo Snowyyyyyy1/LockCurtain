@@ -42,8 +42,8 @@ struct MacScreenIllustration: View {
 
     private var illustrationHeight: CGFloat {
         if dynamicTypeSize >= .accessibility1 { return 120 }
-        if dynamicTypeSize >= .xxLarge { return 150 }
-        return 190
+        if dynamicTypeSize >= .xxLarge { return 170 }
+        return 220
     }
 
     var body: some View {

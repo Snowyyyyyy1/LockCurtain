@@ -149,7 +149,6 @@ struct PairingSheet: View {
     private var searchingView: some View {
         VStack(spacing: 16) {
             ProgressView()
-                .controlSize(.large)
             Text("找这台 Mac…")
                 .font(.title2.bold())
             Text("Mac 要醒着、在附近，蓝牙也要开着。")
@@ -262,7 +261,7 @@ struct PairingSheet: View {
             } label: {
                 Text("完成")
                     .frame(maxWidth: .infinity)
-                    .frame(minHeight: 50)
+                    .padding(.vertical, 3)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
