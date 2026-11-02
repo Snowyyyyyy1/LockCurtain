@@ -1,0 +1,29 @@
+version: 4
+platform: ios
+# LockCurtain 的手机版（iPhone 端）。和 Mac 版各建各的：
+# Mac 版用仓库根的 build.sh / verify.sh，这个文件只管 iPhone 那个 Xcode 工程。
+# 构建：runbuild <project-id> --platform ios [--sign]
+signing:
+  bundles:
+    - com.snowyy.lockcurtain-remote-9owr
+build:
+  script: |
+    rm -rf -- iPhone/.airbuild/artifacts/LockCurtainRemote.xcarchive
+
+    airbuild-xcode archive \
+      -project iPhone/LockCurtainRemote.xcodeproj \
+      -scheme LockCurtainRemote \
+      -archivePath iPhone/.airbuild/artifacts/LockCurtainRemote.xcarchive
+  artifact:
+    path: iPhone/.airbuild/artifacts/LockCurtainRemote.xcarchive
+test:
+  app:
+    script: |
+      rm -rf -- iPhone/.airbuild/artifacts/TestResults.xcresult
+      airbuild-xcode test \
+        -project iPhone/LockCurtainRemote.xcodeproj \
+        -scheme LockCurtainRemote \
+        -resultBundlePath iPhone/.airbuild/artifacts/TestResults.xcresult \
+        $additional_options
+    outputs:
+      - iPhone/.airbuild/artifacts/TestResults.xcresult

@@ -1,0 +1,9 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Made with AirBuild" : {
+      "comment" : "Credit at the bottom of Settings. Keep the name AirBuild as is."
+    }
+  },
+  "version" : "1.0"
+}

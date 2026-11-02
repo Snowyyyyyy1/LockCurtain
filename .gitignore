@@ -5,3 +5,8 @@ LockCurtain Debug.app/
 .cache/
 .signing-cert
 dist/
+
+# iPhone 端构建产物
+iPhone/.airbuild/artifacts/
+iPhone/build/
+iPhone/.dd/
