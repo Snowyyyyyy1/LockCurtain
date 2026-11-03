@@ -1,3 +1,5 @@
+// 开发用的蓝牙探针：只进 DEBUG 包（design v2.9 P1-1），正式包里没有这段代码
+#if DEBUG
 import Foundation
 import CoreBluetooth
 import Combine
@@ -393,3 +395,4 @@ extension BLEProbe: CBPeripheralDelegate {
         return names.isEmpty ? "none" : names.joined(separator: "+")
     }
 }
+#endif

@@ -5,12 +5,18 @@ struct DiagnosticsView: View {
 
     var body: some View {
         Form {
-            Section("连接") {
+            Section {
                 LabeledContent("蓝牙", value: model.bluetoothDiagnosticValue)
                 LabeledContent("信号", value: model.signalDiagnosticValue)
                 LabeledContent("最后一次事件", value: model.lastEventDiagnosticValue)
+            } header: {
+                Text("连接")
+            } footer: {
+                Text("这些只是这一次连接的情况，不上传。")
             }
 
+            #if DEBUG
+            // 开发用的蓝牙探针：正式包里没有（design v2.9 P1-1）
             Section {
                 NavigationLink {
                     ContentView()
@@ -24,9 +30,8 @@ struct DiagnosticsView: View {
                 }
             } header: {
                 Text("探针")
-            } footer: {
-                Text("这些只是这一次连接的情况，不上传。")
             }
+            #endif
         }
         .navigationTitle("排查信息")
         .navigationBarTitleDisplayMode(.inline)
