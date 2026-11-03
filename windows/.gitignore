@@ -13,3 +13,5 @@ Tests/CaptureProbe/obj/
 Tests/CaptureProbe/out/
 LockCurtainCtl/bin/
 LockCurtainCtl/obj/
+Tests/PhoneSelfTest/bin/
+Tests/PhoneSelfTest/obj/

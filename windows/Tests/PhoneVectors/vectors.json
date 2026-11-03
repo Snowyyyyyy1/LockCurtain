@@ -1,0 +1,2900 @@
+{
+  "cpaceDraft" : {
+    "ada" : "414461",
+    "adb" : "414462",
+    "ci" : "0b415f696e69746961746f720b425f726573706f6e646572",
+    "g" : "d04bf6d41f6a289632a2e929fa29bebd51092512a7829fdde7d314b62f05a73f",
+    "generatorString" : "0843506163653235350850617373776f72646d00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000180b415f696e69746961746f720b425f726573706f6e646572107e4b4791d6a8ef019b936c79fb7f2c57",
+    "isk" : "6e19b875f7a561d6b3ca3dbb9ef42ac55de3e717881018204b8922b4d5e53bb2aa82c300bea7b65d2b671da71922ddf6472301b79bc270adfa8bf413285f2263",
+    "K" : "5b067effbdc0b2a0e1d907b21ebb25cfedb96a852179a847c37e43ee71322c6b",
+    "prs" : "50617373776f7264",
+    "sid" : "7e4b4791d6a8ef019b936c79fb7f2c57",
+    "ya" : "21b4f4bd9e64ed355c3eb676a28ebedaf6d8f17bdc365995b319097153044080",
+    "Ya" : "1d13c89278cdadd826f6d8d7f887701430f8380ddc17611cdd6dc989ce0c9f32",
+    "yb" : "848b0779ff415f0af4ea14df9dd1d3c29ac41d836c7808896c4eba19c51ac40a",
+    "Yb" : "248cccf6d5cdc3646f0ad593f9e6cef4e69d4945f8372e623512ecea32185623"
+  },
+  "elligator2" : [
+    {
+      "in" : "0000000000000000000000000000000000000000000000000000000000000000",
+      "out" : "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "in" : "0100000000000000000000000000000000000000000000000000000000000000",
+      "out" : "9cdb525555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "in" : "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "out" : "9cdb525555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "in" : "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+      "out" : "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "in" : "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "out" : "1e5942dd97c756040d27755f1e5b11349cd47d796c45d07052f7e5b11541c349"
+    },
+    {
+      "in" : "c559347c11d72cf3052c45252c4ef8c02a07ed1304fffad6f622c153801cf9a1",
+      "out" : "79e2632ffe73aaca657b520694ea01b265e49036d14cd09c6460bb3da4bee871"
+    },
+    {
+      "in" : "f76609b0f016c828c5ff9456ae978fb1f74008832deedb8f5b26b1fd4417fd08",
+      "out" : "7b6f01fd29b42f3f1480bd3612dd0fb2dbfaf293465988b541b267bbcc4c2841"
+    },
+    {
+      "in" : "a55b9aefdd9b61c0cc86a4a03c3b68e827902ec4cc47132506b6433a0fb4b8ad",
+      "out" : "9f8c16b1ab66de129e3eb4d6d16fade646dc0c867b06b18bfb6312b01d50a60e"
+    },
+    {
+      "in" : "f33916996277d99615c14c84082c1fe916eb8605628d655bbb061f9c93514781",
+      "out" : "a8bf22fbce69c85668d8d33e54bf311127c3c4944e28d661d4d0d1a2c88ef72b"
+    },
+    {
+      "in" : "5b2ba88a53f52c1c292511432eb92435b5fd570234cb593702905e6880d2f5f5",
+      "out" : "1822d12d1d510ccc0f1bd13e98cd5e62904ba581368327e89afd347a81f19f67"
+    },
+    {
+      "in" : "8792a391c90af6e2db32509d92d9e6e847477fc32c1ba77913789ef65ee8daaa",
+      "out" : "7e7d56789088697e413ab80df80cc503f2f78894f5790c564c59f1dcb4f6447a"
+    },
+    {
+      "in" : "071ce8ca9a06d84e25086c1edb6ab89101c3d7e5bb4c2343fdc8f85ed889975a",
+      "out" : "783c8fd62c8800125b6f0b96bfd366965867087fdcde0b8d917a510f0cf1eb1a"
+    },
+    {
+      "in" : "63098b628f7b44430eabb9393c50b2f6ce622ccc2660ac0ef477801e977faaaa",
+      "out" : "79cfaf610e18162f59c8a3f5a65da2135b9cf3be97d2d1b2ce06cd7e348d7c1c"
+    },
+    {
+      "in" : "cc51d02e88b8e8f8599d23548530f4d7251a257859d601f2230e2b90b560323e",
+      "out" : "b55eda8d1dc9d2099f1f4c5aae642e19375c0d3f390f06f123e8a3489af8985b"
+    },
+    {
+      "in" : "b840cb6e32a322838d5d084383bbe236604d6fe706bc41af6afb3cc1a8064bd5",
+      "out" : "87d88a353c1ca4cddebb48a789f85b7317df95a74d520b82305d213fa7784472"
+    },
+    {
+      "in" : "55481221465da445c8b0e3a6f1d20933ce54871a75e575b67b4e678ffcad3578",
+      "out" : "b727ebbcfc6078714c824ec6e9a18d9d2cb36071003e26e6b36fd1b12ce3e740"
+    },
+    {
+      "in" : "3e44f8cbd9a797c816ff467cb61835ec27072259a7211db5477c8f91687b4c93",
+      "out" : "550cde3c771cb867f13c6b65fb8b25e036757d198651fdd5c0f32ab90806d10a"
+    },
+    {
+      "in" : "b6f14a3e485ce7368dafc63680bfec79c4d2b396ed7641a880de8c03fc49b605",
+      "out" : "47e2059193e79cb2eaaae301bfdb24331cd7c89b0b2819c87488cc5d6bd4a043"
+    },
+    {
+      "in" : "5919c8d50628276daa649b5e7ed1de20df8119a806a89273bbc34de2e4ffa4a6",
+      "out" : "c0a96e836a44a6a59bdad2927942d734effb60766ff17549a6c9176863035465"
+    },
+    {
+      "in" : "b12f61abb24c5736ba49affdd16f2d1bdd7add66aa2dd75bcc58f47ef14d2686",
+      "out" : "9af3798534ff750a6985371ca0d18f257ccd0ba61663e8f3abdd2b90040bf20a"
+    },
+    {
+      "in" : "be3664825a3e5fcfc97a390385ef6ddcc9e368dbce96de265c26f5f02515a97b",
+      "out" : "f4d2adba536f2aace954a219a84d40511d30620251017c30ea8dbabe9c64d219"
+    },
+    {
+      "in" : "1aa2048d430ea8dea7d4521e58104c6ccb978c75903184ad7a45ddcce4ddd601",
+      "out" : "e1df56b1fc89ceb775e7f823e55c4d0065a458cb03f6be145d18923ef1e3775f"
+    },
+    {
+      "in" : "68efe2201dfdd7f4fa22520b8c7211006837f1b1fe5857fdad04124f3497110a",
+      "out" : "7b3e48cf4338bc9fcbc7578edc2fd2b6733021d8cdd8ae728291025df79e811b"
+    },
+    {
+      "in" : "d4b9e9594f30c265272d41315cb265d1bc7dca5e365ab1cf86e3061f27f63a57",
+      "out" : "faf3e32531aa1ad7f9a33e3893005e7ae1e28d1e546b886407ad018f9874ba11"
+    },
+    {
+      "in" : "e0e5913aaae2a69a773bf4ebb0420f5b4fa61de3ea5355020c1a741623e02a19",
+      "out" : "7ab714c38d401f383b9e7e5978c393e38743912102533d4531fb83fc5c87f61f"
+    },
+    {
+      "in" : "ed0d2b0c1ad1b0a2db4d60d9196fe56366f71b43a36665b4787956dacc1a02c1",
+      "out" : "f85f0672f96134e3690bdf1ab7a88685de55d40df58c8344364331f20c12554b"
+    },
+    {
+      "in" : "7ffe9ddf2c1b9cb91582b4bb98e5d3512f604562afbc132bcd9fd9ae1358e912",
+      "out" : "1521f6bd48f76312a8c5ec0d81de2c7c5ce169162103b4749cfa8b7fc03b5d63"
+    },
+    {
+      "in" : "537f88df77c1df7892791afa9a854b043e2f01dfc4ba14c31754f9813dead793",
+      "out" : "6afd206c2dc7827b1b47a8e7734860a70ec16cf8faea74505cd7d5400c917547"
+    },
+    {
+      "in" : "e397f4adae2f9523cf747dcf80caac9906deca66ac4e79bc5bab9d334e03191c",
+      "out" : "0a7d72fc33d4609b5ebffe9c86dce37b8a071b6a005b4823812b5e80793ac35b"
+    },
+    {
+      "in" : "77a1f3490721460294aedd1534c0ac5d0df2ed93999bb2fe1f1da4d5624a2c6d",
+      "out" : "5d00f22d001afcf3ffb6c2474a0aa22de6bdcdb48897d92cd42fe5c5d437d044"
+    },
+    {
+      "in" : "983fba2d75c92d2a81defd20f075482165aa43847bf6a6ea318dfc879f0b480d",
+      "out" : "87bf074fcf897d1403fbd11967ffb07acbff0febc931387361b79fcb934b611d"
+    },
+    {
+      "in" : "3b9de4539f8175bed6ed278b7bee4b0a552c0c77e69b0d53ca35cded2aade929",
+      "out" : "3d937a294eca6bee0be0036ed085afbb6dbfdc314bac349a26c475fcfdbb4115"
+    },
+    {
+      "in" : "895e2ef675442af8b84542aba15f58ca99c2d969aebb49108dfca21803d11af4",
+      "out" : "ce131003b1dc118ca7c369f41149d10ca4ae2ebf91e25023db63b1ccafbc8b47"
+    },
+    {
+      "in" : "b8ff2c29c4f632f64caa66822c4eda48a363e4542cada4dabfcb757e9574a820",
+      "out" : "01a29072a6a77c4bfd54c19c117b92f4ca358fb9610704151191e72bb6fc5a1d"
+    },
+    {
+      "in" : "2191d3ecbddc7b44460167d54f0468f8978b74ef0c5f171c66d3937beb5e93d6",
+      "out" : "e90ccf977450782661a5f62899d0d62801ab0aace5c0c8813881ccf0660acb06"
+    },
+    {
+      "in" : "3c7f3430c2593cad809667879b28ca22f5a732f3eed94a8bfaa8a2fc9be6cccf",
+      "out" : "f7e77c9d11ccfa55e155ed75f02dc30c457d0b7f1f7e1d024d6d710a90927608"
+    },
+    {
+      "in" : "254f0446e4409b52eae13e1fb2aaae709cd8e2be71f99199fa712e8b7290687e",
+      "out" : "97f74415122f9b6caab09828fc4f5c7c598b3a5c43fb90145868213da3dc2f78"
+    },
+    {
+      "in" : "2b01af302ba8a1854540459bcfcdd79f1f15473f4e7d6babf14413cce9f04b2a",
+      "out" : "33d7f84bc7bc1eed09b23d0b463d5f2dea41de5b97cb1762417fca1f6941e324"
+    },
+    {
+      "in" : "e34904c67cf10438554219c0bc58c46c5609fc3a0144bb326c7cb515a69a8573",
+      "out" : "4b735bb10f730778c06061eb48aaaa968c8b4d2c371664b3e92883bda03eec27"
+    },
+    {
+      "in" : "758e0a00de4764abc5f2eea5ca9611d7d1518ac58e066558c36827f0c95174fd",
+      "out" : "beb565ac6e56d27d35bee0ffe12b0c195f88689704cb5bca6004e55005c76a31"
+    },
+    {
+      "in" : "ffb16515abbc525a5d1191507857c7a622328db5e19d8d80bc1bdac6ae3595db",
+      "out" : "7083ee285be84213bbd3ee9c13fb29ff34e60df9fea09974dfa7a1b82c80a946"
+    },
+    {
+      "in" : "82f5d2a39249478fa24b159bffb8be49b2f89e94583b1060010fafe872f30e88",
+      "out" : "558a66569c6fb6d74120cbb96fcacc25bdd568a7b752d402eba77b2478826d1d"
+    },
+    {
+      "in" : "ad12c0f557c6601eb586a06759d764f5f9c0e1400fc167657a880b40019332c1",
+      "out" : "4a95bdcdc2ef690391a30c1f152678ee8930dabcc26a74617909d6bd8b223b47"
+    },
+    {
+      "in" : "e1cd8688e0cdce56fc001a4c7a7a9d5964e415e1f72c6f20bf0fd434a55519c4",
+      "out" : "27b0770247ce89bfc940f0eb7c550766b1f64077485886e5bcddb4a11e3f7d79"
+    },
+    {
+      "in" : "3ef1f6412d447ac443e17d70f291c224a74f587a19ef1a4dcae45a944e554035",
+      "out" : "bb98a2bd0e31ba068d6eb23559f98a5f63880834e2937978a786a7dd1ff4a443"
+    }
+  ],
+  "framing" : [
+    {
+      "chunks" : [
+        "00000102030405060708090a0b0c0d0e0f101112",
+        "01131415161718191a1b1c1d1e1f202122232425",
+        "02262728292a2b2c2d2e2f303132333435363738",
+        "03393a3b3c3d3e3f404142434445464748494a4b",
+        "044c4d4e4f505152535455565758595a5b5c5d5e",
+        "055f606162636465666768696a6b6c6d6e6f7071",
+        "0672737475767778797a7b7c7d7e7f8081828384",
+        "0785868788898a8b8c8d8e8f9091929394959697",
+        "0898999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aa",
+        "09abacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbd",
+        "8abebfc0c1c2c3c4c5c6c7"
+      ],
+      "maxChunk" : 20,
+      "message" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+    },
+    {
+      "chunks" : [
+        "0000",
+        "0101",
+        "0202",
+        "0303",
+        "0404",
+        "0505",
+        "0606",
+        "0707",
+        "0808",
+        "0909",
+        "0a0a",
+        "0b0b",
+        "0c0c",
+        "0d0d",
+        "0e0e",
+        "0f0f",
+        "1010",
+        "1111",
+        "1212",
+        "1313",
+        "1414",
+        "1515",
+        "1616",
+        "1717",
+        "1818",
+        "1919",
+        "1a1a",
+        "1b1b",
+        "1c1c",
+        "1d1d",
+        "1e1e",
+        "1f1f",
+        "2020",
+        "2121",
+        "2222",
+        "2323",
+        "2424",
+        "2525",
+        "2626",
+        "2727",
+        "2828",
+        "2929",
+        "2a2a",
+        "2b2b",
+        "2c2c",
+        "2d2d",
+        "2e2e",
+        "2f2f",
+        "3030",
+        "3131",
+        "3232",
+        "3333",
+        "3434",
+        "3535",
+        "3636",
+        "3737",
+        "3838",
+        "3939",
+        "3a3a",
+        "3b3b",
+        "3c3c",
+        "3d3d",
+        "3e3e",
+        "3f3f",
+        "4040",
+        "4141",
+        "4242",
+        "4343",
+        "4444",
+        "4545",
+        "4646",
+        "4747",
+        "4848",
+        "4949",
+        "4a4a",
+        "4b4b",
+        "4c4c",
+        "4d4d",
+        "4e4e",
+        "4f4f",
+        "5050",
+        "5151",
+        "5252",
+        "5353",
+        "5454",
+        "5555",
+        "5656",
+        "5757",
+        "5858",
+        "5959",
+        "5a5a",
+        "5b5b",
+        "5c5c",
+        "5d5d",
+        "5e5e",
+        "5f5f",
+        "6060",
+        "6161",
+        "6262",
+        "6363",
+        "6464",
+        "6565",
+        "6666",
+        "6767",
+        "6868",
+        "6969",
+        "6a6a",
+        "6b6b",
+        "6c6c",
+        "6d6d",
+        "6e6e",
+        "6f6f",
+        "7070",
+        "7171",
+        "7272",
+        "7373",
+        "7474",
+        "7575",
+        "7676",
+        "7777",
+        "7878",
+        "7979",
+        "7a7a",
+        "7b7b",
+        "7c7c",
+        "7d7d",
+        "7e7e",
+        "7f7f",
+        "0080",
+        "0181",
+        "0282",
+        "0383",
+        "0484",
+        "0585",
+        "0686",
+        "0787",
+        "0888",
+        "0989",
+        "0a8a",
+        "0b8b",
+        "0c8c",
+        "0d8d",
+        "0e8e",
+        "0f8f",
+        "1090",
+        "1191",
+        "1292",
+        "1393",
+        "1494",
+        "1595",
+        "1696",
+        "1797",
+        "1898",
+        "1999",
+        "1a9a",
+        "1b9b",
+        "1c9c",
+        "1d9d",
+        "1e9e",
+        "1f9f",
+        "20a0",
+        "21a1",
+        "22a2",
+        "23a3",
+        "24a4",
+        "25a5",
+        "26a6",
+        "27a7",
+        "28a8",
+        "29a9",
+        "2aaa",
+        "2bab",
+        "2cac",
+        "2dad",
+        "2eae",
+        "2faf",
+        "30b0",
+        "31b1",
+        "32b2",
+        "33b3",
+        "34b4",
+        "35b5",
+        "36b6",
+        "37b7",
+        "38b8",
+        "39b9",
+        "3aba",
+        "3bbb",
+        "3cbc",
+        "3dbd",
+        "3ebe",
+        "3fbf",
+        "40c0",
+        "41c1",
+        "42c2",
+        "43c3",
+        "44c4",
+        "45c5",
+        "46c6",
+        "c7c7"
+      ],
+      "maxChunk" : 2,
+      "message" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+    },
+    {
+      "chunks" : [
+        "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7",
+        "81b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+      ],
+      "maxChunk" : 185,
+      "message" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+    },
+    {
+      "chunks" : [
+        "80000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+      ],
+      "maxChunk" : 512,
+      "message" : "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7"
+    },
+    {
+      "chunks" : [
+        "80"
+      ],
+      "maxChunk" : 20,
+      "message" : ""
+    }
+  ],
+  "generator" : "Tools\/phone-vectors.swift (Swift CryptoKit reference)",
+  "handshakes" : [
+    {
+      "channelID" : "164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e656f9619ff8b86d011b42d00c04fc964ff0d726573706f6e6465723a6d6163",
+      "generatorString" : "084350616365323535063438323931336f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000045164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e656f9619ff8b86d011b42d00c04fc964ff0d726573706f6e6465723a6d6163101f262d343b424950575e656c737a8188",
+      "gMac" : "6ed9ee5d081aaefe33f784b124a8963ea862211a8f6fca382c1cdafa1103fc16",
+      "gPhone" : "6ed9ee5d081aaefe33f784b124a8963ea862211a8f6fca382c1cdafa1103fc16",
+      "isk" : "8708097ab965e8b85405dc029915267a6d3a061f20e982dbcbcd3d25759cdda046829e23c1e59d92ed62828fcb98c76c6338eb62cda5ab80437eaaab2e504749",
+      "Kmac" : "09c9253b86e193ab9b780ce4c3a6716322a5e8946f38f626b673e3658ba7c642",
+      "Kphone" : "09c9253b86e193ab9b780ce4c3a6716322a5e8946f38f626b673e3658ba7c642",
+      "macAcceptsTa" : true,
+      "macCode" : "482913",
+      "macMacKey" : "6f55fe2d1004baca990865757883393c3a746e2d3418eab42f199d771bf9d47bf33877f70308efe04cdaaeae73916d4acbbc7a064f181018480885e34aeb8d08",
+      "macSharedKey" : "b4868e38872ef67f419f09029fbab869e5a7513cedbefe9dafa17bda7df48fe6",
+      "name" : "right code",
+      "pairAbort" : "020a6f9619ff8b86d011b42d00c04fc964ff1f262d343b424950575e656c737a8188",
+      "pairAccepted" : "02096f9619ff8b86d011b42d00c04fc964ff1f262d343b424950575e656c737a8188df58e2e7f6dc1a8b5edcc0f3caaf2721b792480ad6ef9991791d11b905f84bec",
+      "pairConfirm" : "02086f9619ff8b86d011b42d00c04fc964ff1f262d343b424950575e656c737a818820e1f72c8db97c37a6ee82c93d384feff7157653f97bd280e24d0301412a0de1882f4d8045d5a0f6f969b1d32b57ef94ec6c36e27195eb3c97c8d3b1112bf4a4",
+      "pairRequest" : "02016f9619ff8b86d011b42d00c04fc964ff1f262d343b424950575e656c737a818868394791f8f4f78dbaa2dc04eae9b49dc03f3ddf7ef7be204886829361f2ed77",
+      "pairResponse" : "02021f262d343b424950575e656c737a8188ae194894f5a5cccdcb97061f4284d2d44f1d69c8754e6168efef3dd37e9a8310d7a6b279d42206b1a5c70a4edf0eca50eeb5f7548ff77d634460c6517a46fc2eaf24ab08d275e062b9fed60f045d2add628b0ebf2fdefdfd850713f9581160dd",
+      "phoneAcceptsTb" : true,
+      "phoneCode" : "482913",
+      "phoneID" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "phoneIDBytes" : "6f9619ff8b86d011b42d00c04fc964ff",
+      "phoneMacKey" : "6f55fe2d1004baca990865757883393c3a746e2d3418eab42f199d771bf9d47bf33877f70308efe04cdaaeae73916d4acbbc7a064f181018480885e34aeb8d08",
+      "phoneSharedKey" : "b4868e38872ef67f419f09029fbab869e5a7513cedbefe9dafa17bda7df48fe6",
+      "sid" : "1f262d343b424950575e656c737a8188",
+      "ta" : "20e1f72c8db97c37a6ee82c93d384feff7157653f97bd280e24d0301412a0de1882f4d8045d5a0f6f969b1d32b57ef94ec6c36e27195eb3c97c8d3b1112bf4a4",
+      "tb" : "d7a6b279d42206b1a5c70a4edf0eca50eeb5f7548ff77d634460c6517a46fc2eaf24ab08d275e062b9fed60f045d2add628b0ebf2fdefdfd850713f9581160dd",
+      "ya" : "3e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb02091017",
+      "Ya" : "68394791f8f4f78dbaa2dc04eae9b49dc03f3ddf7ef7be204886829361f2ed77",
+      "yb" : "5d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0f7fe050c131a21282f36",
+      "Yb" : "ae194894f5a5cccdcb97061f4284d2d44f1d69c8754e6168efef3dd37e9a8310"
+    },
+    {
+      "channelID" : "164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e650123456789abcdef0123456789abcdef0d726573706f6e6465723a6d6163",
+      "generatorString" : "084350616365323535063030303030306f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000045164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e650123456789abcdef0123456789abcdef0d726573706f6e6465723a6d6163107c838a91989fa6adb4bbc2c9d0d7dee5",
+      "gMac" : "09fe86af710b5a256a63340481ce8c1e8637527788207f7bcc9528d93c5c7f69",
+      "gPhone" : "09fe86af710b5a256a63340481ce8c1e8637527788207f7bcc9528d93c5c7f69",
+      "isk" : "2099fd272d65f22fcf618f550c06f4300aa8e4e13294ad60559f54051ca50d3db81b8dfe0b1ad804bec35bcbd125b9221e1a550c1d3841cf98084bac220a65c7",
+      "Kmac" : "b33a150427a101f073a0da9e4303b86178ff17e449fc744bdeaf416a66ca8136",
+      "Kphone" : "b33a150427a101f073a0da9e4303b86178ff17e449fc744bdeaf416a66ca8136",
+      "macAcceptsTa" : true,
+      "macCode" : "000000",
+      "macMacKey" : "7b3113c4e9552033ae6ab0495bdccf3ebf688f1a6d14e7d67e25ef112887c2ef4982c56e34c5b284a36a27b76cd4ee3167e4299a7015319ba44b08b996881528",
+      "macSharedKey" : "32d69640409363a6157625acf1fb1855176b2850f1a58b37b92c78230d33e9e1",
+      "name" : "right code 000000",
+      "pairAbort" : "020a0123456789abcdef0123456789abcdef7c838a91989fa6adb4bbc2c9d0d7dee5",
+      "pairAccepted" : "02090123456789abcdef0123456789abcdef7c838a91989fa6adb4bbc2c9d0d7dee53d76a6a5c046fa741b4dd59cfb23f542a746eeb58be5dae3219d7676a6b993e7",
+      "pairConfirm" : "02080123456789abcdef0123456789abcdef7c838a91989fa6adb4bbc2c9d0d7dee570b55037c8eec6c8d7933227f26aa572180303212874c9bfb49a1179a0823d41a49b50d9830982d12d3fa26d66a63980150efa58caf5055bc0ddf739081c05b1",
+      "pairRequest" : "02010123456789abcdef0123456789abcdef7c838a91989fa6adb4bbc2c9d0d7dee5161f131485ec346de0b99dba8b58ba4ba0557478e6bdeda12491e9a98d683a78",
+      "pairResponse" : "02027c838a91989fa6adb4bbc2c9d0d7dee568a06ff552dd11ecc98e7fb9c6a7700aebae97330bf65aaeb95bb262ff33d47d1744fcad3dc4c22d746939f0fbf736d54cd3464bb735cfbf929a4066e3253b0464f6e98694f5acaa924613369170b612055de89e9fa34a12ec5aaa7e3236df1f",
+      "phoneAcceptsTb" : true,
+      "phoneCode" : "000000",
+      "phoneID" : "01234567-89AB-CDEF-0123-456789ABCDEF",
+      "phoneIDBytes" : "0123456789abcdef0123456789abcdef",
+      "phoneMacKey" : "7b3113c4e9552033ae6ab0495bdccf3ebf688f1a6d14e7d67e25ef112887c2ef4982c56e34c5b284a36a27b76cd4ee3167e4299a7015319ba44b08b996881528",
+      "phoneSharedKey" : "32d69640409363a6157625acf1fb1855176b2850f1a58b37b92c78230d33e9e1",
+      "sid" : "7c838a91989fa6adb4bbc2c9d0d7dee5",
+      "ta" : "70b55037c8eec6c8d7933227f26aa572180303212874c9bfb49a1179a0823d41a49b50d9830982d12d3fa26d66a63980150efa58caf5055bc0ddf739081c05b1",
+      "tb" : "1744fcad3dc4c22d746939f0fbf736d54cd3464bb735cfbf929a4066e3253b0464f6e98694f5acaa924613369170b612055de89e9fa34a12ec5aaa7e3236df1f",
+      "ya" : "9ba2a9b0b7bec5ccd3dae1e8eff6fd040b121920272e353c434a51585f666d74",
+      "Ya" : "161f131485ec346de0b99dba8b58ba4ba0557478e6bdeda12491e9a98d683a78",
+      "yb" : "bac1c8cfd6dde4ebf2f900070e151c232a31383f464d545b626970777e858c93",
+      "Yb" : "68a06ff552dd11ecc98e7fb9c6a7700aebae97330bf65aaeb95bb262ff33d47d"
+    },
+    {
+      "channelID" : "164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e656f9619ff8b86d011b42d00c04fc964ff0d726573706f6e6465723a6d6163",
+      "generatorString" : "084350616365323535063030303030306f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000045164c6f636b4375727461696e2070616972696e672076321f696e69746961746f723a70686f6e656f9619ff8b86d011b42d00c04fc964ff0d726573706f6e6465723a6d616310d9e0e7eef5fc030a11181f262d343b42",
+      "gMac" : "7e5d2c5773e9623f37fcbbab4abb3c99424384bfe5c4fcb42aded3ca1391d94f",
+      "gPhone" : "134322a7d89a678838a57f680e5c1360e18519f6e06287a36e8b513346f5d755",
+      "isk" : "3a5522c790f9818106d29722262f813ce7bd41d50e25459edd0d085699479dd4b9b4ba7ead8189527a4dbf9a45845df3d129ce08da178f3ea9fd8d01c7c01d4b",
+      "Kmac" : "03101a8c02ccb20ec80a4d079ee4412be5e2aebc75a2059abc912b7675992709",
+      "Kphone" : "a7dd5a14b1fd7fefa7e24d8822f027f73509d76e98148986882ba3bdf755903f",
+      "macAcceptsTa" : false,
+      "macCode" : "482913",
+      "macMacKey" : "0cfc2633f4b00d2216363e34b41c78d729a5df69219bceee0041e1c8ebdf5e2b463c250e21e9fbc10b88576f0f98d83fb97de171053b552faa97b1d24a655ea0",
+      "macSharedKey" : "c876567138d91b12d8a50e7b3c977823764fe90f36391f76dbb22683905512a3",
+      "name" : "wrong code",
+      "pairAbort" : "020a6f9619ff8b86d011b42d00c04fc964ffd9e0e7eef5fc030a11181f262d343b42",
+      "pairConfirm" : "02086f9619ff8b86d011b42d00c04fc964ffd9e0e7eef5fc030a11181f262d343b42009ac9ba36938e3fc289cfd84f4267ccda6d4201b36405d03b7e1c7b44d10fef8fbbdb9e5c2d1fd8ea9ffec54e2b5065b96ac480e280e5310ed1e7eb4b91a80e",
+      "pairRequest" : "02016f9619ff8b86d011b42d00c04fc964ffd9e0e7eef5fc030a11181f262d343b42443f15448628017f0a769e57720ecc53cc0799977c516d4517646caa0bc21431",
+      "pairResponse" : "0202d9e0e7eef5fc030a11181f262d343b42861ec6fd75dfcdc51fa218d68292feaa7276ac3d55a044370ecc9a4305a3c30867d1e2cd4f39c2dade05a481affbcdfccfb8c982ec6b5d63b01569fb2a2dfb3b527949847474efdedb03b10ae894f3cde1246f566950ef7f0c087b99280f759c",
+      "phoneAcceptsTb" : false,
+      "phoneCode" : "000000",
+      "phoneID" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+      "phoneIDBytes" : "6f9619ff8b86d011b42d00c04fc964ff",
+      "phoneMacKey" : "67543c160de591b47081fac7d0593298bdf7c76eaa66c85b4c4e7958670b7f2622878330b2fd948b60af2399c11ef8ef8f1fdcffa3fee57c482e3e5ddc9aeed2",
+      "phoneSharedKey" : "ee81ca9252df2063931b193bd9ff7d0c3e496dc809268c2019e3637f437d7732",
+      "sid" : "d9e0e7eef5fc030a11181f262d343b42",
+      "ta" : "009ac9ba36938e3fc289cfd84f4267ccda6d4201b36405d03b7e1c7b44d10fef8fbbdb9e5c2d1fd8ea9ffec54e2b5065b96ac480e280e5310ed1e7eb4b91a80e",
+      "tb" : "67d1e2cd4f39c2dade05a481affbcdfccfb8c982ec6b5d63b01569fb2a2dfb3b527949847474efdedb03b10ae894f3cde1246f566950ef7f0c087b99280f759c",
+      "ya" : "f8ff060d141b222930373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1",
+      "Ya" : "443f15448628017f0a769e57720ecc53cc0799977c516d4517646caa0bc21431",
+      "yb" : "171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9f0",
+      "Yb" : "861ec6fd75dfcdc51fa218d68292feaa7276ac3d55a044370ecc9a4305a3c308"
+    }
+  ],
+  "liftGate" : {
+    "challengeLifetime" : 5,
+    "maxOpenChallenges" : 4,
+    "nearMedianDBm" : -65,
+    "rssiMaxAge" : 7,
+    "rssiSamples" : 3,
+    "scenarios" : [
+      {
+        "name" : "all conditions met",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.4000000000000004
+          }
+        ]
+      },
+      {
+        "name" : "not covered",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 1,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 2
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "notCovered",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 3,
+            "status" : 1,
+            "t" : 2.2000000000000002
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "notCovered",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 3,
+            "t" : 2.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "phone locked",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "not near -70",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -70
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -71
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -69
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "notNear(-70)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "median of strong+weak",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -40
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -80
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -80
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "notNear(-80)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "median -62",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -80
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -62
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "threshold exactly -65",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -65
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -65
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -65
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "threshold -66",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -66
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -66
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -66
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "notNear(-66)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "only 2 rssi",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "noRSSI(2)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "rssi too old",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 14
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "noRSSI(0)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 14.199999999999999
+          }
+        ]
+      },
+      {
+        "name" : "rssi 127 ignored",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 5,
+            "v" : 127
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "rssi 0 ignored",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 5,
+            "v" : 0
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "toggle off",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "toggleOff",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 2,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "off does not arm",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "toggleOff",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 2,
+            "t" : 4.0999999999999996
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "unknown nonce",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "unknownNonce",
+            "nonce" : 9,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "nonce single use",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "unknownNonce",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 6.4000000000000004
+          }
+        ]
+      },
+      {
+        "name" : "nonce older than 5s",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "staleNonce",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 11.5
+          }
+        ]
+      },
+      {
+        "name" : "nonce exactly 5s",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "noRSSI(1)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 11
+          }
+        ]
+      },
+      {
+        "name" : "time goes back",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "staleNonce",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 5
+          }
+        ]
+      },
+      {
+        "name" : "only 4 open nonces",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6.2000000000000002
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 3,
+            "op" : "issue",
+            "t" : 6.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 4,
+            "op" : "issue",
+            "t" : 6.4000000000000004
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 5,
+            "op" : "issue",
+            "t" : 6.5
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 6,
+            "op" : "issue",
+            "t" : 6.5999999999999996
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 7,
+            "op" : "issue",
+            "t" : 6.7000000000000002
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 8,
+            "op" : "issue",
+            "t" : 6.7999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "unknownNonce",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 6.9000000000000004
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 8,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 6.9000000000000004
+          }
+        ]
+      },
+      {
+        "name" : "edge: never locked",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 10,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 6,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 10,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 6.2999999999999998
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 11,
+            "op" : "issue",
+            "t" : 8
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 8,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 11,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 8.3000000000000007
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 12,
+            "op" : "issue",
+            "t" : 10
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 10,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 12,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 10.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 13,
+            "op" : "issue",
+            "t" : 12
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 12,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 13,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 12.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 14,
+            "op" : "issue",
+            "t" : 14
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 14,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 14,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 14.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 15,
+            "op" : "issue",
+            "t" : 16
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 16,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 15,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 16.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 16,
+            "op" : "issue",
+            "t" : 18
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 18,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 16,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 18.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 17,
+            "op" : "issue",
+            "t" : 20
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 20,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 17,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 20.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 18,
+            "op" : "issue",
+            "t" : 22
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 22,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 18,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 22.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 19,
+            "op" : "issue",
+            "t" : 24
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 24,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 19,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 24.300000000000001
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 28,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 40,
+            "op" : "issue",
+            "t" : 30
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 30,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 40,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 30.199999999999999
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 41,
+            "op" : "issue",
+            "t" : 32
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 32,
+            "v" : -55
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 41,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 32.200000000000003
+          }
+        ]
+      },
+      {
+        "name" : "edge: locked before re-cover does not count",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "uncovered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 10
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 10,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 11,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 12,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 5,
+            "op" : "issue",
+            "t" : 12
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "edgeNotArmed",
+            "nonce" : 5,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 1,
+            "t" : 12.199999999999999
+          }
+        ]
+      },
+      {
+        "name" : "edge: poll from before cover",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 6,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 5
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "unknownNonce",
+            "nonce" : 6,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 5.5
+          }
+        ]
+      },
+      {
+        "name" : "lift-now skips edge",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "lift",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "t" : 6.5
+          }
+        ]
+      },
+      {
+        "name" : "lift-now too far",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -75
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -72
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -78
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "notNear(-75)",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 1,
+            "t" : 6.5
+          }
+        ]
+      },
+      {
+        "name" : "lift-now stale then used",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "staleNonce",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 2,
+            "t" : 12
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "unknownNonce",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 2,
+            "t" : 6.5
+          }
+        ]
+      },
+      {
+        "name" : "lift-now no rssi",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 1
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "noRSSI(0)",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 1,
+            "t" : 1.5
+          }
+        ]
+      },
+      {
+        "name" : "lift-now after uncover",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "uncovered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "notCovered",
+            "nonce" : 2,
+            "op" : "liftNow",
+            "resultStatus" : 3,
+            "t" : 6.5
+          }
+        ]
+      },
+      {
+        "name" : "rssi reset on disconnect",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "resetRSSI",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 5,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "noRSSI(1)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          }
+        ]
+      },
+      {
+        "name" : "rssi window keeps last 3",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 0,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 4,
+            "v" : -60
+          },
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 4
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "phoneLocked",
+            "nonce" : 1,
+            "op" : "presence",
+            "resultStatus" : 2,
+            "status" : 0,
+            "t" : 4.2999999999999998
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 4.5,
+            "v" : -90
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 5,
+            "v" : -90
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 2,
+            "op" : "issue",
+            "t" : 6
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "notNear(-90)",
+            "nonce" : 2,
+            "op" : "presence",
+            "resultStatus" : 1,
+            "status" : 1,
+            "t" : 6.2000000000000002
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 6.5,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : true,
+            "op" : "rssi",
+            "t" : 7,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : true,
+            "nonce" : 3,
+            "op" : "issue",
+            "t" : 7.5
+          },
+          {
+            "edgeArmed" : true,
+            "expect" : "lift",
+            "nonce" : 3,
+            "op" : "presence",
+            "status" : 1,
+            "t" : 7.5999999999999996
+          }
+        ]
+      },
+      {
+        "name" : "issue ignored while uncovered",
+        "steps" : [
+          {
+            "edgeArmed" : false,
+            "nonce" : 1,
+            "op" : "issue",
+            "t" : 0
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "covered",
+            "t" : 1
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 1,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 2,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "op" : "rssi",
+            "t" : 3,
+            "v" : -50
+          },
+          {
+            "edgeArmed" : false,
+            "expect" : "unknownNonce",
+            "nonce" : 1,
+            "op" : "liftNow",
+            "resultStatus" : 2,
+            "t" : 3.1000000000000001
+          }
+        ]
+      }
+    ]
+  },
+  "messages" : {
+    "acks" : [
+      {
+        "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d007608428d55714461e60096ed028806b9923a89f02b74824dd82d677f6185df13",
+        "counter" : "77",
+        "status" : 0
+      },
+      {
+        "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d01",
+        "counter" : "77",
+        "status" : 1
+      },
+      {
+        "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d02",
+        "counter" : "77",
+        "status" : 2
+      },
+      {
+        "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d03",
+        "counter" : "77",
+        "status" : 3
+      }
+    ],
+    "commands" : [
+      {
+        "command" : "ping",
+        "counter" : "1",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff00000000000000010470696e67bb085e533c488e94ad1e622b2863f077ad5ef787d91ea44281241283b61e307b"
+      },
+      {
+        "command" : "away",
+        "counter" : "2",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000204617761799a056cefca7cfe6e038a317e47ad3730191cd8e4a1b1697b71f46518bbd5da9c"
+      },
+      {
+        "command" : "unpair",
+        "counter" : "72623859790382856",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff010203040506070806756e70616972a004e6ee82db31ed1004f707a0001a8f6cd6667b9247eb7bb9f68019975b2bde"
+      },
+      {
+        "command" : "避开",
+        "counter" : "9",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000906e981bfe5bc809e430e5b7f9203cd2b475838714e25ba20809a2165bdd83786df600a3eee19a6"
+      },
+      {
+        "command" : "",
+        "counter" : "3",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000300d6c1bab3fb48b2fac6ad26a26834fa7102cab426812b1c7c6ee33d0ca49ddd5a"
+      }
+    ],
+    "key" : "161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8ef",
+    "liftNow" : {
+      "bytes" : "010d6f9619ff8b86d011b42d00c04fc964ff000000000000000d0e151c232a31383f464d545b62697077382241910f50771b93a889cc6d509d559a754c4908d4a8695f99878d23d51329",
+      "counter" : "13"
+    },
+    "liftResults" : [
+      {
+        "bytes" : "010e6f9619ff8b86d011b42d00c04fc964ff000000000000000d0096b03d2e4f2881da128292b0aa7aae1186d7e302d534d4e92f2eac68264524d9",
+        "counter" : "13",
+        "status" : 0
+      },
+      {
+        "bytes" : "010e6f9619ff8b86d011b42d00c04fc964ff000000000000000d01c854c8ddd88776f00c3b113a2e17108e588e5b77e6a5e603b9ca394067b5b16f",
+        "counter" : "13",
+        "status" : 1
+      },
+      {
+        "bytes" : "010e6f9619ff8b86d011b42d00c04fc964ff000000000000000d027e25c89e6a83383537a4bb394f2276c31a968b01bde081b7c466b470f8398ae6",
+        "counter" : "13",
+        "status" : 2
+      },
+      {
+        "bytes" : "010e6f9619ff8b86d011b42d00c04fc964ff000000000000000d0303c27fe5b47d30d5b362e726036f4fe8308faf9c7b7b4c0c2e3ef8a2047612f6",
+        "counter" : "13",
+        "status" : 3
+      }
+    ],
+    "nonce" : "0e151c232a31383f464d545b62697077",
+    "otherKey" : "353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f900070e",
+    "phoneID" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+    "poll" : "010b6f9619ff8b86d011b42d00c04fc964ff0e151c232a31383f464d545b626970774d655ae22ffa5c9bf9ffb0dfd17f65c3d4f2503be2cc3914ad8a7e0ab77f4d2d",
+    "presence" : [
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff000000000000000c0e151c232a31383f464d545b626970770019ed6b069b660bfaf31a090a76bb1f89dfed68b1a118f012c2ec33ca62c46e45",
+        "counter" : "12",
+        "status" : 0
+      },
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff000000000000000c0e151c232a31383f464d545b62697077019bbd90d53b31963c041d23ae410b4eed9854d22070c22631318e75cab90ba4be",
+        "counter" : "12",
+        "status" : 1
+      },
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff000000000000000c0e151c232a31383f464d545b62697077027d53aa11e252facc77b4791a525b127426457d253e9314af3d8a8ee3381ed23c",
+        "counter" : "12",
+        "status" : 2
+      }
+    ],
+    "revoke" : "01046f9619ff8b86d011b42d00c04fc964ffb7709d578a1efafd7aab77ab39a91ab810a2c1b58b4d2306f6b4537e01eea462",
+    "states" : [
+      {
+        "bytes" : "01056f9619ff8b86d011b42d00c04fc964ff000001a3185c507b0146f92960e64ed7c6d151058f1d1706157b6423e0e3c94b1a863a07a572d4fd39",
+        "closed" : true,
+        "seq" : "1800000000123"
+      },
+      {
+        "bytes" : "01056f9619ff8b86d011b42d00c04fc964ff000001a3185c507b00e29ee0f7b8b4fddbffb948489fc394722232b1d91467604e751b621a949dd2bd",
+        "closed" : false,
+        "seq" : "1800000000123"
+      }
+    ]
+  },
+  "pairReject" : {
+    "noCode" : "020702",
+    "wrongCode" : "020701"
+  },
+  "replay" : {
+    "initialCounter" : "1",
+    "key" : "161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8ef",
+    "phoneID" : "6F9619FF-8B86-D011-B42D-00C04FC964FF",
+    "steps" : [
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff00000000000000020089d51f4a22d18f129eaf0e68ee4b49fe2d9f5cd5a7d192d8b1ce0470eb0a0328",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000204617761799a056cefca7cfe6e038a317e47ad3730191cd8e4a1b1697b71f46518bbd5da9c",
+        "command" : "away",
+        "counter" : "2",
+        "kind" : "command",
+        "result" : "accepted",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000000202",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000204617761799a056cefca7cfe6e038a317e47ad3730191cd8e4a1b1697b71f46518bbd5da9c",
+        "kind" : "command",
+        "result" : "replay",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000000102",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000001046177617972fef1e3acea86ef7aca8bc5128abda8dd8141e5f417ee3b6dbdce96920b7d85",
+        "kind" : "command",
+        "result" : "replay",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000000501",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000005046077617921b777449cabca2b77f31e12c9ec6ae283e618802d32835293900d3267df082d",
+        "kind" : "command",
+        "result" : "badSignature",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000001501",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000015046177617921b777449cabca2b77f31e12c9ec6ae283e618802d32835293900d3267df082d",
+        "kind" : "command",
+        "result" : "badSignature",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000000901",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000904617761793c2a5dd442e43d4ebafdd9c7e599737b644260fe7d96e0245214503554d11eee",
+        "kind" : "command",
+        "result" : "badSignature",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : "0106aaaaaaaabbbbccccddddeeeeeeeeeeee000000000000000901",
+        "bytes" : "0103aaaaaaaabbbbccccddddeeeeeeeeeeee00000000000000090461776179aa421343e0dd36ce46825ef72723b61205c2f2564f7d1124f29821c23f281dd8",
+        "kind" : "command",
+        "result" : "unknownPhone",
+        "storedCounter" : "2"
+      },
+      {
+        "ack" : null,
+        "bytes" : "61776179",
+        "kind" : "command",
+        "result" : "malformed",
+        "storedCounter" : "2"
+      },
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff00000000000000030e151c232a31383f464d545b62697077019abaef32e26eb842556f2a4a718470be8f181b87cd7cc1242cfea2c4a498ed91",
+        "counter" : "3",
+        "kind" : "answer",
+        "result" : "accepted",
+        "storedCounter" : "3"
+      },
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff00000000000000030e151c232a31383f464d545b62697077019abaef32e26eb842556f2a4a718470be8f181b87cd7cc1242cfea2c4a498ed91",
+        "kind" : "answer",
+        "result" : "replay",
+        "storedCounter" : "3"
+      },
+      {
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff00000000000000080e151c232a31383f464d545b62697077011350e771a46cd71cd503286eaa9632f09909f70e35e0a77e6b392f769730a036",
+        "kind" : "answer",
+        "result" : "badSignature",
+        "storedCounter" : "3"
+      },
+      {
+        "bytes" : "010d6f9619ff8b86d011b42d00c04fc964ff00000000000000030e151c232a31383f464d545b626970773d397ce3e07763bae1ca0c78455048a9c91828054adbe1bbef76699020051d7c",
+        "kind" : "answer",
+        "result" : "replay",
+        "storedCounter" : "3"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ff00000000000000040078db94cbcbf2922c6399fc82e4da88d0d01b24396560996d6ff99abf93225983",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff00000000000000040461776179a6646a8784db2aec73615ea73c8a4a65592a15dc22289dae961d06c79b37d13c",
+        "command" : "away",
+        "counter" : "4",
+        "kind" : "command",
+        "result" : "accepted",
+        "storedCounter" : "4"
+      },
+      {
+        "bytes" : "010d6f9619ff8b86d011b42d00c04fc964ff00000000000000040e151c232a31383f464d545b626970776275e64c4a2d8e0e2f7a1cc7e89c0058c4303d88002e76af9266854cc6ce1739",
+        "kind" : "answer",
+        "result" : "replay",
+        "storedCounter" : "4"
+      },
+      {
+        "bytes" : "010d6f9619ff8b86d011b42d00c04fc964ff00000000000000050e151c232a31383f464d545b62697077bfac255a70c561001f33a898ee3dccd467063c0136beb5f5bcfcb94e8deeb49f",
+        "counter" : "5",
+        "kind" : "answer",
+        "result" : "accepted",
+        "storedCounter" : "5"
+      },
+      {
+        "bytes" : "010daaaaaaaabbbbccccddddeeeeeeeeeeee00000000000000320e151c232a31383f464d545b6269707778d5754cc049077541a7d62aee28d21b61a38b62918cba3c271e4706dc7ede6f",
+        "kind" : "answer",
+        "result" : "unknownPhone",
+        "storedCounter" : "5"
+      },
+      {
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000003c046177617959e0b17fcbc3932ceb948939d68df6f339fddb34849ad54de3ce213a93667ebb",
+        "kind" : "answer",
+        "result" : "malformed",
+        "storedCounter" : "5"
+      },
+      {
+        "ack" : null,
+        "bytes" : "010c6f9619ff8b86d011b42d00c04fc964ff000000000000003d0e151c232a31383f464d545b626970770148bba04be3b204c7155060b6a5f0cd13030881a23de729bd1fe8ecef34e55129",
+        "kind" : "command",
+        "result" : "malformed",
+        "storedCounter" : "5"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ffffffffffffffffff0092c2ba7d053d132c6c32b97b5825264e87b1803fd8129d59851b3d7963b8bea3",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ffffffffffffffffff0470696e67aea792b4594664c0efd5a4002fa6cf007728ec7df16dd4006dd4a945358bd319",
+        "command" : "ping",
+        "counter" : "18446744073709551615",
+        "kind" : "command",
+        "result" : "accepted",
+        "storedCounter" : "18446744073709551615"
+      },
+      {
+        "ack" : "01066f9619ff8b86d011b42d00c04fc964ffffffffffffffffff02",
+        "bytes" : "01036f9619ff8b86d011b42d00c04fc964ffffffffffffffffff0470696e67aea792b4594664c0efd5a4002fa6cf007728ec7df16dd4006dd4a945358bd319",
+        "kind" : "command",
+        "result" : "replay",
+        "storedCounter" : "18446744073709551615"
+      }
+    ]
+  },
+  "scalarMult" : {
+    "cases" : [
+      {
+        "out" : null,
+        "u" : "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "out" : null,
+        "u" : "0100000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "out" : null,
+        "u" : "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      {
+        "out" : null,
+        "u" : "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"
+      },
+      {
+        "out" : null,
+        "u" : "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157"
+      },
+      {
+        "out" : null,
+        "u" : "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      {
+        "out" : "d8e2c776bbacd510d09fd9278b7edcd25fc5ae9adfba3b6e040e8d3b71b21806",
+        "u" : "daffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "out" : null,
+        "u" : "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
+      },
+      {
+        "out" : "c85c655ebe8be44ba9c0ffde69f2fe10194458d137f09bbff725ce58803cdb38",
+        "u" : "dbffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "out" : "db64dafa9b8fdd136914e61461935fe92aa372cb056314e1231bc4ec12417456",
+        "u" : "d9ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      {
+        "out" : "e062dcd5376d58297be2618c7498f55baa07d7e03184e8aada20bca28888bf7a",
+        "u" : "cdeb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880"
+      },
+      {
+        "out" : "993c6ad11c4c29da9a56f7691fd0ff8d732e49de6250b6c2e80003ff4629a175",
+        "u" : "4c9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7"
+      }
+    ],
+    "scalar" : "af46e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449aff"
+  }
+}
