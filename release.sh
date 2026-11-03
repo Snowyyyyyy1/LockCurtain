@@ -19,8 +19,13 @@
 #   dist/LockCurtain-<版本>-win-x64.zip / -win-arm64.zip   Windows 版（windows/build.sh 打的包）
 #   dist/appcast.xml / appcast-windows.xml       更新清单，只放这一个版本；
 #                                                App 从 releases/latest/download/ 读，所以总是最新那个 Release 的
+#   dist/appcast-beta.xml / appcast-beta-windows.xml  同样的条目，--publish 时覆盖到测试通道（tag beta-channel），
+#                                                让装着测试版的人也升到这个正式版；测试通道不存在、
+#                                                或上面已经是更新的测试版时跳过（见 release-beta.sh）
+# 共用的签名、appcast 函数在 release-common.sh。
 set -euo pipefail
 cd "$(dirname "$0")"
+source ./release-common.sh
 
 PUBLISH=0; DIRTY=0
 for a in "$@"; do
@@ -32,16 +37,14 @@ for a in "$@"; do
 done
 [ $PUBLISH = 1 ] && [ $DIRTY = 1 ] && { echo "--dirty 不能和 --publish 一起用"; exit 2; }
 
-REPO="Snowyyyyyy1/LockCurtain"
 VERSION="$(tr -d '[:space:]' < VERSION)"
 TAG="v$VERSION"
 NOTES="release-notes/$VERSION.md"
-SPARKLE_BIN=".cache/Sparkle-2.10.1/bin"
 DL="https://github.com/$REPO/releases/download/$TAG"
 
 [ -f "$NOTES" ] || { echo "缺 $NOTES"; exit 1; }
 # 参与编译的文件（含未跟踪的）有改动就不发，否则发布包和提交对不上
-INPUTS=(Sources build.sh VERSION Tools/make-icon.swift windows/LockCurtain windows/build.sh windows/install.ps1)
+INPUTS=(Sources build.sh release-common.sh VERSION Tools/make-icon.swift windows/LockCurtain windows/build.sh windows/install.ps1)
 if [ $DIRTY = 0 ] && [ -n "$(git status --porcelain -- "${INPUTS[@]}")" ]; then
   echo "工作区有没提交的改动，发布包会和提交对不上："; git status --short -- "${INPUTS[@]}"; exit 1
 fi
@@ -49,19 +52,11 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || gh release view "$TA
   echo "$TAG 已经发过了，先改 VERSION"; exit 1
 fi
 
-# 平时用登录钥匙串里的私钥签；测试时可以换成私钥文件
-KEY_ACCOUNT="lockcurtain"
-SIGN_ARGS=(--account "$KEY_ACCOUNT")
-if [ -n "${LOCKCURTAIN_ED_KEY_FILE:-}" ]; then SIGN_ARGS=(--ed-key-file "$LOCKCURTAIN_ED_KEY_FILE"); fi
+# 发布包只能指向正式的 appcast、用 VERSION 文件的版本号，Windows 两个架构都要
+unset LOCKCURTAIN_APPCAST_URL LOCKCURTAIN_RIDS LOCKCURTAIN_VERSION
 
 echo "== Mac $VERSION"
-if [ -z "${LOCKCURTAIN_EDDSA_PUBLIC_KEY:-}" ]; then
-  [ -x "$SPARKLE_BIN/generate_keys" ] || ./build.sh >/dev/null    # 只为下载 Sparkle 的工具
-  LOCKCURTAIN_EDDSA_PUBLIC_KEY="$("$SPARKLE_BIN/generate_keys" --account "$KEY_ACCOUNT" -p)" \
-    || { echo "钥匙串里没有 EdDSA 密钥，先跑 $SPARKLE_BIN/generate_keys --account $KEY_ACCOUNT"; exit 1; }
-fi
-export LOCKCURTAIN_EDDSA_PUBLIC_KEY
-unset LOCKCURTAIN_APPCAST_URL LOCKCURTAIN_RIDS    # 发布包只能指向正式的 appcast，Windows 两个架构都要
+load_signing_key
 ./build.sh | grep -E "^\[|signature|requirement"
 [ "$(/usr/libexec/PlistBuddy -c "Print SUPublicEDKey" LockCurtain.app/Contents/Info.plist)" = "$LOCKCURTAIN_EDDSA_PUBLIC_KEY" ]
 
@@ -75,64 +70,17 @@ cp "windows/dist/LockCurtain-$VERSION-win-x64.zip" "windows/dist/LockCurtain-$VE
    "windows/dist/LockCurtain-$VERSION-setup.exe" dist/
 
 echo "== 签名、appcast"
-# sign_update 输出 sparkle:edSignature="…" length="…"，原样塞进 enclosure
-sig() { "$SPARKLE_BIN/sign_update" "${SIGN_ARGS[@]}" "$1"; }
 DATE="$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')"
-
-# 按平台挑说明：notes_for mac|win 只留通用的和这一边的；notes_for all 全留，标上平台
-notes_for() {
-  awk -v p="$1" '
-    /^- \[(mac|win)\] / {
-      tag = substr($0, 4, 3); sub(/\[(mac|win)\] /, "")
-      if (p == "all") $0 = $0 (tag == "mac" ? "（仅 Mac）" : "（仅 Windows）")
-      else if (p != tag) next
-    }
-    { print }' "$NOTES"
-}
-# 「- 」开头的行变成列表项，其余非空行变成段落
-notes_html() {
-  notes_for "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' | awk '
-    /^- / { if (!ul) { print "<ul>"; ul = 1 } sub(/^- /, ""); print "<li>" $0 "</li>"; next }
-    { if (ul) { print "</ul>"; ul = 0 } }
-    NF { print "<p>" $0 "</p>" }
-    END { if (ul) print "</ul>" }'
-}
-# Mac：跟着系统深浅色走。Windows：WinSparkle 的窗口只有浅色，深色模式下不写死颜色会黑底黑字（Windows 会话实测）
-MAC_HTML="<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light dark\"><style>body{font:13px -apple-system,sans-serif}ul{padding-left:20px}</style></head><body>$(notes_html mac)</body></html>"
-WIN_HTML="<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"light\"><style>html{background:#fff;color:#1a1a1a;font:14px \"Segoe UI\",\"Microsoft YaHei UI\",sans-serif}body{margin:10px 12px}ul{padding-left:20px;margin:0}li{margin:4px 0}</style></head><body>$(notes_html win)</body></html>"
-
-appcast() {    # appcast <描述 HTML> <enclosure 行…>
-  local html="$1"; shift
-  cat <<XML
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
-  <channel>
-    <title>LockCurtain</title>
-    <item>
-      <title>$VERSION</title>
-      <pubDate>$DATE</pubDate>
-      <sparkle:version>$VERSION</sparkle:version>
-      <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
-      <description><![CDATA[$html]]></description>
-$(printf '      %s\n' "$@")
-    </item>
-  </channel>
-</rss>
-XML
-}
-
 M="LockCurtain-$VERSION-mac.zip"
-appcast "$MAC_HTML" \
-  "<sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>" \
-  "<enclosure url=\"$DL/$M\" $(sig "dist/$M") type=\"application/octet-stream\"/>" > dist/appcast.xml
-
 W64="LockCurtain-$VERSION-win-x64.zip"; WA="LockCurtain-$VERSION-win-arm64.zip"; SETUP="LockCurtain-$VERSION-setup.exe"
-appcast "$WIN_HTML" \
-  "<enclosure url=\"$DL/$W64\" sparkle:os=\"windows-x64\" $(sig "dist/$W64") type=\"application/octet-stream\"/>" \
-  "<enclosure url=\"$DL/$WA\" sparkle:os=\"windows-arm64\" $(sig "dist/$WA") type=\"application/octet-stream\"/>" > dist/appcast-windows.xml
+mac_appcast "$DL" "dist/$M" > dist/appcast.xml
+win_appcast "$DL" "dist/$W64" "dist/$WA" > dist/appcast-windows.xml
+# 测试通道用同一份：条目一样，只是文件名不同
+cp dist/appcast.xml dist/appcast-beta.xml
+cp dist/appcast-windows.xml dist/appcast-beta-windows.xml
 
 notes_for all > dist/release-notes.md
-xmllint --noout dist/appcast.xml dist/appcast-windows.xml
+xmllint --noout dist/appcast.xml dist/appcast-windows.xml dist/appcast-beta.xml dist/appcast-beta-windows.xml
 ls -lh dist | awk 'NR > 1 {print "  " $5, $9}'
 
 CMD=(gh release create "$TAG" -R "$REPO" --target "$(git rev-parse HEAD)" --title "LockCurtain $VERSION" --notes-file dist/release-notes.md
@@ -141,6 +89,22 @@ if [ $PUBLISH = 1 ]; then
   git fetch -q origin
   git merge-base --is-ancestor HEAD origin/main || { echo "HEAD 还没推送到 origin/main"; exit 1; }
   "${CMD[@]}"
+  # 测试通道：把装着测试版的人带到这个正式版。上面已经是更新的测试版（比如发 1.0.4 时已经在测 1.0.5-beta.1）就不动它
+  if gh release view "$BETA_TAG" -R "$REPO" >/dev/null 2>&1; then
+    BETA_UP=()
+    for f in appcast-beta.xml appcast-beta-windows.xml; do
+      cur="$(feed_version "$BETA_FEED/$f")"
+      if [ -n "$cur" ] && [ "$(vercmp "$cur" "$VERSION")" = 1 ]; then
+        echo "测试通道 $f 上是更新的 ${cur}，不覆盖"
+      else
+        BETA_UP+=("dist/$f")
+      fi
+    done
+    [ ${#BETA_UP[@]} = 0 ] || gh release upload "$BETA_TAG" -R "$REPO" --clobber "${BETA_UP[@]}"
+  else
+    echo "没有测试通道（${BETA_TAG}），跳过"
+  fi
 else
-  echo; echo "确认无误后发布：./release.sh --publish  （等于 ${CMD[*]}）"
+  echo; echo "确认无误后发布：./release.sh --publish  （等于 ${CMD[*]}，"
+  echo "  再把 dist/appcast-beta*.xml 覆盖到测试通道 ${BETA_TAG}：gh release upload $BETA_TAG -R $REPO --clobber dist/appcast-beta.xml dist/appcast-beta-windows.xml）"
 fi

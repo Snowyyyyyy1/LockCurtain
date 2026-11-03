@@ -2,6 +2,8 @@
 //
 // 只有发布版才打开：build.sh 拿到 EdDSA 公钥才写进 Info.plist（SUPublicEDKey），
 // 自己从源码编的版本没有公钥，不检查更新。appcast 挂在 GitHub Release 上，release.sh 生成。
+// 测试版（版本号带 beta）编译时写死读测试通道 beta-channel 上的 appcast-beta.xml（release-beta.sh 发），
+// 正式版只读 releases/latest 的 appcast.xml。测试版的 CFBundleVersion 去掉了「-」，见 build.sh。
 // 每天查一次；有新版本弹 Sparkle 的窗口，用户点了才下载安装（SUAllowsAutomaticUpdates = NO）。
 //
 // 遮罩盖着时不打扰：定时检查查到新版本先记下，遮罩撤掉再弹；

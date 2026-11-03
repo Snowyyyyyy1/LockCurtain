@@ -15,3 +15,5 @@ LockCurtainCtl/bin/
 LockCurtainCtl/obj/
 Tests/PhoneSelfTest/bin/
 Tests/PhoneSelfTest/obj/
+Tests/VersionOrderSelfTest/bin/
+Tests/VersionOrderSelfTest/obj/

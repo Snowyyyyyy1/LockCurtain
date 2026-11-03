@@ -12,13 +12,20 @@
 #
 # 版本号读仓库根目录的 VERSION。环境变量：
 #   LOCKCURTAIN_EDDSA_PUBLIC_KEY   自动更新验签的公钥（release.sh 传进来）；没有时编出来的版本不检查更新
-#   LOCKCURTAIN_VERSION            测试包用：不改 VERSION 文件，换一个版本号（如 1.0.4-beta.1）
-#   LOCKCURTAIN_APPCAST_URL        测试用：换掉更新清单的地址（默认是 GitHub Release 上的 appcast-windows.xml）
+#   LOCKCURTAIN_VERSION            测试包用：不改 VERSION 文件，换一个版本号（如 1.0.4-beta.1）。
+#                                  带 beta 的版本读测试通道的 appcast-beta-windows.xml（release-beta.sh 发），
+#                                  会自动更新到更新的测试版和正式版；不带 beta 的读正式的 appcast-windows.xml
+#   LOCKCURTAIN_APPCAST_URL        测试用：换掉更新清单的地址（默认按上一条）
 # 需要 .NET SDK 10（brew install dotnet）。第一次会从 NuGet 下载 Windows 的运行时包，从 GitHub 下载 WinSparkle。
 set -euo pipefail
 cd "$(dirname "$0")"
 
 VERSION="${LOCKCURTAIN_VERSION:-$(tr -d '[:space:]' < ../VERSION)}"
+# 正式版用 LockCurtain.csproj 里的默认地址（releases/latest 的 appcast-windows.xml）
+case "$VERSION" in
+  *beta*) APPCAST_URL="${LOCKCURTAIN_APPCAST_URL:-https://github.com/Snowyyyyyy1/LockCurtain/releases/download/beta-channel/appcast-beta-windows.xml}" ;;
+  *)      APPCAST_URL="${LOCKCURTAIN_APPCAST_URL:-}" ;;
+esac
 
 # exe 图标和 Mac 版是同一张图：图标脚本改过或 ico 不存在时才重画（和上一级 build.sh 画 icns 一样）
 ICO=LockCurtain/LockCurtain.ico
@@ -50,7 +57,7 @@ for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
     -p:EnableCompressionInSingleFile=true -p:DebugType=none \
     -p:Version="$VERSION" -p:EdDSAPublicKey="${LOCKCURTAIN_EDDSA_PUBLIC_KEY:-}" \
-    ${LOCKCURTAIN_APPCAST_URL:+-p:AppcastUrl="$LOCKCURTAIN_APPCAST_URL"} \
+    ${APPCAST_URL:+-p:AppcastUrl="$APPCAST_URL"} \
     -o "dist/$rid" | tail -1
   case "$rid" in win-arm64) arch=ARM64 ;; win-x64) arch=x64 ;; esac
   unzip -p "$WINSPARKLE_ZIP" "WinSparkle-$WINSPARKLE/$arch/Release/WinSparkle.dll" > "dist/$rid/WinSparkle.dll"

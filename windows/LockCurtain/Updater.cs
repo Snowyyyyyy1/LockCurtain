@@ -3,6 +3,8 @@
 // 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtainApp.exe（uiAccess 主程序）、
 // LockCurtain.exe（启动器）、WinSparkle.dll、install.ps1、LockCurtainCtl.exe（占位文件，为兼容 1.0.2 的更新器名字检查）），
 // appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
+// 测试版（版本号带 beta）编译时换成测试通道 beta-channel 上的 appcast-beta-windows.xml（windows/build.sh 决定，release-beta.sh 发），
+// WinSparkle 比版本时 1.0.4-beta.2 < 1.0.4-beta.3 < 1.0.4（windows/Tests/VersionOrderSelfTest）。
 // 用户点「安装更新」、WinSparkle 验签通过后：把整个 zip 解压到暂存目录，此刻不动正在用的文件、不杀进程（遮罩可能正升着）。
 // 到了能退出的时候（遮罩没在显示）才起一个独立的 powershell 跑暂存目录里的 install.ps1，然后本进程退出：
 // install.ps1 杀旧进程、复制文件、重新给 LockCurtainApp.exe 签名、重注册计划任务，由计划任务经启动器 LockCurtain.exe ShellExecute 起主程序。

@@ -12,6 +12,11 @@
 # 自动更新（Sparkle）：环境变量 LOCKCURTAIN_EDDSA_PUBLIC_KEY 给了公钥才打开，release.sh 会传；
 # 自己从源码编的版本没有公钥，不检查更新，也就不会被官方版本覆盖。
 #
+# 测试版：环境变量 LOCKCURTAIN_VERSION 换版本号（不改 VERSION 文件，和 windows/build.sh 一样），
+# 版本号里带 beta（如 1.0.4-beta.3）就读测试通道的 appcast（release-beta.sh 发），否则读正式的。
+# CFBundleVersion 是去掉「-」的版本号（1.0.4beta.3）：Sparkle 2 比版本时遇到「-」就截断，
+# 带「-」的话 1.0.4-beta.3 和 1.0.4 算同一个版本（见 release-common.sh 的 mac_bundle_version）。
+#
 # ./build.sh --debug 编调试版 LockCurtain Debug.app：bundle ID 是 dev.local.lockcurtain.debug，
 # 系统权限、设置、运行时目录（~/Library/Application Support/LockCurtain Debug）都和正式版分开，
 # 可以和 /Applications 里的正式版同时开着测试；同一张证书签，永远不检查更新。
@@ -28,12 +33,17 @@ else
   NAME="LockCurtain"
   BUNDLE_ID="dev.local.lockcurtain"
 fi
-VERSION="$(cat VERSION)"
+VERSION="${LOCKCURTAIN_VERSION:-$(tr -d '[:space:]' < VERSION)}"
+BUNDLE_VERSION="${VERSION//-/}"
 APP="$NAME.app"
 BIN="$APP/Contents/MacOS/LockCurtain"
 SRC="Sources"
 # LOCKCURTAIN_APPCAST_URL 只给测试用（换成本机 http 地址），release.sh 会清掉
-FEED="${LOCKCURTAIN_APPCAST_URL:-https://github.com/Snowyyyyyy1/LockCurtain/releases/latest/download/appcast.xml}"
+case "$VERSION" in
+  *beta*) DEFAULT_FEED="https://github.com/Snowyyyyyy1/LockCurtain/releases/download/beta-channel/appcast-beta.xml" ;;
+  *)      DEFAULT_FEED="https://github.com/Snowyyyyyy1/LockCurtain/releases/latest/download/appcast.xml" ;;
+esac
+FEED="${LOCKCURTAIN_APPCAST_URL:-$DEFAULT_FEED}"
 
 # Sparkle 固定版本，下载后核对 sha256，缓存在 .cache（不进 git）
 SPARKLE_VERSION="2.10.1"
@@ -70,7 +80,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key>               <string>$NAME</string>
     <key>CFBundleDisplayName</key>        <string>$NAME</string>
     <key>CFBundleIdentifier</key>         <string>$BUNDLE_ID</string>
-    <key>CFBundleVersion</key>            <string>$VERSION</string>
+    <key>CFBundleVersion</key>            <string>$BUNDLE_VERSION</string>
     <key>CFBundleShortVersionString</key> <string>$VERSION</string>
     <key>CFBundlePackageType</key>        <string>APPL</string>
     <key>CFBundleExecutable</key>         <string>LockCurtain</string>

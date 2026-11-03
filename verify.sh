@@ -27,5 +27,13 @@ selftest SleepLogSelfTest SleepLog.swift IntervalSet.swift SleepLedger.swift Sle
 echo "== build.sh"
 ./build.sh
 
+# 要链接 Sparkle.framework（build.sh 下载的），所以放在 build.sh 后面
+echo "== VersionOrderSelfTest"
+mkdir "$D/VersionOrderSelfTest"
+cp Tests/VersionOrderSelfTest.swift "$D/VersionOrderSelfTest/main.swift"
+S=.cache/Sparkle-2.10.1
+xcrun swiftc -F "$S" -framework Sparkle -Xlinker -rpath -Xlinker "$PWD/$S" -o "$D/VersionOrderSelfTest/selftest" "$D/VersionOrderSelfTest/main.swift"
+"$D/VersionOrderSelfTest/selftest"
+
 echo
 echo "verify: 全部通过"
