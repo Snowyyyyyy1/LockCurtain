@@ -93,8 +93,12 @@ struct HomeView: View {
             }
         }
         .safeAreaBar(edge: .bottom, spacing: 0) {
-            if showsBottomBar {
-                bottomBar
+            // 没连上的分段按经过时间算：每 5 秒重算一次（回前台时 foregroundCount 变了也立刻重算）
+            TimelineView(.periodic(from: .now, by: 5)) { _ in
+                let now = clockNow
+                if showsBottomBar(at: now) {
+                    bottomBar(at: now)
+                }
             }
         }
         .sheet(isPresented: $showSettings) {
@@ -153,21 +157,32 @@ struct HomeView: View {
         .accessibilityValue(model.curtainVoiceValue)
     }
 
+    /// 分段用的「现在」：读一下 foregroundCount，回前台时立刻重算
+    private var clockNow: Date {
+        _ = model.foregroundCount
+        return Date()
+    }
+
     private var macRow: some View {
-        LabeledContent {
-            if model.unlinkedMacState == .waiting {
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(model.macDisplayValue)
-                }
-                .foregroundStyle(.secondary)
-            } else {
-                Text(model.macDisplayValue)
+        TimelineView(.periodic(from: .now, by: 5)) { _ in
+            let state = model.unlinkedMacState(at: clockNow)
+            LabeledContent {
+                if let state, state.showsSpinner {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(state.value)
+                            .contentTransition(.opacity)
+                    }
                     .foregroundStyle(.secondary)
+                } else {
+                    Text(state?.value ?? model.macDisplayValue)
+                        .contentTransition(.opacity)
+                        .foregroundStyle(.secondary)
+                }
+            } label: {
+                Label("这台电脑", systemImage: "laptopcomputer")
             }
-        } label: {
-            Label("这台电脑", systemImage: "laptopcomputer")
         }
     }
 
@@ -207,17 +222,12 @@ struct HomeView: View {
 
     // MARK: - Footer
 
-    /// 连续断了 5 次、已经停下不再重连：主屏换成「连不上这台 Mac。」那一套，不再显示一般的排查提示
-    private var showsGaveUp: Bool {
-        model.connectionGaveUp && model.paired && !model.demoMode && model.connection != .connected
-    }
-
     /// 辅助功能大字（AX1–AX5）：说明和状态行从底部玻璃挪到「幕布 / 这台 Mac」分组的 footer，底部只留一颗全宽「现在撤下」
     private var isAXSize: Bool { dynamicTypeSize.isAccessibilitySize }
 
     /// 已连上、不在「连不上」那一套里
     private var showsLiftFooter: Bool {
-        isAXSize && !showsGaveUp && model.connection == .connected
+        isAXSize && model.connection == .connected
     }
 
     /// 幕布盖着、不在「正在盖上…」：两行说明该出现的时候
@@ -268,7 +278,7 @@ struct HomeView: View {
                     .foregroundStyle(Color.primary)
                 Text(model.liftOnApproach
                      ? "手机锁着不算，别人拿着也撤不下来。"
-                     : "「走近撤下」关着，手机撤不下来。")
+                     : "「走近撤下」关着，走近不会自己撤。要撤就按「现在撤下」。")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -284,9 +294,7 @@ struct HomeView: View {
 
     @ViewBuilder
     private var standardFooter: some View {
-        if showsGaveUp {
-            EmptyView()
-        } else if model.justPaired && model.connection != .notPaired {
+        if model.justPaired && model.connection != .notPaired {
             VStack(alignment: .leading, spacing: 8) {
                 genericFooter
                 Text("以后它自己会连上；万一断了，打开 LockCurtain 等一下就好。")
@@ -301,9 +309,20 @@ struct HomeView: View {
 
     @ViewBuilder
     private var genericFooter: some View {
-        if let state = model.unlinkedMacState {
-            // 配过对、没连上的三种：等这台 Mac 来连… / 没连上 / 蓝牙关了
-            Text(state.footer)
+        if model.unlinkedMacState != nil {
+            // 配过对、没连上：按经过时间分段（design v2.10 A），字直接换、不震动、不播报
+            TimelineView(.periodic(from: .now, by: 5)) { _ in
+                if let state = model.unlinkedMacState(at: clockNow) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(state.footer)
+                            .contentTransition(.opacity)
+                        if let second = state.secondFooter {
+                            Text(second)
+                                .transition(.opacity)
+                        }
+                    }
+                }
+            }
         } else {
             switch model.connection {
             case .notPaired:
@@ -318,23 +337,14 @@ struct HomeView: View {
 
     // MARK: - Bottom bar
 
-    private var showsBottomBar: Bool {
-        if showsLiftFooter && showsClosedNote && !model.liftOnApproach {
-            return false   // AX 大字、「走近撤下」关着：两行在 footer，底部什么都没有
-        }
-        return model.connection == .connected || model.connection == .notPaired || showsGaveUp
-            || model.unlinkedMacState == .stopped
+    private func showsBottomBar(at now: Date) -> Bool {
+        model.connection == .connected || model.connection == .notPaired || model.showsRetryNow(at: now)
     }
 
-    private var bottomBar: some View {
+    private func bottomBar(at now: Date) -> some View {
         GlassEffectContainer {
             VStack(spacing: 10) {
-                if showsGaveUp {
-                    GaveUpNotice(prominent: true) {
-                        model.prepareForPairing()
-                    }
-                    .transition(.opacity)
-                } else if model.connection == .notPaired {
+                if model.connection == .notPaired {
                     Button {
                         showPairing = true
                     } label: {
@@ -346,18 +356,19 @@ struct HomeView: View {
                     .controlSize(.large)
                     .glassEffectID("action", in: glassNS)
                     .transition(.opacity)
-                } else if model.unlinkedMacState == .stopped {
-                    // 「没连上」：和「盖上幕布」同一个位置、同样大小
+                } else if model.showsRetryNow(at: now) {
+                    // 「现在再试一次」：和「盖上幕布」同一个位置、同样大小；.glass（不是 prominent），连上了形变回「盖上幕布」
                     Button {
-                        model.findMacAgain()
+                        model.retryNow()
                     } label: {
                         Text(AppModel.UnlinkedMacState.retryButtonTitle)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 3)
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.glass)
                     .controlSize(.large)
                     .glassEffectID("action", in: glassNS)
+                    .accessibilityHint(AppModel.UnlinkedMacState.retryButtonHint)
                     .transition(.opacity)
                 } else if showsClosedNote && showsLiftFooter {
                     axLiftButton
@@ -398,8 +409,7 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.isPending)
         .animation(.smooth(duration: 0.35), value: model.didTimeOut)
         .animation(.smooth(duration: 0.35), value: model.connection)
-        .animation(.smooth(duration: 0.35), value: model.connectionGaveUp)
-        .animation(.smooth(duration: 0.35), value: model.unlinkedMacState)
+        .animation(.smooth(duration: 0.35), value: model.showsRetryNow(at: now))
         .animation(.smooth(duration: 0.35), value: model.isLifting)
         .animation(.smooth(duration: 0.35), value: model.liftNotice)
         .animation(.smooth(duration: 0.35), value: model.showLiftedNote)
@@ -446,7 +456,7 @@ struct HomeView: View {
         }
     }
 
-    /// 幕布盖着：「走近撤下」开着时两行说明 + 现在撤下；关着时两行说明、没有按钮
+    /// 幕布盖着：两行说明 + 现在撤下（开关开着关着同一版式，只有两行字不同）
     private var closedNote: some View {
         VStack(spacing: 10) {
             if let notice = model.liftNotice, notice != .alreadyUncovered {
@@ -465,19 +475,18 @@ struct HomeView: View {
                 } else {
                     Text("回到电脑前按任意键解锁。")
                         .font(.subheadline.weight(.semibold))
-                    Text("「走近撤下」关着，手机撤不下来。")
+                    Text("「走近撤下」关着，走近不会自己撤。要撤就按「现在撤下」。")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             .accessibilityElement(children: .combine)
-            if model.liftOnApproach {
-                liftButton
-            }
+            // 「现在撤下」不看「走近撤下」开关（design v2.10 B）
+            liftButton
         }
         .multilineTextAlignment(.center)
         .padding(.top, 14)
-        .padding(.bottom, model.liftOnApproach ? 6 : 14)
+        .padding(.bottom, 6)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
     }
@@ -626,7 +635,9 @@ struct HomeView: View {
     }
 }
 
-/// 连续断了几次、已经不再自己重连时显示：主屏和配对页共用同一套文字
+/// 配对页：连续断了几次、正暂停着广播时显示（暂停到点会自己接着广播；点按钮马上接着来）。
+/// 主屏不再用它（design v2.10 A：按经过时间分段，见 AppModel.UnlinkedMacState）。
+/// 下面两行字是旧文案、已经不准了，等 copy 给配对页的新句（见交付说明）
 struct GaveUpNotice: View {
     /// 主屏底栏用玻璃大按钮；配对页里用普通的 bordered 按钮
     var prominent = false
