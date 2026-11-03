@@ -8,10 +8,11 @@
 // 并给一个安全描述符，允许 LocalService（LS）、NetworkService（NS）、SYSTEM、管理员、本人和 AppContainer 本机调用进来：
 //   O:BAG:BAD:(A;;0x7;;;PS)(A;;0x3;;;SY)(A;;0x7;;;BA)(A;;0x3;;;AC)(A;;0x3;;;LS)(A;;0x3;;;NS)
 //   （0x1 = COM_RIGHTS_EXECUTE，0x2 = EXECUTE_LOCAL，0x4 = EXECUTE_REMOTE；PS = 本人）
-// 出处（2026-11-03 写这里时没法上网核对，按记忆引用，链接待核对）：
-//   * Microsoft Q&A / Stack Overflow「GattCharacteristic.ValueChanged not firing in WPF / desktop app」一类问答里
-//     微软员工给的 CoInitializeSecurity + 上面这串 SDDL 的写法；
-//   * Windows-universal-samples 的 BluetoothLE 示例 issue 里同样的讨论（桌面 / 提权进程收不到通知）。
+// 出处（2026-11-03 核对过，SDDL 与下面第一条逐字一致）：
+//   * https://stackoverflow.com/questions/46271156/ble-win-api-can-not-get-notification
+//     （转述微软论坛 Matthew Beaver 的写法：CoInitializeSecurity + 上面这串 SDDL，RPC_C_IMP_LEVEL_IDENTIFY）
+//   * https://www.misuzilla.org/Blog/2017/08/24/BluetoothLENotificationProblemOnDesktopApp （桌面程序收不到 Notify）
+//   * https://github.com/jasongin/noble-uwp/issues/34 （同一问题，新版 Windows 不调也能收到，调了无害）
 // CoInitializeSecurity 整个进程只能调一次，而且要在第一次跨进程 COM 调用之前：所以放在 Main 的最开头。
 // [STAThread] 让 CLR 在进 Main 之前已经 CoInitialize 过了，这正是它要求的前提。
 // 已经有人调过 / 太晚了（RPC_E_TOO_LATE）就只记一行日志、照常运行：WinForms 和别的 COM 用法不受影响，
