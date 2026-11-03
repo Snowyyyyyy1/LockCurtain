@@ -66,6 +66,8 @@ internal sealed partial class TrayApp : ApplicationContext
             OnLift = overlay.LiftFromPhone,
         };
         overlay.StateChanged += () => phone.ReportCurtainState(overlay.Mode != null);
+        // UI 线程超过 2 秒没处理消息就写进 ble.log（连同蓝牙的状态）
+        new UiWatchdog(ui, phone.DescribeState).Start();
         server.Start();
         ruleEngine.Start();
         if (phone.IsPaired) phone.Prepare();
@@ -122,9 +124,9 @@ internal sealed partial class TrayApp : ApplicationContext
     string Status() => overlay.Mode switch
     {
         null when keepAwake.Mode != null => "保持唤醒中",
-        null => "遮罩未开启",
-        CurtainMode.Preview => "预览中 · 按任意键或点击关闭",
-        _ => "离开模式中 · 真人按键会先锁屏",
+        null => "幕布没盖上",
+        CurtainMode.Preview => "预览中，按任意键或点一下关闭",
+        _ => "离开模式中，按键会先锁屏",
     };
 
     /// 右键菜单的命令
@@ -134,8 +136,8 @@ internal sealed partial class TrayApp : ApplicationContext
         return
         [
             new("进入离开模式", () => overlay.Show(CurtainMode.Away), idle),
-            new("遮罩预览", () => overlay.Show(CurtainMode.Preview), idle),
-            new("紧急关闭遮罩", overlay.Hide, !idle),
+            new("预览幕布", () => overlay.Show(CurtainMode.Preview), idle),
+            new("紧急撤下幕布", overlay.Hide, !idle),
             new("配对手机", ShowPairing, SeparatorBefore: true),
             .. phone.IsPaired ? new[] { new TrayCommand("撤销配对", () => PairingForm.ConfirmUnpair(phone)) } : [],
             new("设置…", ShowSettings, SeparatorBefore: true),

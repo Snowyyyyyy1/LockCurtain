@@ -152,15 +152,38 @@ internal sealed class PhoneDeviceMemory
 
 /// 蓝牙这条链路上的每个事件都写一行（和 Mac 的 /tmp/lockcurtain-ble.log 同样的行格式，「lift:」开头的行一字不差）。
 /// 写到 %LOCALAPPDATA%\LockCurtain\ble.log，超过 2 MB 改名成 ble.log.old。不写码、不写钥匙。
+/// 调用方只把这一行放进队列就返回，写文件在单独的线程上：UI 线程不等磁盘，UI 线程卡住时看门狗照样写得进去
 internal static class PhoneLog
 {
     public static readonly string FilePath = Path.Combine(Log.Dir, "ble.log");
     static readonly object Gate = new();
     static readonly System.Text.UTF8Encoding Utf8Bom = new(encoderShouldEmitUTF8Identifier: true);
+    static readonly System.Collections.Concurrent.BlockingCollection<string> Queue = new(boundedCapacity: 10_000);
+
+    static PhoneLog()
+    {
+        new Thread(() =>
+        {
+            foreach (var line in Queue.GetConsumingEnumerable()) Append(line);
+        }) { IsBackground = true, Name = "ble.log writer" }.Start();
+        // 退出时把还没写的补上
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            while (Queue.TryTake(out var line)) Append(line);
+        };
+    }
 
     public static void Write(string text)
     {
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {text}{Environment.NewLine}";
+        Queue.TryAdd(line);     // 满了（写盘卡住）就丢，不等
+        System.Diagnostics.Debug.Write("BLE " + line);
+    }
+
+    static void Append(string first)
+    {
+        var batch = new System.Text.StringBuilder(first);
+        while (batch.Length < 64 << 10 && Queue.TryTake(out var more)) batch.Append(more);
         lock (Gate)
         {
             try
@@ -168,11 +191,10 @@ internal static class PhoneLog
                 Directory.CreateDirectory(Log.Dir);
                 var info = new FileInfo(FilePath);
                 if (info.Exists && info.Length > 2 << 20) File.Move(FilePath, FilePath + ".old", overwrite: true);
-                File.AppendAllText(FilePath, line, Utf8Bom);
+                File.AppendAllText(FilePath, batch.ToString(), Utf8Bom);
             }
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
-        System.Diagnostics.Debug.Write("BLE " + line);
     }
 }

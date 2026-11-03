@@ -27,7 +27,14 @@
 // Presence（此刻解锁着 / 锁着 / 关着）。签名和计数由 PairingAuthority 验，撤不撤由 LiftGate 判（新鲜、边沿、近），
 // 撤就调 OnLift（只撤 LockCurtain 的遮罩，不碰 Windows 锁屏，也绝不解锁 Windows），再回手机一条签名的 LiftResult。
 //
-// 所有状态只在 UI 线程上改：WinRT 的回调都 Post 回 UI 线程，await 也在 UI 线程上接着跑。
+// 线程（1.0.4-beta.2 起，修「手机走开再回来，程序无响应」）：
+//   * 状态（peers、gates、码、阶段…）仍然只在 UI 线程上读写，不加锁。
+//   * 但 UI 线程上不做任何会等蓝牙的事：连接、查服务、订阅、写、开关扫描器、释放 BluetoothLEDevice / GattSession /
+//     GattDeviceService，全部在线程池上做（Task.Run + ConfigureAwait(false)），每个 WinRT 异步调用最多等 10 秒（超时取消）。
+//     做完把结果 Post 回 UI 线程。释放对象从不在它自己的事件回调里做。
+//   * 连接和释放排成一队（bleGate）：新连接要等旧对象放掉；同一时间只连一台（connecting），重连不会叠在一起。
+//   * 扫描回调不碰 UI 的字典：广播先进一个并发队列，攒着一次 Post 回 UI 线程处理。
+//   * UiWatchdog：UI 线程超过 2 秒没处理消息就往 ble.log 写一行（带这里的状态），卡在哪里下次看日志就知道。
 // 日志：%LOCALAPPDATA%\LockCurtain\ble.log（PhoneLog），每步一行，「lift:」行和 Mac 一字不差。不写码、不写钥匙。
 
 using Microsoft.Win32;
@@ -35,6 +42,7 @@ using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
 using Windows.Devices.Radios;
+using Windows.Foundation;
 using Windows.Storage.Streams;
 
 namespace LockCurtain.Phone;
@@ -86,12 +94,32 @@ internal sealed class PhoneLink
     bool wantsBluetooth, initialized, initializing, windowOpen, stoppedAfterEarlyDrops, suspended;
     bool? radioOn;
     int earlyDrops;
+    /// 留着引用，StateChanged 才一直有
     Radio? radio;
     BluetoothLEAdvertisementWatcher? watcher;
-    bool connectingKnown;
+    bool watcherStarting;
+    /// 正在连的那一台：同一时间只连一台（记得的地址、扫描发现、溢出区候选都走这一个口子）
+    Peer? connecting;
     readonly System.Windows.Forms.Timer tick = new() { Interval = 2000 };
     readonly System.Windows.Forms.Timer health = new() { Interval = 10_000 };
     readonly System.Windows.Forms.Timer codeExpiry = new();
+
+    /// 每个 WinRT 异步调用最多等多久
+    static readonly TimeSpan OpTimeout = TimeSpan.FromSeconds(10);
+    /// 等前一次连接 / 释放做完最多等多久（释放卡住了也不能让以后永远连不上）
+    static readonly TimeSpan GateTimeout = TimeSpan.FromSeconds(20);
+    /// 连接和释放蓝牙对象排成一队（都在线程池上）
+    readonly SemaphoreSlim bleGate = new(1, 1);
+
+    /// 扫描回调线程上判断「这个地址连着没有」用的副本：UI 线程每次改 peers 都换一份新的（不在原地改）
+    volatile HashSet<ulong> peerAddresses = new();
+    readonly record struct Advert(ulong Address, BluetoothAddressType Type, int Rssi, bool Ours, byte[]? Overflow, string Name, DateTime At);
+    readonly System.Collections.Concurrent.ConcurrentQueue<Advert> advertQueue = new();
+    int advertDrainPosted;
+    const int MaxQueuedAdverts = 2000;
+
+    /// UI 线程上最近一次进入的蓝牙处理（UiWatchdog 卡住时写进日志）
+    volatile string uiStep = "idle";
 
     /// 幕布现在是不是盖着；这次盖上的时刻 T（边沿规则从这里算）
     bool curtainClosed;
@@ -99,24 +127,37 @@ internal sealed class PhoneLink
     /// 每台手机的撤下判断（按 phoneID，断开重连也留着「盖上之后见过锁着」）
     readonly Dictionary<Guid, LiftGate> gates = new();
 
-    /// 一台连上（或正在连）的手机
-    sealed class Peer(ulong address, BluetoothAddressType type)
+    /// 一条连好的链路上的 WinRT 对象。在线程池上建、在线程池上放
+    sealed class Link
     {
-        public readonly ulong Address = address;
-        public readonly BluetoothAddressType AddressType = type;
         public BluetoothLEDevice? Device;
         public GattSession? Session;
         public GattDeviceService? Service;
         public GattCharacteristic? Inbox, Outbox;
-        public bool Subscribed, Closed;
+        public TypedEventHandler<BluetoothLEDevice, object>? StatusHandler;
+        public TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs>? ValueHandler;
+        public int MaxChunk = 20;
+    }
+
+    /// 一台连上（或正在连）的手机（只在 UI 线程上用）
+    sealed class Peer(ulong address, BluetoothAddressType type)
+    {
+        public readonly ulong Address = address;
+        public readonly BluetoothAddressType AddressType = type;
+        /// 连好、订阅好以后才有
+        public Link? Link;
+        public bool Subscribed, Closed, LostWhileConnecting;
+        public readonly CancellationTokenSource Cts = new();
         public readonly PairingFraming.Assembler Assembler = new();
+        /// 链路交到 UI 线程之前就到了的通知块，交到以后按顺序补处理
+        public readonly List<byte[]> EarlyChunks = new();
         /// 验过签名命令之后才知道它是哪台手机
         public Guid? PhoneID;
         public DateTime? ConnectedAt;
         public readonly Queue<byte[]> WriteQueue = new();
         public bool Writing, DisconnectAfterWrites;
         public string Name => FormatAddress(Address);
-        public int MaxChunk => Math.Max(20, (Session?.MaxPduSize ?? 23) - 3);
+        public int MaxChunk => Link?.MaxChunk ?? 20;
     }
 
     readonly Dictionary<ulong, Peer> peers = new();
@@ -173,23 +214,18 @@ internal sealed class PhoneLink
         PhoneLog.Write("central: create");
         try
         {
-            var adapter = await BluetoothAdapter.GetDefaultAsync();
-            if (adapter == null || !adapter.IsLowEnergySupported || !adapter.IsCentralRoleSupported)
+            var (r, state, problem) = await Task.Run(InitWork);
+            if (problem != null)
             {
-                PhoneLog.Write($"central: no usable bluetooth adapter (adapter {(adapter == null ? "missing" : $"le={adapter.IsLowEnergySupported} central={adapter.IsCentralRoleSupported}")})");
+                PhoneLog.Write(problem);
                 SetPhase(PhonePhase.Unsupported);
                 return;
             }
-            radio = await adapter.GetRadioAsync();
-            if (radio != null)
+            radio = r;
+            if (state is { } s)
             {
-                radio.StateChanged += (r, _) =>
-                {
-                    var state = r.State;
-                    ui.Post(_ => OnRadioState(state), null);
-                };
-                radioOn = radio.State == RadioState.On;
-                PhoneLog.Write($"central state {radio.State}");
+                radioOn = s == RadioState.On;
+                PhoneLog.Write($"central state {s}");
             }
             else
             {
@@ -209,6 +245,22 @@ internal sealed class PhoneLink
         finally { initializing = false; }
     }
 
+    /// 线程池上：找蓝牙适配器和它的无线电
+    async Task<(Radio? Radio, RadioState? State, string? Problem)> InitWork()
+    {
+        var adapter = await Op("BluetoothAdapter.GetDefaultAsync", t => BluetoothAdapter.GetDefaultAsync().AsTask(t), CancellationToken.None).ConfigureAwait(false);
+        if (adapter == null || !adapter.IsLowEnergySupported || !adapter.IsCentralRoleSupported)
+            return (null, null, $"central: no usable bluetooth adapter (adapter {(adapter == null ? "missing" : $"le={adapter.IsLowEnergySupported} central={adapter.IsCentralRoleSupported}")})");
+        var r = await Op("BluetoothAdapter.GetRadioAsync", t => adapter.GetRadioAsync().AsTask(t), CancellationToken.None).ConfigureAwait(false);
+        if (r == null) return (null, null, null);
+        r.StateChanged += (sender, _) =>
+        {
+            RadioState s;
+            try { s = sender.State; } catch (Exception) { return; }
+            ui.Post(_ => OnRadioState(s), null);
+        };
+        return (r, r.State, null);
+    }
     /// 打开配对窗口时调用：生成一个新码，开始找手机
     public void Start()
     {
@@ -324,7 +376,7 @@ internal sealed class PhoneLink
     /// 记得的手机：按地址连（它的地址没轮换、人在附近就能连上）
     void ConnectKnown(string reason)
     {
-        if (!IsPaired || memory.Address is not { } address || peers.ContainsKey(address) || connectingKnown) return;
+        if (!IsPaired || memory.Address is not { } address || peers.ContainsKey(address) || connecting != null) return;
         if (HasIdentifiedPeer) return;
         // iPhone 用的是随机地址
         Connect(address, BluetoothAddressType.Random, reason);
@@ -332,32 +384,56 @@ internal sealed class PhoneLink
 
     void StartWatcher()
     {
-        if (radioOn != true || !ShouldRun) return;
-        if (watcher?.Status == BluetoothLEAdvertisementWatcherStatus.Started) return;
-        StopWatcher();
-        try
+        if (radioOn != true || !ShouldRun || watcher != null || watcherStarting) return;
+        watcherStarting = true;
+        // 建扫描器、Start() 都在线程池上（Start 会去找蓝牙服务）
+        _ = Task.Run(() =>
         {
-            var nw = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
-            nw.Received += OnReceived;
-            nw.Stopped += (s, e) =>
+            try
             {
-                var error = e.Error;
-                ui.Post(_ =>
-                {
-                    if (!ReferenceEquals(watcher, s)) return;
-                    PhoneLog.Write($"scan stopped ({error})");
-                    watcher = null;
-                }, null);
-            };
-            nw.Start();
-            watcher = nw;
-            PhoneLog.Write($"scan start (window {(windowOpen ? "open" : "closed")}, paired {IsPaired}, status {nw.Status})");
-        }
-        catch (Exception e)
+                var nw = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
+                nw.Received += OnReceived;
+                nw.Stopped += OnWatcherStopped;
+                nw.Start();
+                var status = nw.Status;
+                ui.Post(_ => WatcherStarted(nw, status, null), null);
+            }
+            catch (Exception e)
+            {
+                var error = $"{e.GetType().Name}: {e.Message}";
+                ui.Post(_ => WatcherStarted(null, default, error), null);
+            }
+        });
+    }
+
+    void WatcherStarted(BluetoothLEAdvertisementWatcher? nw, BluetoothLEAdvertisementWatcherStatus status, string? error)
+    {
+        uiStep = "WatcherStarted";
+        watcherStarting = false;
+        if (nw == null)
         {
-            PhoneLog.Write($"scan start failed: {e.GetType().Name}: {e.Message}");
-            watcher = null;
+            PhoneLog.Write($"scan start failed: {error}");
+            return;
         }
+        // 开扫描器的这一会儿里又不该扫了（蓝牙关了 / 睡了 / 撤销了）：马上停
+        if (radioOn != true || !ShouldRun)
+        {
+            StopOff(nw);
+            return;
+        }
+        watcher = nw;
+        PhoneLog.Write($"scan start (window {(windowOpen ? "open" : "closed")}, paired {IsPaired}, status {status})");
+    }
+
+    void OnWatcherStopped(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementWatcherStoppedEventArgs e)
+    {
+        var error = e.Error;
+        ui.Post(_ =>
+        {
+            if (!ReferenceEquals(watcher, sender)) return;
+            PhoneLog.Write($"scan stopped ({error})");
+            watcher = null;
+        }, null);
     }
 
     void StopWatcher()
@@ -365,12 +441,23 @@ internal sealed class PhoneLink
         if (watcher == null) return;
         var w = watcher;
         watcher = null;
-        w.Received -= OnReceived;
-        try { w.Stop(); } catch (Exception) { }
+        StopOff(w);
         PhoneLog.Write("scan stop");
     }
 
-    /// 扫描回调（线程池上）：先在这里把无关的广播筛掉，只把相关的 Post 回 UI 线程
+    /// 线程池上停扫描器
+    void StopOff(BluetoothLEAdvertisementWatcher w) => _ = Task.Run(() =>
+    {
+        try
+        {
+            w.Received -= OnReceived;
+            w.Stopped -= OnWatcherStopped;
+            w.Stop();
+        }
+        catch (Exception) { }
+    });
+
+    /// 扫描回调（扫描器的线程上）：先在这里把无关的广播筛掉，相关的进队列，攒着一次 Post 回 UI 线程
     void OnReceived(BluetoothLEAdvertisementWatcher sender, BluetoothLEAdvertisementReceivedEventArgs args)
     {
         try
@@ -385,16 +472,23 @@ internal sealed class PhoneLink
                 if (data[0] == 0x01) overflow = data[1..17];
             }
             var address = args.BluetoothAddress;
-            if (!ours && overflow == null && !peers.ContainsKey(address)) return;
-            var rssi = (int)args.RawSignalStrengthInDBm;
-            var type = args.BluetoothAddressType;
-            var name = ad.LocalName;
-            var at = DateTime.UtcNow;
-            ui.Post(_ => OnAdvertisement(address, type, rssi, ours, overflow, name, at), null);
+            if (!ours && overflow == null && !peerAddresses.Contains(address)) return;
+            if (advertQueue.Count >= MaxQueuedAdverts) return;
+            advertQueue.Enqueue(new Advert(address, args.BluetoothAddressType, args.RawSignalStrengthInDBm, ours, overflow, ad.LocalName, DateTime.UtcNow));
+            if (Interlocked.Exchange(ref advertDrainPosted, 1) == 0) ui.Post(_ => DrainAdverts(), null);
         }
         catch (Exception) { }
     }
 
+    void DrainAdverts()
+    {
+        uiStep = "DrainAdverts";
+        Volatile.Write(ref advertDrainPosted, 0);
+        // 一次最多处理这么多，剩下的下一轮：UI 线程不会被一阵广播占住
+        for (var n = 0; n < 200 && advertQueue.TryDequeue(out var a); n++)
+            OnAdvertisement(a.Address, a.Type, a.Rssi, a.Ours, a.Overflow, a.Name, a.At);
+        if (!advertQueue.IsEmpty && Interlocked.Exchange(ref advertDrainPosted, 1) == 0) ui.Post(_ => DrainAdverts(), null);
+    }
     void OnAdvertisement(ulong address, BluetoothAddressType type, int rssi, bool ours, byte[]? overflow, string name, DateTime at)
     {
         if (!adverts.TryGetValue(address, out var list)) adverts[address] = list = new();
@@ -424,6 +518,8 @@ internal sealed class PhoneLink
             if (memory.OverflowMask is { } mask && !Contains(overflow, mask)) return;
             reason = "discovered by scan (apple background advertisement)";
         }
+        // 同一时间只连一台：正在连就先不理（不记这次尝试，下一个广播再来）
+        if (connecting != null) return;
         if (lastCandidateTry.TryGetValue(address, out var last) && at - last < CandidateRetry) return;
         // 同一时间只连一台候选，免得一屋子 iPhone 都去连
         if (!ours && peers.Values.Any(p => p.ConnectedAt == null || p.PhoneID == null)) return;
@@ -442,103 +538,202 @@ internal sealed class PhoneLink
     void Connect(ulong address, BluetoothAddressType type, string reason)
     {
         if (peers.ContainsKey(address)) return;
+        if (connecting != null)
+        {
+            PhoneLog.Write($"connect to {FormatAddress(address)} ({reason}) deferred: still connecting {connecting.Name}");
+            return;
+        }
         var peer = new Peer(address, type);
         peers[address] = peer;
+        RefreshPeerAddresses();
         PhoneLog.Write($"connect requested {peer.Name} ({reason})");
-        _ = ConnectAsync(peer, isKnown: reason.StartsWith("pending"));
+        _ = ConnectAsync(peer);
     }
 
-    async Task ConnectAsync(Peer peer, bool isKnown)
+    void RefreshPeerAddresses() => peerAddresses = new HashSet<ulong>(peers.Keys);
+
+    async Task ConnectAsync(Peer peer)
     {
-        if (isKnown) connectingKnown = true;
+        connecting = peer;
+        (Link? Link, bool Connected, string? Error) r;
+        try { r = await Task.Run(() => ConnectWork(peer)); }
+        catch (Exception e) { r = (null, false, $"{e.GetType().Name}: {e.Message}"); }
+        uiStep = "ConnectAsync result";
+        if (ReferenceEquals(connecting, peer)) connecting = null;
+        if (peer.Closed)
+        {
+            if (r.Link != null) DisposeOff(r.Link, peer.Name);
+            return;
+        }
+        if (r.Link == null)
+        {
+            if (!r.Connected) FailConnect(peer, r.Error ?? "unknown");
+            else
+            {
+                peer.ConnectedAt ??= DateTime.UtcNow;
+                Disconnected(peer, r.Error ?? "unknown");
+            }
+            return;
+        }
+        peer.Link = r.Link;
+        peer.ConnectedAt = DateTime.UtcNow;
+        peer.Subscribed = true;
+        earlyDrops = 0;
+        PhoneLog.Write($"subscribed outbox on {peer.Name}");
+        UpdateTick();
+        if (!windowOpen) ScheduleIdentifyCheck(peer);
+        var early = peer.EarlyChunks.ToList();
+        peer.EarlyChunks.Clear();
+        foreach (var c in early) OnChunk(peer, c);
+        if (peer.LostWhileConnecting && !peer.Closed) Disconnected(peer, "link lost while connecting");
+    }
+
+    /// 线程池上：连接的全过程，每一步最多等 OpTimeout。成功时把链路交出去，失败时自己放掉（还在线程池上）
+    async Task<(Link? Link, bool Connected, string? Error)> ConnectWork(Peer peer)
+    {
+        var ct = peer.Cts.Token;
+        var held = false;
+        Link? link = new();
+        var connected = false;
         try
         {
-            var device = peer.AddressType == BluetoothAddressType.Unspecified
-                ? await BluetoothLEDevice.FromBluetoothAddressAsync(peer.Address)
-                : await BluetoothLEDevice.FromBluetoothAddressAsync(peer.Address, peer.AddressType);
-            if (peer.Closed) { device?.Dispose(); return; }
-            if (device == null)
+            // 等前面的连接 / 释放做完：同一台手机的旧对象还没放掉就去连新的，蓝牙栈可能卡住
+            held = await bleGate.WaitAsync(GateTimeout, ct).ConfigureAwait(false);
+            if (!held) PhoneLog.Write($"ble: previous connect/release still running after {GateTimeout.TotalSeconds:0}s; connecting {peer.Name} anyway");
+
+            var address = peer.Address;
+            var type = peer.AddressType;
+            var device = link.Device = await Op("FromBluetoothAddressAsync", t => (type == BluetoothAddressType.Unspecified
+                ? BluetoothLEDevice.FromBluetoothAddressAsync(address)
+                : BluetoothLEDevice.FromBluetoothAddressAsync(address, type)).AsTask(t), ct).ConfigureAwait(false);
+            if (device == null) return (null, false, "device not available");
+            link.StatusHandler = (d, _) =>
             {
-                FailConnect(peer, "device not available");
-                return;
-            }
-            peer.Device = device;
-            device.ConnectionStatusChanged += (d, _) =>
-            {
-                var status = d.ConnectionStatus;
-                ui.Post(_ => OnConnectionStatus(peer, status), null);
+                BluetoothConnectionStatus s;
+                try { s = d.ConnectionStatus; } catch (Exception) { return; }
+                ui.Post(_ => OnConnectionStatus(peer, s), null);
             };
+            device.ConnectionStatusChanged += link.StatusHandler;
             try
             {
-                var session = await GattSession.FromDeviceIdAsync(device.BluetoothDeviceId);
-                if (peer.Closed) { session?.Dispose(); return; }
-                if (session != null)
-                {
-                    session.MaintainConnection = true;
-                    peer.Session = session;
-                }
+                var session = link.Session = await Op("GattSession.FromDeviceIdAsync",
+                    t => GattSession.FromDeviceIdAsync(device.BluetoothDeviceId).AsTask(t), ct).ConfigureAwait(false);
+                if (session != null) session.MaintainConnection = true;
             }
-            catch (Exception e) { PhoneLog.Write($"gatt session for {peer.Name} failed: {e.Message}"); }
+            catch (Exception e) when (!ct.IsCancellationRequested)
+            {
+                PhoneLog.Write($"gatt session for {peer.Name} failed: {e.Message}");
+            }
 
-            var services = await device.GetGattServicesForUuidAsync(ServiceUuid, BluetoothCacheMode.Uncached);
-            if (peer.Closed) return;
+            var services = await Op("GetGattServicesForUuidAsync",
+                t => device.GetGattServicesForUuidAsync(ServiceUuid, BluetoothCacheMode.Uncached).AsTask(t), ct).ConfigureAwait(false);
             if (services.Status != GattCommunicationStatus.Success || services.Services.Count == 0)
             {
+                foreach (var s in services.Services) s.Dispose();
                 // 连不上（Unreachable）或者没有我们的服务（不是 LockCurtain 手机）
-                FailConnect(peer, services.Status == GattCommunicationStatus.Success ? "service not found" : $"gatt {services.Status}");
-                return;
+                return (null, false, services.Status == GattCommunicationStatus.Success ? "service not found" : $"gatt {services.Status}");
             }
-            peer.ConnectedAt = DateTime.UtcNow;
-            PhoneLog.Write($"connected {peer.Name}");
-            peer.Service = services.Services[0];
+            var service = link.Service = services.Services[0];
             foreach (var extra in services.Services.Skip(1)) extra.Dispose();
+            connected = true;
+            PhoneLog.Write($"connected {peer.Name}");
 
-            var chars = await peer.Service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
-            if (peer.Closed) return;
+            var chars = await Op("GetCharacteristicsAsync",
+                t => service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached).AsTask(t), ct).ConfigureAwait(false);
             if (chars.Status == GattCommunicationStatus.Success)
                 foreach (var c in chars.Characteristics)
                 {
-                    if (c.Uuid == OutboxUuid) peer.Outbox = c;
-                    if (c.Uuid == InboxUuid) peer.Inbox = c;
+                    if (c.Uuid == OutboxUuid) link.Outbox = c;
+                    if (c.Uuid == InboxUuid) link.Inbox = c;
                 }
-            if (peer.Outbox == null || peer.Inbox == null)
+            if (link.Outbox is not { } outbox || link.Inbox == null)
+                return (null, true, $"characteristics missing ({chars.Status})");
+            link.MaxChunk = Math.Max(20, (link.Session?.MaxPduSize ?? 23) - 3);
+            PhoneLog.Write($"services ready on {peer.Name} (max write {link.MaxChunk})");
+
+            link.ValueHandler = (_, e) =>
             {
-                PhoneLog.Write($"characteristics missing on {peer.Name}: {chars.Status}");
-                Disconnected(peer, "characteristics missing");
-                return;
-            }
-            PhoneLog.Write($"services ready on {peer.Name} (max write {peer.MaxChunk})");
-            peer.Outbox.ValueChanged += (_, e) =>
-            {
-                var chunk = ReadBuffer(e.CharacteristicValue);
+                byte[] chunk;
+                try { chunk = ReadBuffer(e.CharacteristicValue); } catch (Exception) { return; }
                 ui.Post(_ => OnChunk(peer, chunk), null);
             };
-            var sub = await peer.Outbox.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
-                GattClientCharacteristicConfigurationDescriptorValue.Notify);
-            if (peer.Closed) return;
+            outbox.ValueChanged += link.ValueHandler;
+            var sub = await Op("subscribe outbox",
+                t => outbox.WriteClientCharacteristicConfigurationDescriptorWithResultAsync(
+                    GattClientCharacteristicConfigurationDescriptorValue.Notify).AsTask(t), ct).ConfigureAwait(false);
             if (sub.Status != GattCommunicationStatus.Success)
-            {
-                PhoneLog.Write($"subscribe failed on {peer.Name}: {sub.Status}{(sub.ProtocolError is { } pe ? $" (att error {pe})" : "")}");
-                Disconnected(peer, "subscribe failed");
-                return;
-            }
-            peer.Subscribed = true;
-            earlyDrops = 0;
-            PhoneLog.Write($"subscribed outbox on {peer.Name}");
-            UpdateTick();
-            if (!windowOpen) ScheduleIdentifyCheck(peer);
+                return (null, true, $"subscribe failed: {sub.Status}{(sub.ProtocolError is { } pe ? $" (att error {pe})" : "")}");
+
+            var done = link;
+            link = null;
+            return (done, true, null);
         }
         catch (Exception e)
         {
-            if (peer.Closed) return;
-            if (peer.ConnectedAt == null) FailConnect(peer, $"{e.GetType().Name}: {e.Message}");
-            else Disconnected(peer, $"{e.GetType().Name}: {e.Message}");
+            return (null, connected, ct.IsCancellationRequested ? "cancelled" : $"{e.GetType().Name}: {e.Message}");
         }
         finally
         {
-            if (isKnown) connectingKnown = false;
+            if (link != null) ReleaseNow(link, peer.Name);
+            if (held) bleGate.Release();
         }
     }
+
+    /// 线程池上调一个 WinRT 异步方法，最多等 OpTimeout：到时取消；取消也不理的，再多等 2 秒就不等了
+    /// （晚到的结果是可释放的就在线程池上放掉）。超时抛 TimeoutException
+    static async Task<T> Op<T>(string what, Func<CancellationToken, Task<T>> start, CancellationToken outer)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(outer);
+        cts.CancelAfter(OpTimeout);
+        var task = start(cts.Token);
+        try
+        {
+            return await task.WaitAsync(OpTimeout + TimeSpan.FromSeconds(2), outer).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!outer.IsCancellationRequested)
+        {
+            Abandon(task);
+            throw new TimeoutException($"{what} timed out after {OpTimeout.TotalSeconds:0}s");
+        }
+        catch (TimeoutException)
+        {
+            Abandon(task);
+            throw new TimeoutException($"{what} ignored cancellation after {OpTimeout.TotalSeconds:0}s");
+        }
+        catch (OperationCanceledException)
+        {
+            Abandon(task);
+            throw;
+        }
+    }
+
+    static void Abandon<T>(Task<T> task) => task.ContinueWith(t =>
+    {
+        if (t.IsCompletedSuccessfully && t.Result is IDisposable d)
+            try { d.Dispose(); } catch (Exception) { }
+        _ = t.Exception;
+    }, TaskScheduler.Default);
+
+    /// 放掉一条链路的 WinRT 对象（Windows 上放掉了才真的断开）。只在线程池上调：Dispose 可能要等好几秒
+    static void ReleaseNow(Link l, string name)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try { if (l.Outbox != null && l.ValueHandler != null) l.Outbox.ValueChanged -= l.ValueHandler; } catch (Exception) { }
+        try { if (l.Device != null && l.StatusHandler != null) l.Device.ConnectionStatusChanged -= l.StatusHandler; } catch (Exception) { }
+        try { if (l.Session != null) l.Session.MaintainConnection = false; } catch (Exception) { }
+        try { l.Service?.Dispose(); } catch (Exception) { }
+        try { l.Session?.Dispose(); } catch (Exception) { }
+        try { l.Device?.Dispose(); } catch (Exception) { }
+        if (clock.ElapsedMilliseconds > 500) PhoneLog.Write($"ble: releasing {name} took {clock.ElapsedMilliseconds} ms");
+    }
+
+    /// 排进队里、在线程池上放掉
+    void DisposeOff(Link l, string name) => _ = Task.Run(async () =>
+    {
+        var held = await bleGate.WaitAsync(GateTimeout).ConfigureAwait(false);
+        try { ReleaseNow(l, name); }
+        finally { if (held) bleGate.Release(); }
+    });
 
     /// 没连上（对应 Mac 的 didFailToConnect）：丢掉，继续扫
     void FailConnect(Peer peer, string why)
@@ -550,9 +745,16 @@ internal sealed class PhoneLink
 
     void OnConnectionStatus(Peer peer, BluetoothConnectionStatus status)
     {
+        uiStep = "OnConnectionStatus";
         if (peer.Closed) return;
         PhoneLog.Write($"connection status {peer.Name}: {status}");
-        if (status == BluetoothConnectionStatus.Disconnected && peer.ConnectedAt != null) Disconnected(peer, "link lost");
+        if (peer.Link == null)
+        {
+            // 还在连：等连接那边做完再算
+            peer.LostWhileConnecting = status == BluetoothConnectionStatus.Disconnected;
+            return;
+        }
+        if (status == BluetoothConnectionStatus.Disconnected) Disconnected(peer, "link lost");
     }
 
     /// 断了（对应 Mac 的 didDisconnectPeripheral）
@@ -583,25 +785,31 @@ internal sealed class PhoneLink
         StartWatcher();
     }
 
-    /// 释放这条连接的所有 WinRT 对象（Windows 上释放了才真的断开）
+    /// 从 UI 的状态里拿掉这台；它的 WinRT 对象排进队里在线程池上放（绝不在 UI 线程上，也不在它自己的事件回调里）
     void Drop(Peer peer, string? why)
     {
         if (peer.Closed) return;
+        uiStep = "Drop";
         peer.Closed = true;
         if (why != null) PhoneLog.Write($"dropping {peer.Name}: {why}");
-        if (peers.TryGetValue(peer.Address, out var cur) && ReferenceEquals(cur, peer)) peers.Remove(peer.Address);
+        if (peers.TryGetValue(peer.Address, out var cur) && ReferenceEquals(cur, peer))
+        {
+            peers.Remove(peer.Address);
+            RefreshPeerAddresses();
+        }
         if (peer.PhoneID is { } id && gates.TryGetValue(id, out var g)) g.ResetRSSI();
         peer.WriteQueue.Clear();
-        try { peer.Service?.Dispose(); } catch (Exception) { }
-        try { peer.Session?.Dispose(); } catch (Exception) { }
-        try { peer.Device?.Dispose(); } catch (Exception) { }
-        peer.Service = null;
-        peer.Session = null;
-        peer.Device = null;
-        peer.Inbox = peer.Outbox = null;
+        peer.EarlyChunks.Clear();
+        peer.Subscribed = false;
+        // 取消正在等的 WinRT 调用：CancelAsync 在线程池上跑回调（回调里是 IAsyncInfo.Cancel，跨进程）
+        _ = peer.Cts.CancelAsync();
+        if (peer.Link is { } link)
+        {
+            peer.Link = null;
+            DisposeOff(link, peer.Name);
+        }
         UpdateTick();
     }
-
     void DropAll(string why)
     {
         if (peers.Count == 0) return;
@@ -630,6 +838,7 @@ internal sealed class PhoneLink
 
     void OnRadioState(RadioState state)
     {
+        uiStep = "OnRadioState";
         PhoneLog.Write($"central state {state}");
         var on = state == RadioState.On;
         if (radioOn == on) return;
@@ -652,6 +861,7 @@ internal sealed class PhoneLink
 
     void OnPowerMode(PowerModes mode)
     {
+        uiStep = "OnPowerMode";
         if (mode == PowerModes.Suspend)
         {
             PhoneLog.Write("system suspend");
@@ -682,13 +892,29 @@ internal sealed class PhoneLink
     /// 每 10 秒：该扫没在扫就重启扫描器；配过、没连着就重连记得的地址
     void HealthCheck()
     {
+        uiStep = "HealthCheck";
         if (!initialized || radioOn != true || !ShouldRun) return;
-        if (watcher == null || watcher.Status != BluetoothLEAdvertisementWatcherStatus.Started)
+        if (watcher == null && !watcherStarting)
         {
-            PhoneLog.Write($"health: scanner {(watcher == null ? "not running" : watcher.Status.ToString())}, restarting");
+            PhoneLog.Write("health: scanner not running, restarting");
             StartWatcher();
         }
         if (IsPaired && !HasIdentifiedPeer) ConnectKnown("pending reconnect to known phone (health check)");
+    }
+
+    /// UiWatchdog 用（在它自己的线程上调）：这里的状态一行字。读的是 UI 线程的字段，读乱了就少写点
+    public string DescribeState()
+    {
+        try
+        {
+            var list = peers.Values.ToList().Select(p =>
+                $"{p.Name}{(p.PhoneID != null ? " identified" : "")}{(p.Subscribed ? " subscribed" : p.Link == null ? " connecting" : "")}" +
+                $"{(p.Writing ? " writing" : "")} q={p.WriteQueue.Count}");
+            return $"last ble step on UI: {uiStep}; radio {(radioOn?.ToString() ?? "?")}, scanner {(watcher != null ? "on" : watcherStarting ? "starting" : "off")}, " +
+                   $"connecting {connecting?.Name ?? "-"}, window {(windowOpen ? "open" : "closed")}, covered {curtainClosed}, " +
+                   $"queued adverts {advertQueue.Count}, peers [{string.Join("; ", list)}]";
+        }
+        catch (Exception e) { return $"last ble step on UI: {uiStep}; (state unreadable: {e.GetType().Name})"; }
     }
 
     // MARK: - 每 2 秒：RSSI 样本 + 问询
@@ -702,6 +928,7 @@ internal sealed class PhoneLink
 
     void Tick()
     {
+        uiStep = "Tick";
         var now = DateTime.UtcNow;
         foreach (var peer in peers.Values.Where(p => p.Subscribed && !p.Closed).ToList())
         {
@@ -737,7 +964,7 @@ internal sealed class PhoneLink
     /// 幕布盖着、手机认过身份：发一条签名的问询（新 nonce）
     void Poll(Peer peer)
     {
-        if (!curtainClosed || peer.PhoneID is not { } id || !peer.Subscribed || peer.Inbox == null) return;
+        if (!curtainClosed || peer.PhoneID is not { } id || !peer.Subscribed || peer.Link == null) return;
         // 上一条还没写完（手机没回执）就不再堆
         if (peer.WriteQueue.Count > 0 || peer.Writing)
         {
@@ -772,7 +999,7 @@ internal sealed class PhoneLink
 
     void Send(byte[] message, Peer peer)
     {
-        if (peer.Inbox == null || peer.Closed)
+        if (peer.Link == null || peer.Closed)
         {
             PhoneLog.Write($"send skipped: inbox of {peer.Name} not ready");
             return;
@@ -797,36 +1024,59 @@ internal sealed class PhoneLink
                 }
                 return;
             }
-            var inbox = peer.Inbox;
-            if (inbox == null) return;
+            if (peer.Link?.Inbox is not { } inbox) return;
             peer.Writing = true;
             var chunk = peer.WriteQueue.Dequeue();
-            try
-            {
-                var r = await inbox.WriteValueWithResultAsync(ToBuffer(chunk), GattWriteOption.WriteWithResponse);
-                if (r.Status != GattCommunicationStatus.Success)
-                {
-                    PhoneLog.Write($"write to inbox of {peer.Name} failed: {r.Status}{(r.ProtocolError is { } pe ? $" (att error {pe})" : "")}");
-                    peer.WriteQueue.Clear();
-                }
-            }
-            catch (Exception e)
-            {
-                PhoneLog.Write($"write to inbox of {peer.Name} failed: {e.GetType().Name}: {e.Message}");
-                peer.WriteQueue.Clear();
-            }
+            var token = peer.Cts.Token;
+            (string? Error, bool TimedOut) r;
+            try { r = await Task.Run(() => WriteWork(inbox, chunk, token)); }
             finally { peer.Writing = false; }
+            uiStep = "Pump result";
+            if (peer.Closed) return;
+            if (r.Error == null) continue;
+            PhoneLog.Write($"write to inbox of {peer.Name} failed: {r.Error}");
+            peer.WriteQueue.Clear();
+            // 写了 10 秒没回执：链路已经死了（手机走远了），当断开处理，好重新连
+            if (r.TimedOut)
+            {
+                peer.ConnectedAt ??= DateTime.UtcNow;
+                Disconnected(peer, "write timed out");
+                return;
+            }
         }
+    }
+
+    /// 线程池上：写一块，要回执
+    static async Task<(string? Error, bool TimedOut)> WriteWork(GattCharacteristic inbox, byte[] chunk, CancellationToken ct)
+    {
+        try
+        {
+            var r = await Op("write inbox", t => inbox.WriteValueWithResultAsync(ToBuffer(chunk), GattWriteOption.WriteWithResponse).AsTask(t), ct)
+                .ConfigureAwait(false);
+            return r.Status == GattCommunicationStatus.Success
+                ? (null, false)
+                : ($"{r.Status}{(r.ProtocolError is { } pe ? $" (att error {pe})" : "")}", false);
+        }
+        catch (TimeoutException e) { return (e.Message, true); }
+        catch (OperationCanceledException) { return ("cancelled", false); }
+        catch (Exception e) { return ($"{e.GetType().Name}: {e.Message}", false); }
     }
 
     void OnChunk(Peer peer, byte[] chunk)
     {
+        uiStep = "OnChunk";
         if (peer.Closed) return;
+        if (peer.Link == null)
+        {
+            peer.EarlyChunks.Add(chunk);
+            return;
+        }
         if (peer.Assembler.Feed(chunk) is { } message) Receive(message, peer);
     }
 
     void Receive(byte[] message, Peer peer)
     {
+        uiStep = $"Receive {PairingCrypto.KindOf(message)}";
         switch (PairingCrypto.KindOf(message))
         {
             case Kind.PairRequest or Kind.PairConfirm or Kind.PairAbort:
