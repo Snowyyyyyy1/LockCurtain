@@ -411,20 +411,26 @@ struct HomeView: View {
     @ViewBuilder
     private var coverButton: some View {
         if model.isPending {
+            // v2.9 P1-2：和「盖上幕布」同样的白字蓝底、同样全宽；不用 .disabled（会变灰看不清），只是点不动
             Button {
             } label: {
                 HStack(spacing: 8) {
                     ProgressView()
+                        .tint(.white)
+                        // 转圈不跟着放大，最大字号也能一行放下「正在盖上…」
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     Text("正在盖上…")
+                        .lineLimit(1)
                 }
+                .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)
             }
             .buttonStyle(.glassProminent)
             .controlSize(.large)
-            .disabled(true)
+            .allowsHitTesting(false)
             .glassEffectID("action", in: glassNS)
-            .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         } else {
             Button {
                 model.cover()
@@ -482,15 +488,25 @@ struct HomeView: View {
     @ViewBuilder
     private var liftButton: some View {
         if model.isLifting {
-            HStack(spacing: 6) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("正在撤下…")
+            // v2.9 P1-2：还是那颗文字按钮的样子（主色字），只是点不动
+            Button {
+            } label: {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                    Text("正在撤下…")
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
             }
             .font(.body.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
+            .buttonStyle(.borderless)
             .frame(minHeight: 44)
+            .allowsHitTesting(false)
             .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         } else {
             Button(model.liftNotice == .timedOut ? "再试一次" : "现在撤下") {
                 model.liftNow()
@@ -510,16 +526,19 @@ struct HomeView: View {
             } label: {
                 HStack(spacing: 8) {
                     ProgressView()
+                        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                     Text("正在撤下…")
+                        .lineLimit(1)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 3)
             }
             .buttonStyle(.glass)
             .controlSize(.large)
-            .disabled(true)
+            .allowsHitTesting(false)
             .glassEffectID("action", in: glassNS)
             .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.updatesFrequently)
         } else {
             Button {
                 model.liftNow()
