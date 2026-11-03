@@ -3,11 +3,27 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showSettings = false
     @State private var showPairing = false
     @Namespace private var glassNS
 
     var body: some View {
+        ScrollViewReader { proxy in
+            list
+            #if DEBUG
+            .task {
+                // 截图用：-lcScrollToStatus 一启动就滚到「幕布 / 这台 Mac」那组
+                if ProcessInfo.processInfo.arguments.contains("-lcScrollToStatus") {
+                    try? await Task.sleep(for: .milliseconds(800))
+                    proxy.scrollTo("status", anchor: .top)
+                }
+            }
+            #endif
+        }
+    }
+
+    private var list: some View {
         List {
             Section {
                 MacScreenIllustration(
@@ -27,6 +43,7 @@ struct HomeView: View {
             } footer: {
                 sectionFooter
             }
+            .id("status")
 
             if model.demoMode {
                 demoSection
@@ -43,7 +60,7 @@ struct HomeView: View {
                 }
             }
         }
-        .safeAreaBar(edge: .top, spacing: 0) {
+        .safeAreaInset(edge: .top, spacing: 0) {
             if model.demoMode {
                 demoBanner
             }
@@ -157,8 +174,68 @@ struct HomeView: View {
         model.connectionGaveUp && model.paired && !model.demoMode && model.connection != .connected
     }
 
+    /// 辅助功能大字（AX1–AX5）：说明和状态行从底部玻璃挪到「幕布 / 这台 Mac」分组的 footer，底部只留一颗全宽「现在撤下」
+    private var isAXSize: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    /// 已连上、不在「连不上」那一套里
+    private var showsLiftFooter: Bool {
+        isAXSize && !showsGaveUp && model.connection == .connected
+    }
+
+    /// 幕布盖着、不在「正在盖上…」：两行说明该出现的时候
+    private var showsClosedNote: Bool {
+        model.phase == .closed && !model.isPending
+    }
+
     @ViewBuilder
     private var sectionFooter: some View {
+        if showsLiftFooter {
+            VStack(alignment: .leading, spacing: 8) {
+                if model.justPaired {
+                    Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
+                    if model.liftOnApproach && !showsClosedNote {
+                        Text("以后回到电脑前，手机解锁着、走近，幕布就撤下。")
+                    }
+                }
+                axLiftFooter
+            }
+        } else {
+            standardFooter
+        }
+    }
+
+    /// AX 大字时 footer 里的状态行 + 两行说明
+    @ViewBuilder
+    private var axLiftFooter: some View {
+        if showsClosedNote {
+            if let notice = model.liftNotice, notice != .alreadyUncovered {
+                Text(liftNoticeText(notice))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                if model.liftOnApproach {
+                    Text("回到电脑前，手机解锁着、走近，幕布就撤下。")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    Text("手机锁着不算，别人拿着也撤不下来。")
+                } else {
+                    Text("回到电脑前按任意键解锁。")
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.primary)
+                    Text("「走近撤下」关着，手机撤不下来。")
+                }
+            }
+            .accessibilityElement(children: .combine)
+        } else if !model.didTimeOut {
+            if model.liftNotice == .alreadyUncovered {
+                Text("幕布已经是撤下的了。")
+            } else if model.showLiftedNote {
+                Text("幕布撤下了。Mac 要是自己锁了屏，还得照常输密码。")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var standardFooter: some View {
         if showsGaveUp {
             EmptyView()
         } else if model.justPaired && model.connection != .notPaired {
@@ -193,7 +270,10 @@ struct HomeView: View {
     // MARK: - Bottom bar
 
     private var showsBottomBar: Bool {
-        model.connection == .connected || model.connection == .notPaired || showsGaveUp
+        if showsLiftFooter && showsClosedNote && !model.liftOnApproach {
+            return false   // AX 大字、「走近撤下」关着：两行在 footer，底部什么都没有
+        }
+        return model.connection == .connected || model.connection == .notPaired || showsGaveUp
     }
 
     private var bottomBar: some View {
@@ -216,7 +296,10 @@ struct HomeView: View {
                     .controlSize(.large)
                     .glassEffectID("action", in: glassNS)
                     .transition(.opacity)
-                } else if model.phase == .closed && !model.isPending {
+                } else if showsClosedNote && showsLiftFooter {
+                    axLiftButton
+                        .transition(.opacity)
+                } else if showsClosedNote {
                     closedNote
                         .glassEffect(.clear, in: .rect(cornerRadius: 26))
                         .glassEffectID("action", in: glassNS)
@@ -227,6 +310,8 @@ struct HomeView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
+                    } else if showsLiftFooter {
+                        // AX 大字：撤下后的那两句在 footer 里
                     } else if model.liftNotice == .alreadyUncovered {
                         Text("幕布已经是撤下的了。")
                             .font(.footnote)
@@ -350,6 +435,39 @@ struct HomeView: View {
         }
     }
 
+    /// AX 大字时底部唯一的按钮：全宽玻璃「现在撤下」，变体同 liftButton
+    @ViewBuilder
+    private var axLiftButton: some View {
+        if model.isLifting {
+            Button {
+            } label: {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("正在撤下…")
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .disabled(true)
+            .glassEffectID("action", in: glassNS)
+            .accessibilityElement(children: .combine)
+        } else {
+            Button {
+                model.liftNow()
+            } label: {
+                Text(model.liftNotice == .timedOut ? "再试一次" : "现在撤下")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 3)
+            }
+            .buttonStyle(.glass)
+            .controlSize(.large)
+            .glassEffectID("action", in: glassNS)
+            .accessibilityHint("先验证面容，再撤下这台 Mac 的幕布")
+        }
+    }
+
     private func liftNoticeText(_ notice: AppModel.LiftNotice) -> String {
         switch notice {
         case .timedOut: "Mac 没有回应，幕布还盖着。"
@@ -371,6 +489,8 @@ struct HomeView: View {
                 .foregroundStyle(.black)
             Text("下面是模拟状态，没有连接任何 Mac")
                 .font(.footnote)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .padding(12)
@@ -383,6 +503,7 @@ struct HomeView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+        .background(Color(.systemGroupedBackground), ignoresSafeAreaEdges: [])
         .accessibilityElement(children: .combine)
     }
 
