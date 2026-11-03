@@ -103,9 +103,16 @@ final class PairingSession {
 }
 
 struct PairingSheet: View {
+    /// 已经配着一台、要换成另一台（copy v11 §13）：新配对在旁边配，配成了才换掉原来那台
+    var replacing = false
+
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// v2.9 P2-1：格子跟字号走（整排封顶在 AX2）
+    @ScaledMetric(relativeTo: .title) private var box: CGFloat = 46
+    /// v2.9 P2-2
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 56
 
     @State private var session = PairingSession()
     @State private var code = ""
@@ -154,12 +161,18 @@ struct PairingSheet: View {
                 }
             } else if newStep == .success {
                 codeFocused = false
+                // v2.9 P1-4：配好了也读出来
+                AccessibilityNotification.Announcement(successTitle).post()
             }
         }
         .onChange(of: model.connectionGaveUp) { _, gaveUp in
             if gaveUp { codeFocused = false }
         }
         .onChange(of: session.errorMessage) { _, message in
+            // v2.9 P1-4：出错那句读出来（和 .error 震动同时）
+            if let message {
+                AccessibilityNotification.Announcement(message).post()
+            }
             guard message != nil, !model.connectionGaveUp else { return }
             code = ""
             codeFocused = true
@@ -208,11 +221,17 @@ struct PairingSheet: View {
         }
     }
 
+    /// 首次配对「配对好了」；换电脑「已经换成这台电脑了。」（copy v11 §13）
+    private var successTitle: String {
+        replacing ? "已经换成这台电脑了。" : "配对好了"
+    }
+
     private var searchingView: some View {
         VStack(spacing: 16) {
             ProgressView()
             Text("等这台电脑来连")
                 .font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
             Text("电脑上点开「配对手机」，把 6 位输进来")
                 .font(.body)
                 .foregroundStyle(.secondary)
@@ -222,15 +241,27 @@ struct PairingSheet: View {
     }
 
     private var codeView: some View {
+        // v2.9 P2-4：能滚，最大字号或横屏时错误那句和按钮不会被键盘挡住
+        ScrollView {
+            codeStack
+        }
+        .scrollBounceBehavior(.basedOnSize)
+    }
+
+    private var codeStack: some View {
         VStack(spacing: 16) {
             Text("输 6 位码")
                 .font(.title2.bold())
+                .accessibilityAddTraits(.isHeader)
             Text("电脑上显示的那 6 个数字")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
+            // v2.9 P1-3：格子只是画，读屏只看到盖在上面的那一个输入框
             codeBoxes
+                .accessibilityHidden(true)
+                .overlay { hiddenField }
                 .modifier(ShakeEffect(animatableData: shake))
                 .padding(.top, 8)
 
@@ -248,23 +279,22 @@ struct PairingSheet: View {
             if session.isVerifying {
                 ProgressView()
             }
-
-            hiddenField
-
-            Spacer(minLength: 0)
         }
         .padding(.horizontal, 20)
         .padding(.top, 48)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .padding(.bottom, 20)
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private var codeBoxes: some View {
+        // 格子宽 = box（跟字号走），放不下就一起缩；高 = 宽 × 1.26
         HStack(spacing: 8) {
             ForEach(0..<6, id: \.self) { index in
                 let character = digit(at: index)
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(.secondarySystemGroupedBackground))
-                    .frame(width: 46, height: 58)
+                    .aspectRatio(1 / 1.26, contentMode: .fit)
+                    .frame(maxWidth: box)
                     .overlay {
                         RoundedRectangle(cornerRadius: 12)
                             .strokeBorder(
@@ -275,17 +305,11 @@ struct PairingSheet: View {
                     .overlay {
                         Text(character)
                             .font(.title.monospacedDigit().weight(.semibold))
-                            .minimumScaleFactor(0.5)
                     }
             }
         }
-        .contentShape(.rect)
-        .onTapGesture {
-            codeFocused = true
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("6 位配对码")
-        .accessibilityValue(code.isEmpty ? "还没输入" : code.map(String.init).joined(separator: " "))
+        .frame(maxWidth: 6 * box + 5 * 8)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }
 
     private var hiddenField: some View {
@@ -293,9 +317,13 @@ struct PairingSheet: View {
             .keyboardType(.numberPad)
             .textContentType(.oneTimeCode)
             .focused($codeFocused)
-            .frame(width: 1, height: 1)
+            // 字和光标都透明：大字号时 0.01 的字在白格子上还能隐约看见
+            .foregroundStyle(.clear)
+            .tint(.clear)
+            .frame(maxWidth: .infinity, minHeight: 58, maxHeight: .infinity)
             .opacity(0.01)
             .accessibilityLabel("6 位配对码")
+            .accessibilityValue(code.isEmpty ? "还没输" : "已输 \(code.count) 位")
             .onChange(of: code) { _, newValue in
                 let filtered = String(newValue.filter { $0.isNumber }.prefix(6))
                 if filtered != newValue {
@@ -310,14 +338,28 @@ struct PairingSheet: View {
     }
 
     private var successView: some View {
+        // v2.9 P2-4：能滚；内容不够高时照旧上下居中、按钮在底
+        GeometryReader { proxy in
+            ScrollView {
+                successStack
+                    .frame(minHeight: proxy.size.height)
+            }
+            .scrollBounceBehavior(.basedOnSize)
+        }
+    }
+
+    private var successStack: some View {
         VStack(spacing: 16) {
             Spacer()
 
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 56))
+                .font(.system(size: heroSize))
                 .foregroundStyle(.green)
-            Text("配对好了")
+                .accessibilityHidden(true)
+            Text(successTitle)
                 .font(.title2.bold())
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
 
             Spacer()
 

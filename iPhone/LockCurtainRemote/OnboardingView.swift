@@ -3,19 +3,23 @@ import SwiftUI
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
     @State private var showPairing = false
+    /// v2.9 P2-2：大图标跟字号走
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 64
 
     var body: some View {
         GeometryReader { proxy in
             ScrollView {
                 VStack(spacing: 20) {
                     Image(systemName: "laptopcomputer.and.iphone")
-                        .font(.system(size: 64))
+                        .font(.system(size: heroSize))
                         .foregroundStyle(.tint)
                         .symbolRenderingMode(.hierarchical)
+                        .accessibilityHidden(true)
 
                     Text("先和你的电脑连上")
                         .font(.largeTitle.bold())
                         .multilineTextAlignment(.center)
+                        .accessibilityAddTraits(.isHeader)
 
                     Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
                         .font(.body)
