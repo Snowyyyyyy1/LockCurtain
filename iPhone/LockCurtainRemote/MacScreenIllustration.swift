@@ -25,7 +25,6 @@ enum MacScreenState: Equatable {
 /// when the curtain is fully down.
 struct MacScreenIllustration: View {
     let state: MacScreenState
-    var showsDemoBadge = false
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -36,9 +35,8 @@ struct MacScreenIllustration: View {
     private static let designSize = CGSize(width: 300, height: 190)
     private static let screenSize = CGSize(width: 236, height: 148)
 
-    init(state: MacScreenState, showsDemoBadge: Bool = false) {
+    init(state: MacScreenState) {
         self.state = state
-        self.showsDemoBadge = showsDemoBadge
         _curtainFraction = State(initialValue: state.curtainFraction)
         _eyeVisible = State(initialValue: state == .curtain)
     }
@@ -56,6 +54,9 @@ struct MacScreenIllustration: View {
                 proxy.size.height / Self.designSize.height
             )
             drawing
+                // v2.9 P3-2：没连上的四种（空屏）整台笔电淡到 0.4，读作「现在不在线上」；先合成再淡，免得叠层透出来
+                .compositingGroup()
+                .opacity(state == .empty ? 0.4 : 1)
                 .frame(width: Self.designSize.width, height: Self.designSize.height)
                 .scaleEffect(scale)
                 .frame(width: proxy.size.width, height: proxy.size.height)
@@ -121,18 +122,6 @@ struct MacScreenIllustration: View {
                     .opacity(eyeVisible ? 1 : 0)
             }
         }
-        .overlay(alignment: .topLeading) {
-            if showsDemoBadge {
-                Text("演示")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(.orange, in: .rect(cornerRadius: 6))
-                    .foregroundStyle(.black)
-                    .fixedSize()
-                    .padding(8)
-            }
-        }
     }
 
     private var screenGradient: LinearGradient {
@@ -161,10 +150,7 @@ struct MacScreenIllustration: View {
                 .frame(width: 96, height: 72)
                 .offset(x: 118, y: 52)
 
-            Rectangle()
-                .fill(.white.opacity(0.55))
-                .frame(height: 7)
-                .frame(maxWidth: .infinity, alignment: .top)
+            // v2.9 P2-5：顶上那条 7pt 白条（菜单栏）删掉了，画的是一台通用的笔电
         }
         .frame(width: Self.screenSize.width, height: Self.screenSize.height)
     }

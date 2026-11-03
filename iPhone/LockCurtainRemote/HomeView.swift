@@ -46,10 +46,7 @@ struct HomeView: View {
                 .id("mac")
             } else {
                 Section {
-                    MacScreenIllustration(
-                        state: model.screenState,
-                        showsDemoBadge: model.demoMode
-                    )
+                    MacScreenIllustration(state: model.screenState)
                     .frame(maxWidth: .infinity)
                     .listRowInsets(EdgeInsets(top: 20, leading: 0, bottom: 16, trailing: 0))
                 }

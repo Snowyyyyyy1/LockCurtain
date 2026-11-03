@@ -136,7 +136,7 @@ final class AppModel {
         #if DEBUG
         // 截图用：-lcForceLinkState waiting|stopped|btoff —— 假装配过对、没连上；unpaired —— 没配对的主屏（平时没配对只会看到引导页）
         let forcedLink = UserDefaults.standard.string(forKey: "lcForceLinkState")
-            .flatMap { DebugForcedCurtainLink(argument: $0, macName: "Studio 的 MacBook Pro") }
+            .flatMap { DebugForcedCurtainLink(argument: $0, macName: "Studio 的电脑") }
         #else
         let forcedLink: (any CurtainLink)? = nil
         #endif
@@ -145,13 +145,13 @@ final class AppModel {
             let forcedPaired = forcedLink.snapshot.connection != .notPaired
             paired = forcedPaired
             demoMode = false
-            macName = forcedPaired ? "Studio 的 MacBook Pro" : nil
+            macName = forcedPaired ? "Studio 的电脑" : nil
             if !forcedPaired { isPreviewFixture = true }   // 不走引导页，直接看主屏
             link = forcedLink
         } else if previewConnected {
             paired = true
             demoMode = false
-            macName = "Studio 的 MacBook Pro"
+            macName = "Studio 的电脑"
             // 截图用：-lcPreviewState closing|closed|lifted —— 已连上时幕布停在「正在盖上…」/「已盖上」，或刚撤下
             #if DEBUG
             let previewPhase: CurtainPhase = switch UserDefaults.standard.string(forKey: "lcPreviewState") {

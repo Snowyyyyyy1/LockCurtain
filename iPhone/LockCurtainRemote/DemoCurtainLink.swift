@@ -10,7 +10,7 @@ final class DemoCurtainLink: CurtainLink {
     private var awayTask: Task<Void, Never>?
 
     init(
-        macName: String = "Studio 的 MacBook Pro",
+        macName: String = "Studio 的电脑",
         phase: CurtainPhase = .open,
         auto: CurtainAuto = .on
     ) {
