@@ -24,6 +24,8 @@ final class AppModel {
         case timedOut
         case tooFar
         case refused
+        /// The Mac said the curtain was already up; shown above 盖上幕布
+        case alreadyUncovered
     }
 
     private enum Keys {
@@ -279,11 +281,13 @@ final class AppModel {
             self.liftNotice = .timedOut
             self.liftWarningCount += 1
             self.recordEvent(text: "没有回应")
+            self.link.requestState()
         }
     }
 
     private func finishLift(_ outcome: LiftOutcome) {
-        guard isLifting else { return }
+        // notCovered: the link already published "open", which ended 正在撤下 in apply
+        guard isLifting || outcome == .notCovered else { return }
         switch outcome {
         case .lifted:
             // The Mac's own "uncovered" report ends 正在撤下 (see apply)
@@ -296,6 +300,10 @@ final class AppModel {
             endLifting()
             liftNotice = .refused
             liftWarningCount += 1
+        case .notCovered:
+            // the link has already flipped the phase to open
+            endLifting()
+            liftNotice = .alreadyUncovered
         case .timedOut:
             endLifting()
             liftNotice = .timedOut
@@ -304,6 +312,8 @@ final class AppModel {
         case .unavailable:
             endLifting()
         }
+        // didn't lift: ask the Mac for the real curtain state
+        if outcome != .lifted { link.requestState() }
     }
 
     private func endLifting() {

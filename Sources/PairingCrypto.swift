@@ -37,7 +37,8 @@
 //   手机 → Mac  LiftNow    = ver | 0x0D | phoneID(16) | counter(8) | nonce(16) | mac(32)
 //               「现在撤下」（手机先过了面容 / 密码）：不看「先锁过」那条，但照样要近、要新鲜、要签名
 //   Mac  → 手机 LiftResult = ver | 0x0E | phoneID(16) | counter(8) | status(1) | mac(32)
-//               counter 是被回复的那条 Presence / LiftNow 的计数；status 0 = 撤下了，1 = 太远，2 = 没撤（别的原因）
+//               counter 是被回复的那条 Presence / LiftNow 的计数；status 0 = 撤下了，1 = 太远，2 = 没撤（别的原因），
+//               3 = 幕布本来就没盖着（老手机不认识 3，验不过就当没收到，等超时）
 //               Presence 只在撤下了的时候回；LiftNow 每次都回
 //
 // 分帧（PairingFraming）：任何一条消息按传输层的单包上限切块，每块前面 1 字节头：
@@ -591,6 +592,8 @@ enum PairingCrypto {
         case lifted = 0
         case tooFar = 1
         case refused = 2
+        /// 幕布本来就没盖着（手机据此把界面改成「没盖上」）
+        case notCovered = 3
     }
 
     static func makeLiftResult(_ status: LiftStatus, counter: UInt64, phoneID: UUID, key: SymmetricKey) -> Data {

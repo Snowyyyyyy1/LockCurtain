@@ -34,4 +34,6 @@ final class BLEPlaceholderCurtainLink: CurtainLink {
     func liftNow() async -> LiftOutcome {
         .unavailable
     }
+
+    func requestState() {}
 }

@@ -114,6 +114,15 @@ struct LiftGate {
         return median >= Self.nearMedianDBm ? nil : .notNear(median: median)
     }
 
+    /// 「现在撤下」没撤时回手机的结果：太远 / 本来就没盖着 / 别的原因
+    static func resultStatus(for refusal: Refusal) -> PairingCrypto.LiftStatus {
+        switch refusal {
+        case .notNear, .noRSSI: return .tooFar
+        case .notCovered: return .notCovered
+        case .unknownNonce, .staleNonce, .toggleOff, .phoneLocked, .edgeNotArmed: return .refused
+        }
+    }
+
     // MARK: - 判断
 
     /// 手机对问询的回答（签名、计数已经验过）

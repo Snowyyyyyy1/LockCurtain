@@ -35,7 +35,9 @@ enum LiftOutcome: Equatable, Sendable {
     case lifted
     /// The Mac measured the phone as not near enough.
     case tooFar
-    /// The Mac refused for another reason (curtain not down, stale answer…).
+    /// The Mac says the curtain is already not covered.
+    case notCovered
+    /// The Mac refused for another reason (stale / reused answer…).
     case refused
     case timedOut
     case unavailable
@@ -92,4 +94,8 @@ protocol CurtainLink: AnyObject {
     /// 现在撤下: ask the Mac to lift the curtain now. The caller has already
     /// done any owner check (Face ID / passcode) that applies.
     func liftNow() async -> LiftOutcome
+
+    /// Ask the Mac to report the curtain state again (after a lift that
+    /// didn't happen), so the screen never sticks on a stale state.
+    func requestState()
 }

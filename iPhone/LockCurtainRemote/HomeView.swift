@@ -227,6 +227,11 @@ struct HomeView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
+                    } else if model.liftNotice == .alreadyUncovered {
+                        Text("幕布已经是撤下的了。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .transition(.opacity)
                     } else if model.showLiftedNote {
                         Text("幕布撤下了。Mac 要是自己锁了屏，还得照常输密码。")
                             .font(.footnote)
@@ -289,7 +294,7 @@ struct HomeView: View {
     /// 幕布盖着：「走近撤下」开着时两行说明 + 现在撤下；关着时两行说明、没有按钮
     private var closedNote: some View {
         VStack(spacing: 10) {
-            if let notice = model.liftNotice {
+            if let notice = model.liftNotice, notice != .alreadyUncovered {
                 Text(liftNoticeText(notice))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -349,8 +354,8 @@ struct HomeView: View {
         switch notice {
         case .timedOut: "Mac 没有回应，幕布还盖着。"
         case .tooFar: "离这台 Mac 太远，走近再试。"
-        // TODO(copy): Mac 收到了但没撤（不是太远：比如回答过期、幕布已经不是盖着的）。没有定稿的话
-        case .refused: "TODO(copy): Mac 没有撤下幕布"
+        case .refused: "这次没撤下来，再按一次。"
+        case .alreadyUncovered: "幕布已经是撤下的了。"
         }
     }
 

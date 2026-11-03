@@ -450,6 +450,10 @@ final class BLECurtainLink: NSObject, CurtainLink {
                     if snapshot.phase != .closed { finishLift(.lifted) }
                 case .tooFar: finishLift(.tooFar)
                 case .refused: finishLift(.refused)
+                case .notCovered:
+                    // Mac 签名说幕布本来就没盖着：界面跟着改成「没盖上」
+                    publish { $0.phase = .open }
+                    finishLift(.notCovered)
                 }
             }
         case .revoke:
@@ -462,6 +466,13 @@ final class BLECurtainLink: NSObject, CurtainLink {
         default:
             break
         }
+    }
+
+    /// 「现在撤下」没撤下来：用签名的 ping 让 Mac 再报一次幕布状态（老 Mac 也这样回）
+    func requestState() {
+        guard mac != nil, ready, isPaired else { return }
+        Self.liftLog.info("asking the Mac for the curtain state")
+        Task { [weak self] in _ = await self?.sendSigned("ping") }
     }
 
     /// Mac 的问询：签名验过才回。此刻解锁着没有，当场看系统的 isProtectedDataAvailable

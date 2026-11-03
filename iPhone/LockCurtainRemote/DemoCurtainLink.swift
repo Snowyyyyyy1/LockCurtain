@@ -49,6 +49,10 @@ final class DemoCurtainLink: CurtainLink {
         publish()
     }
 
+    func requestState() {
+        // The demo is its own source of truth.
+    }
+
     /// 现在撤下 in the demo: no Face ID, no command — 0.8 s later the
     /// curtain is simply up again (still marked demo).
     func liftNow() async -> LiftOutcome {

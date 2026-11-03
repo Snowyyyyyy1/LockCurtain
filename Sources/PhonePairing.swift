@@ -399,11 +399,7 @@ final class PhonePairing: NSObject, ObservableObject {
         case .refuse(let why):
             Self.log("lift: \(label): refused, \(Self.describe(why))")
             if isLiftNow {
-                let status: PairingCrypto.LiftStatus
-                switch why {
-                case .notNear, .noRSSI: status = .tooFar
-                default: status = .refused
-                }
+                let status = LiftGate.resultStatus(for: why)
                 if let reply = authority.liftResultMessage(status, counter: answer.counter, for: id) { send(reply, to: peer) }
             }
         }

@@ -697,6 +697,21 @@ enum LiftTests {
         expect(g.liftNow(nonce: nonce(2), at: at(12)) == .refuse(.staleNonce)
                && g.liftNow(nonce: nonce(2), at: at(6.5)) == .refuse(.unknownNonce),
                "现在撤下：过期的、用过的 nonce → 不撤")
+
+        // 没撤时回手机的原因
+        expect(LiftGate.resultStatus(for: .notCovered) == .notCovered, "撤下结果：幕布本来就没盖着 → notCovered")
+        expect(LiftGate.resultStatus(for: .notNear(median: -80)) == .tooFar
+               && LiftGate.resultStatus(for: .noRSSI(samples: 1)) == .tooFar, "撤下结果：不够近 → tooFar")
+        expect([LiftGate.Refusal.unknownNonce, .staleNonce, .toggleOff, .phoneLocked, .edgeNotArmed]
+                .allSatisfy { LiftGate.resultStatus(for: $0) == .refused }, "撤下结果：nonce 过期 / 用过 / 别的 → refused")
+        var down = coveredNear(armed: false)
+        down.issue(nonce(2), at: at(6))
+        down.uncovered()                               // 幕布已经被键盘撤掉了
+        let late = down.liftNow(nonce: nonce(2), at: at(6.5))
+        expect(late == .refuse(.notCovered) && {
+            if case .refuse(let why) = late { return LiftGate.resultStatus(for: why) == .notCovered }
+            return false
+        }(), "撤下结果：幕布已经撤了再按「现在撤下」→ 回 notCovered")
     }
 
     /// 签名、计数、和命令的兼容
@@ -760,6 +775,10 @@ enum LiftTests {
         let result = mac.liftResultMessage(.tooFar, counter: 4, for: phoneID)!
         let opened = PairingCrypto.openLiftResult(result, phoneID: phoneID, key: key)
         expect(opened?.counter == 4 && opened?.status == .tooFar, "撤下线格式：「太远」结果带签名，手机验过")
+        let gone = mac.liftResultMessage(.notCovered, counter: 4, for: phoneID)!
+        expect(PairingCrypto.openLiftResult(gone, phoneID: phoneID, key: key)?.status == .notCovered
+               && [UInt8](gone)[26] == 3 && [UInt8](result)[26] == 1,
+               "撤下线格式：「本来就没盖着」是单独的结果（3），带签名")
         var badResult = [UInt8](result)
         badResult[26] = PairingCrypto.LiftStatus.lifted.rawValue
         expect(PairingCrypto.openLiftResult(Data(badResult), phoneID: phoneID, key: key) == nil, "撤下线格式：改过的结果验不过")
@@ -790,6 +809,44 @@ enum LiftTests {
             d3 = g.presence(st, nonce: a.nonce, at: now.addingTimeInterval(4.5))
         }
         expect(d3 == .refuse(.unknownNonce), "撤下端到端：用过的 nonce 再来（计数对）也不撤")
+
+        // 重放验收：抓一条有效的回答，原样喂两次（验签 + 计数 + 判断全走一遍）
+        func feed(_ bytes: Data, _ gate: inout LiftGate, at time: Date) -> (accepted: Bool, decision: LiftGate.Decision?) {
+            guard case .accepted(let a) = mac.handleAnswer(bytes) else { return (false, nil) }
+            switch a.kind {
+            case .presence(let st): return (true, gate.presence(st, nonce: a.nonce, at: time))
+            case .liftNow: return (true, gate.liftNow(nonce: a.nonce, at: time))
+            }
+        }
+        for kind in ["Presence", "LiftNow"] {
+            var rg = LiftGate()
+            let t = Date()
+            rg.covered(at: t)
+            for i in 0..<3 { rg.recordRSSI(-58, at: t.addingTimeInterval(Double(i))) }
+            let c = store.load(phoneID)!.lastCounter
+            let na = PairingCrypto.makeNonce(), nb = PairingCrypto.makeNonce()
+            rg.issue(na, at: t.addingTimeInterval(2))
+            if kind == "Presence" {
+                _ = feed(PairingCrypto.sealPresence(.locked, nonce: na, phoneID: phoneID, counter: c + 1, key: key)!, &rg,
+                         at: t.addingTimeInterval(2.1))
+            }
+            rg.issue(nb, at: t.addingTimeInterval(3))
+            let captured = kind == "Presence"
+                ? PairingCrypto.sealPresence(.unlocked, nonce: nb, phoneID: phoneID, counter: c + 2, key: key)!
+                : PairingCrypto.sealLiftNow(nonce: nb, phoneID: phoneID, counter: c + 2, key: key)!
+            let first = feed(captured, &rg, at: t.addingTimeInterval(3.2))
+            let second = feed(captured, &rg, at: t.addingTimeInterval(3.4))
+            let replayReason: Bool = {
+                if case .rejected(.replay, _) = mac.handleAnswer(captured) { return true }
+                return false
+            }()
+            let nonceAgain = kind == "Presence"
+                ? rg.presence(.unlocked, nonce: nb, at: t.addingTimeInterval(3.5))
+                : rg.liftNow(nonce: nb, at: t.addingTimeInterval(3.5))
+            expect(first.accepted && first.decision == .lift && !second.accepted && replayReason
+                   && nonceAgain == .refuse(.unknownNonce) && store.load(phoneID)?.lastCounter == c + 2,
+                   "重放验收（\(kind)）：抓到的有效回答第一次撤下，原样再喂被拒（计数旧），同一个 nonce 也不再认")
+        }
 
         // 撤销之后什么都不认
         _ = mac.revokeAll()
