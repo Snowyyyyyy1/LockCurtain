@@ -86,9 +86,9 @@ final class PairingSession {
             case .accepted:
                 self.step = .success
             case .notFound:
-                self.fail("没找到这台 Mac。Mac 要醒着、在附近，蓝牙也要开着。", "再找一次")
+                self.fail("这台 Mac 没连上来。Mac 上开着 LockCurtain，两边蓝牙都开着。", "再找一次")
             case .connectFailed:
-                self.fail("找到了，但连不上。走近一点，或者把 Mac 上的「配对手机」重新点开一次。", "再试一次")
+                self.fail("连上了，但没配成。把 Mac 上「配对手机」重新点开，拿新的 6 位。", "再试一次")
             case .wrongCode:
                 self.fail("码不对，再看一眼 Mac 上那 6 位。", "重新输入")
             case .macRefused:

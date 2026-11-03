@@ -49,10 +49,13 @@ final class AppModel {
             }
         }
 
+        /// 「没连上」底部按钮：点了回到「等这台 Mac 来连…」、重新等 waitWindow
+        static let retryButtonTitle = "再找一次"
+
         var footer: String {
             switch self {
             case .waiting: "Mac 上开着 LockCurtain、人也在附近就行。"
-            case .stopped: "先打开 LockCurtain，等它连上就不用管了。"
+            case .stopped: "Mac 上开着 LockCurtain，两边蓝牙都开着，人也在附近。"
             case .bluetoothOff: "打开 iPhone 的蓝牙，这台 Mac 才找得到它。"
             }
         }
@@ -113,6 +116,8 @@ final class AppModel {
     @ObservationIgnored private var liftTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var demoLiftTask: Task<Void, Never>?
     @ObservationIgnored private var lastPhoneLiftCount = 0
+    /// Bumped on every 「再找一次」 tap (light impact haptic)
+    private(set) var findAgainTapCount = 0
     @ObservationIgnored private var waitWindowTask: Task<Void, Never>?
     @ObservationIgnored private var lastWaitEpoch = 0
 
@@ -162,7 +167,8 @@ final class AppModel {
         observeCurrentLink()
         recordEvent(from: link.snapshot)
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
-        if paired && !demoMode { link.activate() }
+        // （-lcForceLinkState 的假连接不在这里启动：「没连上」要停在没广播的样子，等「再找一次」）
+        if paired && !demoMode && forcedLink == nil { link.activate() }
         // 一打开 App 就算一次「回到前台」：开始等 20 秒
         restartWaitWindow()
         #if DEBUG
@@ -263,6 +269,14 @@ final class AppModel {
         } else {
             link.activate()
         }
+    }
+
+    /// 「没连上」底部按钮：确保在广播，回到「等这台 Mac 来连…」，重新等 20 秒
+    func findMacAgain() {
+        guard unlinkedMacState == .stopped else { return }
+        findAgainTapCount += 1
+        prepareForPairing()
+        restartWaitWindow()
     }
 
     func cover() {

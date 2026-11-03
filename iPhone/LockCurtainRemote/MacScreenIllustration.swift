@@ -103,6 +103,8 @@ struct MacScreenIllustration: View {
     private var screen: some View {
         ZStack {
             if state == .empty {
+                // 空屏：tertiarySystemFill 是半透明的，直接叠在黑色屏框上会发黑；先垫卡片底色，再叠灰
+                Color(.secondarySystemGroupedBackground)
                 Color(.tertiarySystemFill)
             } else {
                 desktop

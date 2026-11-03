@@ -128,7 +128,13 @@ final class DebugForcedCurtainLink: CurtainLink {
         snapshot = snap
     }
 
-    func activate() {}
+    /// 「再找一次」：假装重新开始广播
+    func activate() {
+        guard snapshot.connection == .notConnected else { return }
+        snapshot.isAdvertising = true
+        snapshot.waitEpoch += 1
+        onSnapshotChange?(snapshot)
+    }
     func cover() async -> CoverOutcome { .unavailable }
     func setAutoEnabled(_ isOn: Bool) {}
     func liftNow() async -> LiftOutcome { .unavailable }

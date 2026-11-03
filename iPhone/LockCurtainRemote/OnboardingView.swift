@@ -23,7 +23,7 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, 32)
 
-                    Text("第一次连上、或者断开以后重新连上，要在手机上把 LockCurtain 打开一下。")
+                    Text("第一次连上，要打开 LockCurtain 等它连上；连上以后就不用管了。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

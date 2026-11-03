@@ -122,6 +122,7 @@ struct HomeView: View {
             isTimedOut
         }
         .sensoryFeedback(.impact(weight: .light), trigger: model.liftTapCount)
+        .sensoryFeedback(.impact(weight: .light), trigger: model.findAgainTapCount)
         .sensoryFeedback(.warning, trigger: model.liftWarningCount)
         .sensoryFeedback(.success, trigger: model.showLiftedNote) { _, isShown in
             isShown
@@ -243,7 +244,7 @@ struct HomeView: View {
         if showsLiftFooter {
             if model.justPaired {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
+                    Text("以后它自己会连上；万一断了，打开 LockCurtain 等一下就好。")
                     if model.liftOnApproach && !showsClosedNote {
                         Text("以后回到电脑前，手机解锁着、走近，幕布就撤下。")
                     }
@@ -291,7 +292,7 @@ struct HomeView: View {
         } else if model.justPaired && model.connection != .notPaired {
             VStack(alignment: .leading, spacing: 8) {
                 genericFooter
-                Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
+                Text("以后它自己会连上；万一断了，打开 LockCurtain 等一下就好。")
                 if model.liftOnApproach {
                     Text("以后回到电脑前，手机解锁着、走近，幕布就撤下。")
                 }
@@ -325,6 +326,7 @@ struct HomeView: View {
             return false   // AX 大字、「走近撤下」关着：两行在 footer，底部什么都没有
         }
         return model.connection == .connected || model.connection == .notPaired || showsGaveUp
+            || model.unlinkedMacState == .stopped
     }
 
     private var bottomBar: some View {
@@ -340,6 +342,19 @@ struct HomeView: View {
                         showPairing = true
                     } label: {
                         Text("去配对")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 3)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .controlSize(.large)
+                    .glassEffectID("action", in: glassNS)
+                    .transition(.opacity)
+                } else if model.unlinkedMacState == .stopped {
+                    // 「没连上」：和「盖上幕布」同一个位置、同样大小
+                    Button {
+                        model.findMacAgain()
+                    } label: {
+                        Text(AppModel.UnlinkedMacState.retryButtonTitle)
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 3)
                     }
@@ -387,6 +402,7 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.didTimeOut)
         .animation(.smooth(duration: 0.35), value: model.connection)
         .animation(.smooth(duration: 0.35), value: model.connectionGaveUp)
+        .animation(.smooth(duration: 0.35), value: model.unlinkedMacState)
         .animation(.smooth(duration: 0.35), value: model.isLifting)
         .animation(.smooth(duration: 0.35), value: model.liftNotice)
         .animation(.smooth(duration: 0.35), value: model.showLiftedNote)
