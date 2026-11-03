@@ -156,6 +156,9 @@ final class AppModel {
     /// Bumped on every 「再找一次」 tap (light impact haptic)
     private(set) var findAgainTapCount = 0
 
+    /// 正在用的那个（App 委托在 applicationWillTerminate 里要看配没配对）
+    nonisolated(unsafe) static weak var current: AppModel?
+
     init() {
         // 删了重装 = 从没配过对：第一次启动先清掉钥匙串里残留的东西
         PhoneKeychain.wipeIfFreshInstall()
@@ -216,6 +219,9 @@ final class AppModel {
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         // （-lcForceLinkState 的假连接不在这里启动：「没连上」要停在没广播的样子，等「再找一次」）
         if paired && !demoMode && forcedLink == nil { link.activate() }
+        Self.current = self
+        // 上次是被划掉的：这次正式要一次通知权限（只问一次）
+        if forcedLink == nil, !previewConnected { TerminationNotice.askAfterSwipeIfNeeded(paired: paired) }
         #if DEBUG
         // 截图用：-lcDisconnectedFor <秒> —— 假装已经断开这么久（看 ②③④ 段）；带上 -lcEverConnected 就当连上过
         let fakeElapsed = UserDefaults.standard.double(forKey: "lcDisconnectedFor")
@@ -477,6 +483,7 @@ final class AppModel {
     /// 回到前台：退避清零、马上广播（不等任何计时）；主屏立刻重算分段（经过时间不清零）
     func appDidBecomeActive() {
         foregroundCount += 1
+        TerminationNotice.refresh()
         if paired, !demoMode, let ble = link as? BLECurtainLink {
             ble.resumeConnecting()
         }
@@ -590,6 +597,8 @@ final class AppModel {
             justPaired = true
             // 「走近撤下」 starts on after pairing
             setLiftOnApproach(true)
+            // 被划掉时那条通知：先要临时授权（不弹框）
+            TerminationNotice.requestProvisional()
         }
         UserDefaults.standard.set(macName, forKey: Keys.macName)
         if !demoMode, !(link is BLECurtainLink) {
