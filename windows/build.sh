@@ -12,12 +12,13 @@
 #
 # 版本号读仓库根目录的 VERSION。环境变量：
 #   LOCKCURTAIN_EDDSA_PUBLIC_KEY   自动更新验签的公钥（release.sh 传进来）；没有时编出来的版本不检查更新
+#   LOCKCURTAIN_VERSION            测试包用：不改 VERSION 文件，换一个版本号（如 1.0.4-beta.1）
 #   LOCKCURTAIN_APPCAST_URL        测试用：换掉更新清单的地址（默认是 GitHub Release 上的 appcast-windows.xml）
 # 需要 .NET SDK 10（brew install dotnet）。第一次会从 NuGet 下载 Windows 的运行时包，从 GitHub 下载 WinSparkle。
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="$(tr -d '[:space:]' < ../VERSION)"
+VERSION="${LOCKCURTAIN_VERSION:-$(tr -d '[:space:]' < ../VERSION)}"
 
 # exe 图标和 Mac 版是同一张图：图标脚本改过或 ico 不存在时才重画（和上一级 build.sh 画 icns 一样）
 ICO=LockCurtain/LockCurtain.ico
