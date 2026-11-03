@@ -11,7 +11,13 @@
 //   * 配对只有在 Mac 的应答验过、Mac 又签收了第一条命令之后才返回 accepted；
 //   * 幕布状态靠 Mac 签名的状态消息，没收到就是没收到。
 //
-// Mac 订阅上又在握手之前断开，连续 5 次就停止广播、停在「找到了，但连不上」，等用户点「再试一次」。
+// 重连不停手（见 Sources/ReconnectPolicy.swift 的不变式：配过对 + 蓝牙开着 + 没连上 ⇒ 一直在试，最长隔 5 分钟）：
+//   * 一个 ensureAdvertising() 管「该广播就在广播」：activate、蓝牙打开、Mac 退订、回到前台、退出演示、状态恢复之后、
+//     每 60 秒都调一次。服务加好（didAdd 成功）才开始广播；加失败了退避重加（2 s → … → 30 s）。
+//   * 配着的那台电脑订阅上又在身份确认之前断开（早断），连续 5 次就暂停广播一会儿（30 s → 60 s → … → 5 min），
+//     到点自己接着广播；连上、蓝牙重新打开、回到前台、点「现在再试一次」都清零。别的电脑的早断不算（没配过时都算）。
+//   * 身份确认（签名的 ping）订阅着、没确认就每 2.5 秒再发一次；同一台电脑重新订阅就重新确认；
+//     收到电脑任何一条验过签名的消息（收据 / 状态 / 问询）就算确认了。
 //
 // 撤下幕布：幕布盖着时 Mac 每 2 秒往收件箱写一条签名的问询（Poll + nonce；写入会把后台的 App 叫醒），
 // 这里当场看 UIApplication.isProtectedDataAvailable，回一条签名的 Presence（解锁着 / 锁着 / 「走近撤下」关着），
@@ -61,11 +67,25 @@ final class BLECurtainLink: NSObject, CurtainLink {
     }
 
     private static let maxEarlyDrops = 5
+    /// 早断 5 次以后暂停广播：30 s 起翻倍，最长 5 分钟（ReconnectPolicy.swift 的 reconnectBackoffCap）
+    private static let pauseBase: TimeInterval = 30
+    /// 加服务失败后重加：2 s 起翻倍，最长 30 s
+    private static let addRetryBase: TimeInterval = 2
+    private static let addRetryCap: TimeInterval = 30
+    /// 身份确认没成，多久再发一次 ping（也是每次等收据的时间）
+    private static let confirmRetry: Double = 2.5
+    /// 兜底：每隔这么久确认一次「该广播就在广播」
+    private static let ensureInterval: Double = 60
+    private static let linkLog = Logger(subsystem: "LockCurtainRemote", category: "link")
 
     private var manager: CBPeripheralManager?
     private var outbox: CBMutableCharacteristic?
     private var inbox: CBMutableCharacteristic?
-    private var serviceAdded = false
+    /// 服务加好了没有（didAdd 成功才算；正在加的时候是 adding）
+    private enum ServiceState { case none, adding, added }
+    private var serviceState: ServiceState = .none
+    private var addBackoff = ReconnectBackoff(base: BLECurtainLink.addRetryBase, cap: BLECurtainLink.addRetryCap)
+    private var addRetryTask: Task<Void, Never>?
     /// 订阅着发件箱的 Mac
     private var mac: CBCentral?
     /// 这次等待里 Mac 来连过没有（区分「没找到」和「找到了连不上」）
@@ -94,7 +114,12 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private var lastStateSeq: UInt64 = 0
 
     private var consecutiveFailures = 0
+    /// 早断 5 次以后暂停着广播（不是停手：到点自己接着广播）
     private(set) var gaveUp = false
+    private var pauseBackoff = ReconnectBackoff(base: BLECurtainLink.pauseBase, cap: reconnectBackoffCap)
+    private var pauseTask: Task<Void, Never>?
+    private var confirmTask: Task<Void, Never>?
+    private var ensureTimer: Task<Void, Never>?
     private var wantsAdvertising = false
 
     private enum Reply {
@@ -139,24 +164,60 @@ final class BLECurtainLink: NSObject, CurtainLink {
     func activate() {
         wantsAdvertising = true
         publishAdvertising()
+        startEnsureTimer()
         if manager == nil {
             manager = CBPeripheralManager(delegate: self, queue: .main,
                                           options: [CBPeripheralManagerOptionShowPowerAlertKey: true,
                                                     CBPeripheralManagerOptionRestoreIdentifierKey: Identity.restoreIdentifier])
         } else {
-            startAdvertising()
+            ensureAdvertising("activate")
         }
     }
 
-    /// 用户点了「再试一次」/ 重新打开配对：清掉连续失败计数，重新广播
+    /// 重新打开配对 / App 打开或回到前台 / 退出演示：退避全清零，马上广播
     func resumeConnecting() {
+        resetBackoff("resume")
+        activate()
+    }
+
+    /// 「现在再试一次」：退避清零，广播重新开一次（让电脑马上能再看到）；订阅着没确认的就马上再确认
+    func retryNow() {
+        Self.linkLog.info("retry now (user)")
+        resetBackoff("retry now")
+        wantsAdvertising = true
+        publishAdvertising()
+        if let manager, manager.state == .poweredOn, serviceState == .added, manager.isAdvertising {
+            manager.stopAdvertising()
+        }
+        activate()
+        if isPaired, mac != nil, !ready { startConfirmLink(reason: "retry now") }
+    }
+
+    /// 早断计数和暂停都清零；暂停着就马上接着广播
+    private func resetBackoff(_ why: String) {
+        if consecutiveFailures > 0 || pauseBackoff.step > 0 || gaveUp {
+            Self.linkLog.info("backoff reset (\(why, privacy: .public)): early drops \(self.consecutiveFailures), pause step \(self.pauseBackoff.step)")
+        }
         consecutiveFailures = 0
+        pauseBackoff.reset()
+        pauseTask?.cancel()
+        pauseTask = nil
         if gaveUp {
             gaveUp = false
             publish { $0.gaveUpConnecting = false }
             publishAdvertising()
         }
-        activate()
+    }
+
+    private func startEnsureTimer() {
+        guard ensureTimer == nil else { return }
+        ensureTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.ensureInterval))
+                guard !Task.isCancelled, let self else { return }
+                self.ensureAdvertising("timer")
+            }
+        }
     }
 
     func cover() async -> CoverOutcome {
@@ -183,8 +244,9 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     /// 「现在撤下」（调用方已经过了面容 / 密码）：等 Mac 的下一条问询，用它的 nonce 发签名的 LiftNow，
     /// 等 Mac 签名的结果。老版本的 Mac 不问询，就是超时。
+    /// 不看「走近撤下」开关：开关只管「走近自己撤」，按「现在撤下」照样撤（电脑那边 LiftGate.liftNow 也不看开关）
     func liftNow() async -> LiftOutcome {
-        guard mac != nil, ready, isPaired, LiftSetting.isOn, snapshot.phase == .closed else { return .unavailable }
+        guard mac != nil, ready, isPaired, snapshot.phase == .closed else { return .unavailable }
         finishLift(.unavailable)
         Self.liftLog.info("lift-now requested; waiting for the next poll")
         return await withCheckedContinuation { cont in
@@ -470,8 +532,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         }
     }
 
-    /// 发一条签名命令，等 Mac 的签名收据。计数先写进钥匙串再发。
-    private func sendSigned(_ command: String) async -> AckResult {
+    /// 发一条签名命令，等 Mac 的签名收据（最多 ackSeconds 秒）。计数先写进钥匙串再发。
+    private func sendSigned(_ command: String, ackSeconds: Double = 6) async -> AckResult {
         guard mac != nil,
               let reserved = PhoneKeychain.reserveNextCounter() else { return .failed }
         let counter = reserved.counter
@@ -486,32 +548,60 @@ final class BLECurtainLink: NSObject, CurtainLink {
             send(data)
             ackTimeout?.cancel()
             ackTimeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(6))
+                try? await Task.sleep(for: .seconds(ackSeconds))
                 guard !Task.isCancelled else { return }
                 self?.finishAck(.failed)
             }
         }
     }
 
-    /// 已经配过对的手机：Mac 订阅上来就用签名的 ping 表明身份，Mac 签收了才算已连接
-    private func confirmLink() async {
-        let central = mac?.identifier
-        let result = await sendSigned("ping")
-        // 这期间换了一台（或者断了）：这次的结果不算
-        guard mac != nil, mac?.identifier == central else { return }
-        switch result {
-        case .ok:
-            markReady()
-        case .rejected, .failed:
-            // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连接。
-            publish { $0.connection = .notConnected }
+    /// 已经配过对的手机：Mac 订阅上来就用签名的 ping 表明身份，Mac 签收了才算已连接。
+    /// 没签收（收据丢了 / 电脑忙 / App 刚被叫醒）：订阅着、还没确认，就每 confirmRetry 秒再发一次
+    private func startConfirmLink(reason: String) {
+        confirmTask?.cancel()
+        guard let central = mac?.identifier else { return }
+        confirmTask = Task { [weak self] in
+            var attempt = 0
+            while !Task.isCancelled {
+                guard let self, self.isPaired, !self.ready, self.mac?.identifier == central else { return }
+                attempt += 1
+                if attempt > 1 { Self.linkLog.info("confirm link: retry \(attempt) (\(reason, privacy: .public))") }
+                let started = Date()
+                let result = await self.sendSigned("ping", ackSeconds: Self.confirmRetry)
+                // 这期间换了一台（或者断了）：这次的结果不算
+                guard !Task.isCancelled, self.mac?.identifier == central else { return }
+                if self.ready { return }
+                switch result {
+                case .ok:
+                    self.markReady()
+                    return
+                case .rejected, .failed:
+                    // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连接，过一会儿再试。
+                    self.publish { $0.connection = .notConnected }
+                }
+                let spent = Date().timeIntervalSince(started)
+                if spent < Self.confirmRetry {
+                    try? await Task.sleep(for: .seconds(Self.confirmRetry - spent))
+                }
+            }
         }
     }
 
     private func markReady() {
+        let wasReady = ready
         ready = true
-        consecutiveFailures = 0
+        confirmTask?.cancel()
+        confirmTask = nil
+        if !wasReady { Self.linkLog.info("link ready") }
+        resetBackoff("ready")
         publish { $0.connection = .connected }
+    }
+
+    /// 收到 Mac 验过签名的消息（收据 / 状态 / 问询）：它一定认得我们，算已连接
+    private func noteVerifiedFromMac(_ what: String) {
+        guard isPaired, mac != nil, !ready else { return }
+        Self.linkLog.info("verified \(what, privacy: .public) from the computer: marking ready")
+        markReady()
     }
 
     private func forgetLocally() {
@@ -594,10 +684,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
             finishReply(.message(message))
         case .ack:
             guard let ack = try? PairingCrypto.Ack(decoding: message),
-                  let pending = pendingAck, ack.counter == pending.counter,
                   ack.phoneID == PhoneKeychain.phoneID() else { return }
-            if ack.status == .accepted, let record = PhoneKeychain.loadLink(),
-               PairingCrypto.verifyAck(ack, key: SymmetricKeyBox(record.key).key) {
+            let verified = ack.status == .accepted && PhoneKeychain.loadLink().map {
+                PairingCrypto.verifyAck(ack, key: SymmetricKeyBox($0.key).key)
+            } == true
+            // 晚到的收据（前一次 ping 的）也证明电脑认得我们
+            if verified { noteVerifiedFromMac("ack") }
+            guard let pending = pendingAck, ack.counter == pending.counter else { return }
+            if verified {
                 finishAck(.ok)
             } else {
                 finishAck(ack.status == .unknownOrBadSignature ? .rejected : .failed)
@@ -607,6 +701,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
                   let state = PairingCrypto.openState(message, phoneID: PhoneKeychain.phoneID(),
                                                       key: SymmetricKeyBox(record.key).key),
                   state.seq > lastStateSeq else { return }
+            noteVerifiedFromMac("state")
             lastStateSeq = state.seq
             let liftedByUs = !state.closed && awaitingLiftOpen
             if state.closed || liftedByUs { awaitingLiftOpen = false }
@@ -685,9 +780,11 @@ final class BLECurtainLink: NSObject, CurtainLink {
             Self.liftLog.info("poll ignored: not paired or bad signature")
             return
         }
+        noteVerifiedFromMac("poll")
         guard let reserved = PhoneKeychain.reserveNextCounter() else { return }
         let key = SymmetricKeyBox(reserved.record.key).key
-        if let pending = pendingLift, pending.sentCounter == nil, LiftSetting.isOn,
+        // 「现在撤下」不看「走近撤下」开关
+        if let pending = pendingLift, pending.sentCounter == nil,
            let data = PairingCrypto.sealLiftNow(nonce: nonce, phoneID: phoneID, counter: reserved.counter, key: key) {
             pendingLift = (reserved.counter, pending.cont)
             Self.liftLog.info("poll answered with lift-now, counter \(reserved.counter)")
@@ -716,8 +813,9 @@ final class BLECurtainLink: NSObject, CurtainLink {
         onSnapshotChange?(next)
     }
 
+    /// 加服务；广播等 didAdd 成功再开（不然电脑连上来会找不到服务）
     private func publishService() {
-        guard let manager, manager.state == .poweredOn, !serviceAdded else { return }
+        guard let manager, manager.state == .poweredOn, serviceState == .none else { return }
         let outbox = CBMutableCharacteristic(type: Identity.outbox, properties: [.notify, .read],
                                              value: nil, permissions: [.readable])
         let inbox = CBMutableCharacteristic(type: Identity.inbox, properties: [.write],
@@ -726,14 +824,33 @@ final class BLECurtainLink: NSObject, CurtainLink {
         service.characteristics = [outbox, inbox]
         self.outbox = outbox
         self.inbox = inbox
-        serviceAdded = true
+        serviceState = .adding
+        Self.linkLog.info("adding service")
         manager.add(service)
     }
 
-    private func startAdvertising() {
-        guard wantsAdvertising, !gaveUp, let manager, manager.state == .poweredOn else { return }
-        publishService()
-        guard !manager.isAdvertising else { return }
+    /// 唯一的入口：该广播（想广播、没暂停、蓝牙开着）就确保服务加好了、在广播。连着电脑时也照样广播（Windows 靠广播量距离）
+    private func ensureAdvertising(_ why: String) {
+        guard wantsAdvertising, let manager, manager.state == .poweredOn else { return }
+        if gaveUp {
+            Self.linkLog.info("ensure advertising (\(why, privacy: .public)): paused, \(Int(self.pauseBackoff.remaining(at: Date())))s left")
+            return
+        }
+        switch serviceState {
+        case .none:
+            Self.linkLog.info("ensure advertising (\(why, privacy: .public)): service not added yet")
+            publishService()
+        case .adding:
+            break
+        case .added:
+            startAdvertising(why)
+        }
+    }
+
+    private func startAdvertising(_ why: String) {
+        guard wantsAdvertising, !gaveUp, let manager, manager.state == .poweredOn, serviceState == .added,
+              !manager.isAdvertising else { return }
+        Self.linkLog.info("start advertising (\(why, privacy: .public))")
         manager.startAdvertising([
             CBAdvertisementDataServiceUUIDsKey: [Identity.service],
             CBAdvertisementDataLocalNameKey: Identity.localName,
@@ -742,20 +859,38 @@ final class BLECurtainLink: NSObject, CurtainLink {
         publish { $0.waitEpoch += 1 }
     }
 
-    /// 「想广播、而且没停下」告诉界面
+    /// 「想广播、而且没暂停」告诉界面
     private func publishAdvertising() {
         let on = wantsAdvertising && !gaveUp
         publish { $0.isAdvertising = on }
     }
 
-    /// Mac 订阅上又在握手 / 身份确认之前断了
-    private func noteEarlyDrop() {
+    /// Mac 订阅上又在握手 / 身份确认之前断了。配过对时只算配着的那台电脑（别的电脑来连又走不算）
+    private func noteEarlyDrop(_ central: CBCentral) {
+        if isPaired, let paired = PhoneKeychain.loadLink()?.macIdentifier, central.identifier.uuidString != paired {
+            Self.linkLog.info("early drop from another computer; not counted")
+            return
+        }
         consecutiveFailures += 1
+        Self.linkLog.info("early drop \(self.consecutiveFailures)/\(Self.maxEarlyDrops)")
         guard consecutiveFailures >= Self.maxEarlyDrops, !gaveUp else { return }
+        // 暂停广播一会儿（不是停手）：到点自己接着广播；再早断就翻倍，最长 5 分钟
+        let delay = pauseBackoff.fail(at: Date())
+        Self.linkLog.info("pausing advertising for \(Int(delay))s after \(self.consecutiveFailures) early drops")
         gaveUp = true
         manager?.stopAdvertising()
         publish { $0.gaveUpConnecting = true }
         publishAdvertising()
+        pauseTask?.cancel()
+        pauseTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self, self.gaveUp else { return }
+            Self.linkLog.info("advertising pause over; resuming")
+            self.gaveUp = false
+            self.publish { $0.gaveUpConnecting = false }
+            self.publishAdvertising()
+            self.ensureAdvertising("pause over")
+        }
     }
 }
 
@@ -774,9 +909,13 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             if snapshot.connection == .bluetoothOff {
                 publish { $0.connection = self.isPaired ? .notConnected : .notPaired }
             }
-            startAdvertising()
+            resetBackoff("bluetooth on")
+            ensureAdvertising("bluetooth on")
         case .poweredOff, .unauthorized, .unsupported:
-            serviceAdded = false
+            serviceState = .none
+            addRetryTask?.cancel()
+            addRetryTask = nil
+            confirmTask?.cancel()
             mac = nil
             ready = false
             if pairingCentral != nil {
@@ -800,24 +939,53 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             if c.uuid == Identity.outbox { outbox = c }
             if c.uuid == Identity.inbox { inbox = c }
         }
-        serviceAdded = outbox != nil && inbox != nil
+        serviceState = outbox != nil && inbox != nil ? .added : .none
         wantsAdvertising = true
         publishAdvertising()
+        startEnsureTimer()
         if let central = outbox?.subscribedCentrals?.first {
             mac = central
             macEverSubscribed = true
-            if isPaired { Task { await self.confirmLink() } }
+            if isPaired { startConfirmLink(reason: "restored") }
         }
+        Self.linkLog.info("state restored (service \(self.serviceState == .added ? "kept" : "missing"), subscribed \(self.mac != nil))")
+        // 恢复完：该广播就广播（状态还没到 poweredOn 时，poweredOn 那里会再调一次）
+        ensureAdvertising("restored")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
-        if error != nil { serviceAdded = false }
+        guard service.uuid == Identity.service else { return }
+        if let error {
+            serviceState = .none
+            let delay = addBackoff.fail(at: Date())
+            Self.linkLog.error("add service failed: \(error.localizedDescription, privacy: .public); retry in \(Int(delay))s")
+            addRetryTask?.cancel()
+            addRetryTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled, let self else { return }
+                self.ensureAdvertising("add retry")
+            }
+            return
+        }
+        serviceState = .added
+        addBackoff.reset()
+        Self.linkLog.info("service added")
+        startAdvertising("service added")
     }
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                            didSubscribeTo characteristic: CBCharacteristic) {
         guard characteristic.uuid == Identity.outbox else { return }
-        if central.identifier == mac?.identifier || central.identifier == pairingCentral?.identifier { return }
+        if central.identifier == pairingCentral?.identifier { return }
+        if central.identifier == mac?.identifier {
+            // 同一台电脑又订阅了一次（它那边是一条新连接，要重新表明身份）：重新确认，不能不理
+            guard isPaired, !replacing else { return }
+            Self.linkLog.info("same computer subscribed again: re-confirming link")
+            ready = false
+            assembler.reset()
+            startConfirmLink(reason: "re-subscribe")
+            return
+        }
         if isPaired && replacing {
             // 换电脑：原来那台（认得它的标识、且现在没连着）照常接回来；别的电脑就是来配对的
             let isOldComputer = mac == nil && central.identifier.uuidString == PhoneKeychain.loadLink()?.macIdentifier
@@ -839,7 +1007,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         ready = false
         assembler.reset()
         if isPaired {
-            Task { await self.confirmLink() }
+            startConfirmLink(reason: "subscribe")
         }
     }
 
@@ -862,9 +1030,13 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         let wasReady = ready
         mac = nil
         ready = false
+        confirmTask?.cancel()
+        confirmTask = nil
         dropQueued(for: central)
         assembler.reset()
-        if !wasReady { noteEarlyDrop() }
+        Self.linkLog.info("computer unsubscribed (ready \(wasReady))")
+        if !wasReady { noteEarlyDrop(central) }
+        ensureAdvertising("unsubscribed")
         // 断了：手机不知道 Mac 在不在，只说「没连上」；主屏从这一刻重新等 20 秒
         publish {
             $0.connection = self.isPaired ? .notConnected : .notPaired

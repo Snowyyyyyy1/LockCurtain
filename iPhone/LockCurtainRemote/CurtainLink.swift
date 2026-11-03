@@ -64,9 +64,10 @@ struct CurtainSnapshot: Equatable, Sendable {
     /// Demo-only: the user has "walked away" and the demo is counting down
     /// before it covers the curtain.
     var isAway: Bool = false
-    /// 连续 5 次连上又在握手前断开，已经停止广播；等用户点「再试一次」/ 重新打开配对
+    /// 连续 5 次连上又在握手前断开，正暂停着广播（30 s 起翻倍、最长 5 分钟，到点自己接着广播）。
+    /// 主屏不看它（按经过时间分段）；配对页用它换掉一般的失败提示
     var gaveUpConnecting: Bool = false
-    /// 手机想广播、而且没停下（没撤销配对、没连续断 5 次）：「等这台 Mac 来连…」只在这时出现
+    /// 手机想广播、而且没暂停（没撤销配对、不在早断后的暂停里）
     var isAdvertising: Bool = false
     /// 广播（重新）开始、或者 Mac 断开时加一：主屏从这一刻重新算「等这台 Mac 来连…」的 20 秒
     var waitEpoch: Int = 0

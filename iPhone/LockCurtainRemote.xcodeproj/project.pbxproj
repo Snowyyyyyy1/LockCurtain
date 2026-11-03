@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		C0FFEE0000000000000000B1 /* PairingCrypto.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE0000000000000000A1 /* PairingCrypto.swift */; };
 		C0FFEE0000000000000000B2 /* CPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE0000000000000000A2 /* CPace.swift */; };
+		C0FFEE0000000000000000B3 /* ReconnectPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0FFEE0000000000000000A3 /* ReconnectPolicy.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,6 +25,7 @@
 /* Begin PBXFileReference section */
 		C0FFEE0000000000000000A1 /* PairingCrypto.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PairingCrypto.swift; path = ../Sources/PairingCrypto.swift; sourceTree = SOURCE_ROOT; };
 		C0FFEE0000000000000000A2 /* CPace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = CPace.swift; path = ../Sources/CPace.swift; sourceTree = SOURCE_ROOT; };
+		C0FFEE0000000000000000A3 /* ReconnectPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ReconnectPolicy.swift; path = ../Sources/ReconnectPolicy.swift; sourceTree = SOURCE_ROOT; };
 		A1B2C3D40000000000000002 /* LockCurtainRemoteTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LockCurtainRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E1D1C645818EB0816572F68E /* LockCurtainRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = LockCurtain.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -52,6 +54,7 @@
 				32FA6C0B59B4A7B42DDCEA33 /* LockCurtainRemote */,
 				C0FFEE0000000000000000A1 /* PairingCrypto.swift */,
 				C0FFEE0000000000000000A2 /* CPace.swift */,
+				C0FFEE0000000000000000A3 /* ReconnectPolicy.swift */,
 				A1B2C3D40000000000000003 /* LockCurtainRemoteTests */,
 				A0906AD77C76E090572F0E63 /* Products */,
 			);
@@ -162,6 +165,7 @@
 			files = (
 				C0FFEE0000000000000000B1 /* PairingCrypto.swift in Sources */,
 				C0FFEE0000000000000000B2 /* CPace.swift in Sources */,
+				C0FFEE0000000000000000B3 /* ReconnectPolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

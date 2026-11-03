@@ -28,36 +28,67 @@ final class AppModel {
         case alreadyUncovered
     }
 
-    /// 配过对、不在演示、没连上时「这台 Mac」那一行只有这三种（design v2.8 / copy v8.8）。
-    /// 手机是外设，没法知道 Mac 在不在：只说手机这边看得到的事。
+    /// 配过对、不在演示、没连上时「这台电脑」那一行（design v2.10 A / copy v13 §8.6）。
+    /// 手机永不停手：只按「离上次连上过了多久」分段（App 刚打开还没连上过，就从打开那一刻算），不看内部重试间隔。
     /// 时长和文字都只在这里。
     enum UnlinkedMacState: Equatable {
-        /// 正在广播，而且广播（重新）开始 / 断开 / 回到前台还不到 waitWindow
+        /// App 刚打开、还没连上过，前 30 秒：「等这台电脑来连…」
         case waiting
-        /// 过了 waitWindow 还没有 Mac 来订阅，或者已经不广播了
-        case stopped
+        /// ① 断开后 30 秒内，或者刚按了「现在再试一次」：「正在重新连上…」
+        case reconnecting
+        /// ② 30 秒–2 分钟
+        case notYet
+        /// ③ 2–10 分钟
+        case stillTrying
+        /// ④ 10 分钟以上：③那句 + 排查那句
+        case stillTryingLong
         case bluetoothOff
 
-        /// 「等这台 Mac 来连…」最多显示多久
-        static let waitWindow: Duration = .seconds(20)
+        /// ①（以及刚打开的「等这台电脑来连…」）多久；之后出「现在再试一次」
+        static let firstStage: TimeInterval = 30
+        /// ③ 从什么时候起
+        static let longerStage: TimeInterval = 120
+        /// ④ 从什么时候起
+        static let longestStage: TimeInterval = 600
+        /// 按了「现在再试一次」以后「正在重新连上…」最多显示多久
+        static let retryShowsFor: TimeInterval = 30
+
+        static func at(elapsed: TimeInterval, everConnected: Bool, retrying: Bool) -> UnlinkedMacState {
+            if retrying { return .reconnecting }
+            if elapsed < firstStage { return everConnected ? .reconnecting : .waiting }
+            if elapsed < longerStage { return .notYet }
+            if elapsed < longestStage { return .stillTrying }
+            return .stillTryingLong
+        }
 
         var value: String {
             switch self {
             case .waiting: "等这台电脑来连…"
-            case .stopped: "没连上"
+            case .reconnecting, .notYet, .stillTrying, .stillTryingLong: "没连上"
             case .bluetoothOff: "蓝牙关了"
             }
         }
 
-        /// 「没连上」底部按钮：点了回到「等这台 Mac 来连…」、重新等 waitWindow
-        static let retryButtonTitle = "再找一次"
+        /// 值左边带小转圈
+        var showsSpinner: Bool { self == .waiting || self == .reconnecting }
+
+        /// 「现在再试一次」（出现了就留到连上为止；按了也不消失）
+        static let retryButtonTitle = "现在再试一次"
+        static let retryButtonHint = "马上再连一次这台电脑"
 
         var footer: String {
             switch self {
             case .waiting: "电脑上开着 LockCurtain、人也在附近就行。"
-            case .stopped: "电脑上开着 LockCurtain，两边蓝牙都开着，人也在附近。"
+            case .reconnecting: "正在重新连上…"
+            case .notYet: "还没连上，我隔一会儿再试。"
+            case .stillTrying, .stillTryingLong: "我还在试，最长隔 5 分钟一次，点下面那颗就不用等。"
             case .bluetoothOff: "打开 iPhone 的蓝牙，这台电脑才找得到它。"
             }
+        }
+
+        /// ④ 另起的一行
+        var secondFooter: String? {
+            self == .stillTryingLong ? "电脑上开着 LockCurtain 吗？在附近吗？两边蓝牙都开着吗？" : nil
         }
     }
 
@@ -80,14 +111,18 @@ final class AppModel {
     private(set) var lastEventText = "没连上"
     private(set) var lastEventDate = Date()
     private(set) var isPreviewFixture = false
-    /// 连续 5 次连上又断，已经不再广播；界面走「找到了，但连不上」那条路，等用户点「再试一次」
+    /// 连续 5 次连上又断，正暂停着广播（到点自己接着广播）。主屏不再看它（只按经过时间分段）；配对页还在用
     private(set) var connectionGaveUp = false
     /// 这次启动里刚配对成功：主屏在连接那一行下面提示一句「以后会自己连上」，下次启动就不再显示
     private(set) var justPaired = false
-    /// 连接正在广播（想广播、没停下）
-    private(set) var linkAdvertising = false
-    /// 还在「等这台 Mac 来连…」的 20 秒里
-    private(set) var withinWaitWindow = false
+    /// 上次连上（或者 App 打开）以后，从什么时候起没连上；分段按这个算，不因回前台 / 按重试清零
+    private(set) var disconnectedSince = Date()
+    /// 这次启动里连上过没有（没连上过的前 30 秒说「等这台电脑来连…」）
+    private(set) var everConnected = false
+    /// 按了「现在再试一次」：到这个时候之前说「正在重新连上…」
+    private(set) var retryingUntil: Date?
+    /// 回到前台时加一：主屏立刻重算分段
+    private(set) var foregroundCount = 0
 
     /// 现在撤下 sent, waiting for the Mac to report the curtain uncovered
     private(set) var isLifting = false
@@ -120,8 +155,6 @@ final class AppModel {
     @ObservationIgnored private var lastPhoneLiftCount = 0
     /// Bumped on every 「再找一次」 tap (light impact haptic)
     private(set) var findAgainTapCount = 0
-    @ObservationIgnored private var waitWindowTask: Task<Void, Never>?
-    @ObservationIgnored private var lastWaitEpoch = 0
 
     init() {
         // 删了重装 = 从没配过对：第一次启动先清掉钥匙串里残留的东西
@@ -183,8 +216,13 @@ final class AppModel {
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         // （-lcForceLinkState 的假连接不在这里启动：「没连上」要停在没广播的样子，等「再找一次」）
         if paired && !demoMode && forcedLink == nil { link.activate() }
-        // 一打开 App 就算一次「回到前台」：开始等 20 秒
-        restartWaitWindow()
+        #if DEBUG
+        // 截图用：-lcDisconnectedFor <秒> —— 假装已经断开这么久（看 ②③④ 段）；带上 -lcEverConnected 就当连上过
+        let fakeElapsed = UserDefaults.standard.double(forKey: "lcDisconnectedFor")
+        if fakeElapsed > 0 { disconnectedSince = Date().addingTimeInterval(-fakeElapsed) }
+        if ProcessInfo.processInfo.arguments.contains("-lcEverConnected") { everConnected = true }
+        #endif
+
         #if DEBUG
         // 截图用：-lcDemoCovered 一启动就进演示、幕布已盖上
         if ProcessInfo.processInfo.arguments.contains("-lcDemoCovered") {
@@ -247,11 +285,20 @@ final class AppModel {
         }
     }
 
-    /// 配过对、不在演示、没连上：三种里的哪一种；其他时候是 nil
-    var unlinkedMacState: UnlinkedMacState? {
+    /// 配过对、不在演示、没连上：现在是哪一段；其他时候是 nil
+    var unlinkedMacState: UnlinkedMacState? { unlinkedMacState(at: Date()) }
+
+    func unlinkedMacState(at now: Date) -> UnlinkedMacState? {
         guard paired, !demoMode, connection != .connected, connection != .notPaired else { return nil }
         if connection == .bluetoothOff { return .bluetoothOff }
-        return linkAdvertising && withinWaitWindow ? .waiting : .stopped
+        let retrying = retryingUntil.map { now < $0 } ?? false
+        return .at(elapsed: now.timeIntervalSince(disconnectedSince), everConnected: everConnected, retrying: retrying)
+    }
+
+    /// 「现在再试一次」该不该在：没连上过了 30 秒就出现，留到连上为止（按了也不消失）
+    func showsRetryNow(at now: Date) -> Bool {
+        guard let state = unlinkedMacState(at: now), state != .bluetoothOff else { return false }
+        return now.timeIntervalSince(disconnectedSince) >= UnlinkedMacState.firstStage
     }
 
     var isPending: Bool {
@@ -289,12 +336,16 @@ final class AppModel {
         }
     }
 
-    /// 「没连上」底部按钮：确保在广播，回到「等这台 Mac 来连…」，重新等 20 秒
-    func findMacAgain() {
-        guard unlinkedMacState == .stopped else { return }
+    /// 「现在再试一次」：立刻试一次，「正在重新连上…」到有结果或 30 秒；经过时间不清零。不拦连点
+    func retryNow() {
+        guard let state = unlinkedMacState, state != .bluetoothOff else { return }
         findAgainTapCount += 1
-        prepareForPairing()
-        restartWaitWindow()
+        retryingUntil = Date().addingTimeInterval(UnlinkedMacState.retryShowsFor)
+        if let ble = link as? BLECurtainLink {
+            ble.retryNow()
+        } else {
+            link.activate()
+        }
     }
 
     func cover() {
@@ -337,8 +388,9 @@ final class AppModel {
         liftOnApproach = isOn
     }
 
+    /// 不看「走近撤下」开关：已连上、幕布盖着就能按
     var canLiftNow: Bool {
-        connection == .connected && phase == .closed && liftOnApproach && !isLifting
+        connection == .connected && phase == .closed && !isLifting
     }
 
     /// 现在撤下: Face ID or passcode first (not in the demo), then the signed lift-now.
@@ -420,28 +472,13 @@ final class AppModel {
     /// The success line goes away when the app goes to the background
     func appDidEnterBackground() {
         showLiftedNote = false
-        waitWindowTask?.cancel()
-        waitWindowTask = nil
-        withinWaitWindow = false
     }
 
-    /// 回到前台：重新等 20 秒
+    /// 回到前台：退避清零、马上广播（不等任何计时）；主屏立刻重算分段（经过时间不清零）
     func appDidBecomeActive() {
-        restartWaitWindow()
-    }
-
-    /// 广播（重新）开始、断开、回到前台：「等这台 Mac 来连…」从现在起再显示 waitWindow，过了就是「没连上」
-    private func restartWaitWindow() {
-        waitWindowTask?.cancel()
-        guard UIApplication.shared.applicationState != .background else {
-            withinWaitWindow = false
-            return
-        }
-        withinWaitWindow = true
-        waitWindowTask = Task { [weak self] in
-            try? await Task.sleep(for: UnlinkedMacState.waitWindow)
-            guard let self, !Task.isCancelled else { return }
-            self.withinWaitWindow = false
+        foregroundCount += 1
+        if paired, !demoMode, let ble = link as? BLECurtainLink {
+            ble.resumeConnecting()
         }
     }
 
@@ -503,7 +540,9 @@ final class AppModel {
             } else {
                 adopt(BLECurtainLink(paired: paired, macName: macName))
             }
-            if paired { link.activate() }
+            if paired {
+                if let ble = link as? BLECurtainLink { ble.resumeConnecting() } else { link.activate() }
+            }
             if !paired {
                 showDemoExitNotice = true
                 scheduleNoticeClear()
@@ -620,6 +659,14 @@ final class AppModel {
         if snapshot.phase == .closed || snapshot.connection != .connected {
             showLiftedNote = false
         }
+        if snapshot.connection == .connected {
+            everConnected = true
+            retryingUntil = nil
+        } else if connection == .connected {
+            // 刚断开：从这一刻算经过时间
+            disconnectedSince = Date()
+            retryingUntil = nil
+        }
         connection = snapshot.connection
         phase = snapshot.phase
         auto = snapshot.auto
@@ -628,11 +675,6 @@ final class AppModel {
         }
         isAway = snapshot.isAway
         connectionGaveUp = snapshot.gaveUpConnecting
-        linkAdvertising = snapshot.isAdvertising
-        if snapshot.waitEpoch != lastWaitEpoch {
-            lastWaitEpoch = snapshot.waitEpoch
-            restartWaitWindow()
-        }
         if snapshot.phase == .closed || snapshot.connection != .connected {
             isCovering = false
         }
