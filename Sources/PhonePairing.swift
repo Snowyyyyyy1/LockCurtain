@@ -482,8 +482,15 @@ extension PhonePairing: CBCentralManagerDelegate {
         case .poweredOn:
             if phase == .bluetoothOff || phase == .unauthorized { phase = windowOpen ? .waiting : .idle }
             resume()
-        case .poweredOff:
-            phase = .bluetoothOff
+        case .poweredOff, .resetting:
+            // 蓝牙关掉时系统不会逐个回调断开，连接全都作废：清掉旧连接，否则重新开蓝牙后以为手机还连着，不再扫也不再连
+            if !peers.isEmpty {
+                Self.log("bluetooth off: dropping \(peers.count) stale peer(s)")
+                for peer in peers.values { if let id = peer.phoneID { gates[id]?.resetRSSI() } }
+                peers.removeAll()
+                updateRSSITimer()
+            }
+            if central.state == .poweredOff { phase = .bluetoothOff }
         case .unauthorized:
             phase = .unauthorized
         case .unsupported:
