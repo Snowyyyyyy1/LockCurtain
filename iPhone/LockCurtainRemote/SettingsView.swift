@@ -12,6 +12,9 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 macSection
+                if model.demoMode || model.paired {
+                    liftSection
+                }
                 if AppModel.autoCoverVisible {
                     autoSection
                     readOnlySection
@@ -74,6 +77,22 @@ struct SettingsView: View {
                 }
                 Text("第一次连上、或者断开以后重新连上，要在手机上把 LockCurtain 打开一下。")
             }
+        }
+    }
+
+    private var liftSection: some View {
+        Section {
+            Toggle(
+                "走近撤下",
+                isOn: Binding(
+                    get: { model.liftOnApproach },
+                    set: { model.setLiftOnApproach($0) }
+                )
+            )
+        } header: {
+            Text("撤下")
+        } footer: {
+            Text("手机解锁着、人走到这台 Mac 附近，幕布就撤下来。手机锁着的时候不撤。")
         }
     }
 

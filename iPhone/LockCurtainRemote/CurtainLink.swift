@@ -30,6 +30,28 @@ enum CoverOutcome: Equatable, Sendable {
     case unavailable
 }
 
+/// Result of one 「现在撤下」 request, as reported (signed) by the Mac.
+enum LiftOutcome: Equatable, Sendable {
+    case lifted
+    /// The Mac measured the phone as not near enough.
+    case tooFar
+    /// The Mac refused for another reason (curtain not down, stale answer…).
+    case refused
+    case timedOut
+    case unavailable
+}
+
+/// 「走近撤下」: stored on the phone in UserDefaults, default on. When off the
+/// phone answers the Mac's polls with "off" and 现在撤下 is hidden.
+enum LiftSetting {
+    static let key = "lc.liftOnApproach"
+
+    static var isOn: Bool {
+        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
 /// Everything HomeView needs to draw itself. All values originate at the Mac;
 /// the demo link is the only implementation that produces them locally.
 struct CurtainSnapshot: Equatable, Sendable {
@@ -42,6 +64,9 @@ struct CurtainSnapshot: Equatable, Sendable {
     var isAway: Bool = false
     /// 连续 5 次连上又在握手前断开，已经停止广播；等用户点「再试一次」/ 重新打开配对
     var gaveUpConnecting: Bool = false
+    /// Bumped each time the Mac reports the curtain uncovered right after a
+    /// lift this phone caused (walk-up or 现在撤下).
+    var phoneLiftCount: Int = 0
 }
 
 /// The only door between the UI and a curtain. HomeView, SettingsView and
@@ -63,4 +88,8 @@ protocol CurtainLink: AnyObject {
 
     /// Set the Mac's automatic-cover preference.
     func setAutoEnabled(_ isOn: Bool)
+
+    /// 现在撤下: ask the Mac to lift the curtain now. The caller has already
+    /// done any owner check (Face ID / passcode) that applies.
+    func liftNow() async -> LiftOutcome
 }

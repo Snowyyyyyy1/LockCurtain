@@ -30,4 +30,8 @@ final class BLEPlaceholderCurtainLink: CurtainLink {
     func setAutoEnabled(_ isOn: Bool) {
         // The Mac owns this value; without a link there is nothing to change.
     }
+
+    func liftNow() async -> LiftOutcome {
+        .unavailable
+    }
 }

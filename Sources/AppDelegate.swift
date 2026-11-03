@@ -91,6 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keepAwake.restore()
             overlay.watchLockState()
             pairing.onCommand = { [weak self] cmd in _ = await self?.handleCommand(cmd) }
+            // 手机撤下幕布：只撤 LockCurtain 的遮罩（离开模式里「验证」通过的效果），系统锁屏不动
+            pairing.onLift = { [overlay] in
+                Task { @MainActor in overlay.liftFromPhone() }
+            }
             control.start()
             ruleEngine.start()
             // KVO 也能收到其他进程（defaults write）的修改，didChangeNotification 只管本进程

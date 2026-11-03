@@ -6,12 +6,15 @@ enum MacScreenState: Equatable {
     case desktop
     case closing
     case curtain
+    /// 现在撤下 sent: the curtain is half up, waiting for the Mac
+    case lifting
     case empty
 
     fileprivate var curtainFraction: CGFloat {
         switch self {
         case .desktop, .empty: 0
         case .closing: 0.55
+        case .lifting: 0.45
         case .curtain: 1
         }
     }
@@ -60,8 +63,8 @@ struct MacScreenIllustration: View {
         .frame(maxWidth: .infinity)
         .frame(height: illustrationHeight)
         .accessibilityHidden(true)
-        .onChange(of: state) { _, newState in
-            update(for: newState)
+        .onChange(of: state) { oldState, newState in
+            update(for: newState, from: oldState)
         }
         .onChange(of: reduceMotion) { _, _ in
             update(for: state, animated: false)
@@ -237,12 +240,24 @@ struct MacScreenIllustration: View {
 
     // MARK: - State changes
 
-    private func update(for newState: MacScreenState, animated: Bool = true) {
+    private func update(for newState: MacScreenState, from oldState: MacScreenState? = nil, animated: Bool = true) {
         let target = newState.curtainFraction
         let showEye = newState == .curtain
         guard animated && !reduceMotion else {
             curtainFraction = target
             eyeVisible = showEye
+            return
+        }
+        if newState == .lifting {
+            // eye fades out quickly, curtain rises to 45% and holds
+            withAnimation(.easeInOut(duration: 0.2)) { eyeVisible = false }
+            withAnimation(.easeInOut(duration: 0.6)) { curtainFraction = target }
+            return
+        }
+        if oldState == .lifting, newState == .desktop {
+            // lifted: the rest of the curtain goes up, revealing the desktop
+            withAnimation(.easeIn(duration: 0.35)) { curtainFraction = target }
+            eyeVisible = false
             return
         }
         withAnimation(.easeInOut(duration: 0.6)) {

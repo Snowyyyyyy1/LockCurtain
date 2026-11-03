@@ -79,6 +79,11 @@ private struct PairingView: View {
                 Text("手机那边等一下就是已连接。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                Text("这台手机走近、并且此刻是解锁着的，就能撤下幕布。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
 
             case .bluetoothOff:
                 Image(systemName: "bolt.horizontal.circle")

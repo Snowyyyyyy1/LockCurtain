@@ -5,10 +5,11 @@
 //   握手两边算出同一把钥匙；冒充的手机 / 冒充的 Mac 用错码都过不了、什么都不存；
 //   一轮握手只能试一个码、录下来的数据没法离线验别的码；错 5 次码作废；签名命令收下；
 //   同一个计数重放被拒；改过的命令被拒；不认识的手机被拒；明文命令被拒；
-//   确认收据 / 幕布状态 / 撤销通知的签名；分帧切块再拼回来。
+//   确认收据 / 幕布状态 / 撤销通知的签名；分帧切块再拼回来；
+//   手机撤下幕布：条件都满足才撤、少一条都不撤、边沿规则、「现在撤下」、过期 / 重放 / 错 nonce、开关关着。
 //
 // 两个入口：
-//   * Tests/PairingCryptoSelfTest.swift（verify.sh 里跑，和本文件 + PairingCrypto + PairingAuthority 一起编）
+//   * Tests/PairingCryptoSelfTest.swift（verify.sh 里跑，和本文件 + PairingCrypto + PairingAuthority + LiftGate 一起编）
 //   * 正在运行的 App：LockCurtain --send pairselftest，结果写到 /tmp/lockcurtain-pairtest.txt（不退出 App）
 
 import CryptoKit
@@ -179,6 +180,10 @@ enum PairingSelfTest {
         let parts = PairingFraming.chunks(long, maxChunk: 20)
         _ = a2.feed(parts[0])
         expect(a2.feed(parts[2]) == nil, "分帧：漏块整条丢掉")
+
+        // 16. 手机撤下幕布：判断（LiftGate）+ 签名 / 计数 / nonce（PairingAuthority）
+        LiftTests.gate(expect)
+        LiftTests.wire(expect, log: log, code: code)
 
         // 日志里不许出现码
         expect(!authorityLog.contains { $0.contains(code) }, "日志：不含配对码")
@@ -557,5 +562,244 @@ enum ImpostorTests {
         } else {
             expect(false, "会话：换码后，进行中的那一轮作废")
         }
+    }
+}
+
+// MARK: - 手机撤下幕布
+
+enum LiftTests {
+    static let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    static func at(_ seconds: TimeInterval) -> Date { t0.addingTimeInterval(seconds) }
+    static func nonce(_ n: UInt8) -> Data { Data(repeating: n, count: PairingCrypto.nonceLength) }
+
+    /// 盖上（t=0），近（三次 -60），可选先报一次锁着
+    static func coveredNear(armed: Bool, rssi: [Int] = [-60, -60, -60]) -> LiftGate {
+        var g = LiftGate()
+        g.covered(at: at(0))
+        for (i, v) in rssi.enumerated() { g.recordRSSI(v, at: at(Double(i) * 2)) }
+        if armed {
+            g.issue(nonce(1), at: at(4))
+            _ = g.presence(.locked, nonce: nonce(1), at: at(4.3))
+        }
+        return g
+    }
+
+    static func gate(_ expect: (Bool, String) -> Void) {
+        // 全满足：盖上之后先锁着、再解锁着、近、新鲜、开关开着 → 撤
+        var g = coveredNear(armed: true)
+        expect(g.edgeArmed, "撤下：盖上之后报锁着，边沿就绪")
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.4)) == .lift, "撤下：条件全满足 → 撤")
+
+        // 少一条都不撤
+        var notCovered = LiftGate()
+        notCovered.recordRSSI(-50, at: at(0)); notCovered.recordRSSI(-50, at: at(1)); notCovered.recordRSSI(-50, at: at(2))
+        notCovered.issue(nonce(2), at: at(2))
+        expect(notCovered.presence(.unlocked, nonce: nonce(2), at: at(2.2)) == .refuse(.notCovered)
+               && notCovered.liftNow(nonce: nonce(2), at: at(2.2)) == .refuse(.notCovered),
+               "撤下：幕布没盖着 → 不撤（「现在撤下」也不撤）")
+
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.locked, nonce: nonce(2), at: at(6.2)) == .refuse(.phoneLocked), "撤下：手机锁着 → 不撤")
+
+        g = coveredNear(armed: true, rssi: [-70, -71, -69])
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .refuse(.notNear(median: -70)), "撤下：不够近（中位数 -70）→ 不撤")
+
+        g = coveredNear(armed: true, rssi: [-40, -80, -80])
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .refuse(.notNear(median: -80)),
+               "撤下：一次很强、两次很弱，看中位数 → 不撤")
+        g = coveredNear(armed: true, rssi: [-80, -60, -62])
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .lift, "撤下：一次弱、两次够近，中位数 -62 → 撤")
+        g = coveredNear(armed: true, rssi: [-65, -65, -65])
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .lift, "撤下：中位数正好在门槛上 → 撤")
+
+        g = coveredNear(armed: true, rssi: [-60, -60])
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .refuse(.noRSSI(samples: 2)), "撤下：RSSI 不够 3 次 → 不撤")
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(14))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(14.2)) == .refuse(.noRSSI(samples: 0)), "撤下：RSSI 太旧 → 不撤")
+        g = coveredNear(armed: true)
+        g.recordRSSI(127, at: at(5))
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .lift, "撤下：读不到的 RSSI（127）不算数")
+
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.off, nonce: nonce(2), at: at(6.2)) == .refuse(.toggleOff), "撤下：手机「走近撤下」关着 → 不撤")
+        var off = coveredNear(armed: false)
+        off.issue(nonce(1), at: at(4)); _ = off.presence(.off, nonce: nonce(1), at: at(4.1))
+        off.issue(nonce(2), at: at(6))
+        expect(!off.edgeArmed && off.presence(.unlocked, nonce: nonce(2), at: at(6.2)) == .refuse(.edgeNotArmed),
+               "撤下：关着的回答不算「锁着」，不给边沿就绪")
+
+        // 新鲜：错 nonce、用过的 nonce、过期的 nonce
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(9), at: at(6.2)) == .refuse(.unknownNonce), "撤下：不是 Mac 发的 nonce → 不撤")
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.3)) == .lift
+               && g.presence(.unlocked, nonce: nonce(2), at: at(6.4)) == .refuse(.unknownNonce),
+               "撤下：同一个 nonce 只能用一次（重放的回答不撤）")
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(11.5)) == .refuse(.staleNonce), "撤下：超过 5 秒的回答 → 不撤")
+        g = coveredNear(armed: true)
+        g.issue(nonce(2), at: at(6))
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(5)) == .refuse(.staleNonce), "撤下：时间倒流的回答 → 不撤")
+        g = coveredNear(armed: true)
+        for i in 2...8 { g.issue(nonce(UInt8(i)), at: at(Double(i) * 0.1 + 6)) }
+        expect(g.presence(.unlocked, nonce: nonce(2), at: at(6.9)) == .refuse(.unknownNonce)
+               && g.presence(.unlocked, nonce: nonce(8), at: at(6.9)) == .lift,
+               "撤下：只记最近 \(LiftGate.maxOpenChallenges) 个没回答的 nonce")
+
+        // 边沿规则
+        g = coveredNear(armed: false)
+        var lifted = false
+        for i in 0..<10 {
+            g.issue(nonce(UInt8(10 + i)), at: at(6 + Double(i) * 2))
+            g.recordRSSI(-55, at: at(6 + Double(i) * 2))
+            if g.presence(.unlocked, nonce: nonce(UInt8(10 + i)), at: at(6.3 + Double(i) * 2)) == .lift { lifted = true }
+        }
+        expect(!lifted, "边沿：按了盖上、手机一直没锁、人没动（10 次解锁着的回答）→ 一直不撤")
+        g.recordRSSI(-55, at: at(28))
+        g.issue(nonce(40), at: at(30)); g.recordRSSI(-55, at: at(30))
+        _ = g.presence(.locked, nonce: nonce(40), at: at(30.2))
+        g.issue(nonce(41), at: at(32)); g.recordRSSI(-55, at: at(32))
+        expect(g.presence(.unlocked, nonce: nonce(41), at: at(32.2)) == .lift, "边沿：之后锁一下再解锁 → 撤")
+
+        var before = coveredNear(armed: true)          // 第一次盖上时见过锁着
+        before.uncovered()
+        before.covered(at: at(10))                     // 又盖上：之前的锁着不算
+        before.recordRSSI(-60, at: at(10)); before.recordRSSI(-60, at: at(11)); before.recordRSSI(-60, at: at(12))
+        before.issue(nonce(5), at: at(12))
+        expect(!before.edgeArmed && before.presence(.unlocked, nonce: nonce(5), at: at(12.2)) == .refuse(.edgeNotArmed),
+               "边沿：盖上之前见过的锁着不算")
+        var early = coveredNear(armed: false)
+        early.issue(nonce(6), at: at(4))
+        early.covered(at: at(5))                       // 重新盖上：之前发的 nonce 作废
+        expect(early.presence(.locked, nonce: nonce(6), at: at(5.5)) == .refuse(.unknownNonce) && !early.edgeArmed,
+               "边沿：盖上之前发的问询，盖上之后才回的「锁着」也不算")
+
+        // 「现在撤下」：不看边沿，照样要近、要新鲜
+        g = coveredNear(armed: false)
+        g.issue(nonce(2), at: at(6))
+        expect(g.liftNow(nonce: nonce(2), at: at(6.5)) == .lift, "现在撤下：没见过锁着也撤（不看边沿）")
+        g = coveredNear(armed: false, rssi: [-75, -72, -78])
+        g.issue(nonce(2), at: at(6))
+        expect(g.liftNow(nonce: nonce(2), at: at(6.5)) == .refuse(.notNear(median: -75)), "现在撤下：太远 → 不撤")
+        g = coveredNear(armed: false)
+        g.issue(nonce(2), at: at(6))
+        expect(g.liftNow(nonce: nonce(2), at: at(12)) == .refuse(.staleNonce)
+               && g.liftNow(nonce: nonce(2), at: at(6.5)) == .refuse(.unknownNonce),
+               "现在撤下：过期的、用过的 nonce → 不撤")
+    }
+
+    /// 签名、计数、和命令的兼容
+    static func wire(_ expect: (Bool, String) -> Void, log: @escaping (String) -> Void, code: String) {
+        let store = MemoryPairingStore()
+        let mac = PairingAuthority(store: store, log: log)
+        mac.openWindow(code: code)
+        let phoneID = UUID()
+        guard let key = PairingSelfTest.handshake(mac, code: code, phoneID: phoneID).phoneKey,
+              case .accepted = mac.handleCommand(PairingCrypto.sealCommand("ping", phoneID: phoneID, counter: 1, key: key)!) else {
+            expect(false, "撤下线格式：先配上一台手机")
+            return
+        }
+        // 问询：手机只认它的 Mac 签的
+        let n = PairingCrypto.makeNonce()
+        let poll = mac.pollMessage(nonce: n, for: phoneID)!
+        expect(PairingCrypto.kind(of: poll) == .poll && PairingCrypto.openPoll(poll, phoneID: phoneID, key: key) == n,
+               "撤下线格式：问询带签名，手机验过拿到 nonce")
+        expect(PairingCrypto.openPoll(poll, phoneID: phoneID, key: SymmetricKey(size: .bits256)) == nil
+               && PairingCrypto.openPoll(poll, phoneID: UUID(), key: key) == nil,
+               "撤下线格式：别的钥匙 / 别的手机验不过问询")
+        expect(PairingCrypto.makeNonce() != PairingCrypto.makeNonce(), "撤下线格式：nonce 每次都不一样")
+
+        // 回答：签名 + 计数（和命令共用）
+        let p2 = PairingCrypto.sealPresence(.unlocked, nonce: n, phoneID: phoneID, counter: 2, key: key)!
+        var ok = false
+        if case .accepted(let a) = mac.handleAnswer(p2) {
+            ok = a.kind == .presence(.unlocked) && a.nonce == n && a.counter == 2 && store.load(phoneID)?.lastCounter == 2
+        }
+        expect(ok, "撤下线格式：签名的「解锁着」收下，计数存成 2")
+        expect(answerRejected(mac.handleAnswer(p2), .replay), "撤下线格式：同一条回答再来一次被拒（计数）")
+        var flipped = [UInt8](PairingCrypto.sealPresence(.locked, nonce: n, phoneID: phoneID, counter: 3, key: key)!)
+        flipped[42] = PairingCrypto.PresenceStatus.unlocked.rawValue       // 把「锁着」改成「解锁着」
+        expect(answerRejected(mac.handleAnswer(Data(flipped)), .badSignature), "撤下线格式：改了锁屏状态被拒")
+        var swapped = [UInt8](PairingCrypto.sealPresence(.unlocked, nonce: n, phoneID: phoneID, counter: 3, key: key)!)
+        swapped[30] ^= 0x01                                                  // 换 nonce
+        expect(answerRejected(mac.handleAnswer(Data(swapped)), .badSignature), "撤下线格式：改了 nonce 被拒")
+        let forged = PairingCrypto.sealPresence(.unlocked, nonce: n, phoneID: phoneID, counter: 9, key: SymmetricKey(size: .bits256))!
+        expect(answerRejected(mac.handleAnswer(forged), .badSignature), "撤下线格式：别的钥匙签的回答被拒")
+        let stranger = PairingCrypto.sealLiftNow(nonce: n, phoneID: UUID(), counter: 1, key: key)!
+        expect(answerRejected(mac.handleAnswer(stranger), .unknownPhone), "撤下线格式：陌生手机的「现在撤下」被拒")
+        let liftOld = PairingCrypto.sealLiftNow(nonce: n, phoneID: phoneID, counter: 2, key: key)!
+        expect(answerRejected(mac.handleAnswer(liftOld), .replay), "撤下线格式：「现在撤下」用旧计数被拒")
+        expect(store.load(phoneID)?.lastCounter == 2, "撤下线格式：被拒的回答不动计数")
+        let cmd3 = PairingCrypto.sealCommand("away", phoneID: phoneID, counter: 3, key: key)!
+        _ = mac.handleCommand(cmd3)
+        let lift4 = PairingCrypto.sealLiftNow(nonce: n, phoneID: phoneID, counter: 4, key: key)!
+        var liftOK = false
+        if case .accepted(let a) = mac.handleAnswer(lift4) { liftOK = a.kind == .liftNow && a.counter == 4 }
+        expect(liftOK, "撤下线格式：命令和回答共用一个递增计数")
+        let presence3 = PairingCrypto.sealPresence(.unlocked, nonce: n, phoneID: phoneID, counter: 3, key: key)!
+        expect(answerRejected(mac.handleAnswer(presence3), .replay), "撤下线格式：比命令计数小的回答被拒")
+
+        // 兼容：回答不会被当成命令（老 Mac 的 kind 不认识 0x0C / 0x0D 就丢掉）
+        expect(PairingCrypto.kind(of: p2) == .presence && PairingCrypto.kind(of: lift4) == .liftNow
+               && [UInt8](p2)[0] == 1 && (try? PairingCrypto.CommandEnvelope(decoding: p2)) == nil,
+               "撤下线格式：新消息版本 1、新类型，不会被当成命令")
+        expect((try? PairingCrypto.PhoneAnswer(decoding: cmd3)) == nil, "撤下线格式：命令也不会被当成回答")
+
+        // Mac 的结果：签名的
+        let result = mac.liftResultMessage(.tooFar, counter: 4, for: phoneID)!
+        let opened = PairingCrypto.openLiftResult(result, phoneID: phoneID, key: key)
+        expect(opened?.counter == 4 && opened?.status == .tooFar, "撤下线格式：「太远」结果带签名，手机验过")
+        var badResult = [UInt8](result)
+        badResult[26] = PairingCrypto.LiftStatus.lifted.rawValue
+        expect(PairingCrypto.openLiftResult(Data(badResult), phoneID: phoneID, key: key) == nil, "撤下线格式：改过的结果验不过")
+
+        // 端到端：验签 + 判断，重放的整条消息过不了
+        var g = LiftGate()
+        let now = Date()
+        g.covered(at: now)
+        for i in 0..<3 { g.recordRSSI(-58, at: now.addingTimeInterval(Double(i))) }
+        let n1 = PairingCrypto.makeNonce(), n2 = PairingCrypto.makeNonce()
+        g.issue(n1, at: now.addingTimeInterval(2))
+        let locked = PairingCrypto.sealPresence(.locked, nonce: n1, phoneID: phoneID, counter: 5, key: key)!
+        var d1: LiftGate.Decision?
+        if case .accepted(let a) = mac.handleAnswer(locked), case .presence(let st) = a.kind {
+            d1 = g.presence(st, nonce: a.nonce, at: now.addingTimeInterval(2.2))
+        }
+        g.issue(n2, at: now.addingTimeInterval(4))
+        let unlocked = PairingCrypto.sealPresence(.unlocked, nonce: n2, phoneID: phoneID, counter: 6, key: key)!
+        var d2: LiftGate.Decision?
+        if case .accepted(let a) = mac.handleAnswer(unlocked), case .presence(let st) = a.kind {
+            d2 = g.presence(st, nonce: a.nonce, at: now.addingTimeInterval(4.2))
+        }
+        expect(d1 == .refuse(.phoneLocked) && d2 == .lift, "撤下端到端：签名的锁着 → 签名的解锁着 → 撤")
+        // 拿新计数重签一条旧 nonce 的回答（钥匙泄露之外做不到，这里只验 nonce 这一层）
+        let resent = PairingCrypto.sealPresence(.unlocked, nonce: n2, phoneID: phoneID, counter: 7, key: key)!
+        var d3: LiftGate.Decision?
+        if case .accepted(let a) = mac.handleAnswer(resent), case .presence(let st) = a.kind {
+            d3 = g.presence(st, nonce: a.nonce, at: now.addingTimeInterval(4.5))
+        }
+        expect(d3 == .refuse(.unknownNonce), "撤下端到端：用过的 nonce 再来（计数对）也不撤")
+
+        // 撤销之后什么都不认
+        _ = mac.revokeAll()
+        let after = PairingCrypto.sealPresence(.unlocked, nonce: n, phoneID: phoneID, counter: 20, key: key)!
+        expect(answerRejected(mac.handleAnswer(after), .unknownPhone) && mac.pollMessage(nonce: n, for: phoneID) == nil,
+               "撤销配对：之后不发问询，回答也不认")
+    }
+
+    private static func answerRejected(_ outcome: PairingAuthority.AnswerOutcome, _ reason: PairingAuthority.RejectReason) -> Bool {
+        if case .rejected(let r, _) = outcome { return r == reason }
+        return false
     }
 }

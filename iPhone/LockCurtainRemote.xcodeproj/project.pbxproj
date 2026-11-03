@@ -271,6 +271,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = LockCurtain;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "用来找到附近这台 Mac，把「盖上幕布」发过去。";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "按\"现在撤下\"时，确认是你本人在操作。App 拿不到你的面部数据，也不保存。";
 				INFOPLIST_FILE = "LockCurtainRemote-Info.plist";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -356,6 +357,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = LockCurtain;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "用来找到附近这台 Mac，把「盖上幕布」发过去。";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "按\"现在撤下\"时，确认是你本人在操作。App 拿不到你的面部数据，也不保存。";
 				INFOPLIST_FILE = "LockCurtainRemote-Info.plist";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

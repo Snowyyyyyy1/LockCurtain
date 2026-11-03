@@ -315,6 +315,44 @@ final class PairingAuthority {
                          confirmedPairing: isPending, ack: ack)
     }
 
+    // MARK: - 撤下幕布：手机的回答（Presence / LiftNow）
+
+    enum AnswerOutcome: Equatable {
+        /// 签名对、手机认识、计数比上次大（新计数已写进存储）。nonce 新不新由 LiftGate 判断
+        case accepted(PairingCrypto.PhoneAnswer)
+        case rejected(RejectReason, phoneID: UUID?)
+    }
+
+    /// 只认已经确认配上的手机（钥匙在存储里）；和命令共用同一个计数
+    func handleAnswer(_ data: Data) -> AnswerOutcome {
+        guard let answer = try? PairingCrypto.PhoneAnswer(decoding: data) else {
+            log("answer rejected: \(RejectReason.malformed.rawValue)")
+            return .rejected(.malformed, phoneID: nil)
+        }
+        let id = answer.phoneID
+        func reject(_ reason: RejectReason) -> AnswerOutcome {
+            log("answer rejected from \(id.uuidString): \(reason.rawValue) (counter \(answer.counter))")
+            return .rejected(reason, phoneID: id)
+        }
+        guard let record = store.load(id) else { return reject(.unknownPhone) }
+        guard PairingCrypto.verifyAnswer(answer, key: record.key) else { return reject(.badSignature) }
+        guard answer.counter > record.lastCounter else { return reject(.replay) }
+        guard store.save(PairingRecord(key: record.key, lastCounter: answer.counter), for: id) else {
+            return reject(.storeFailed)
+        }
+        return .accepted(answer)
+    }
+
+    func pollMessage(nonce: Data, for phoneID: UUID) -> Data? {
+        guard let record = store.load(phoneID) else { return nil }
+        return PairingCrypto.makePoll(nonce: nonce, phoneID: phoneID, key: record.key)
+    }
+
+    func liftResultMessage(_ status: PairingCrypto.LiftStatus, counter: UInt64, for phoneID: UUID) -> Data? {
+        guard let record = store.load(phoneID) else { return nil }
+        return PairingCrypto.makeLiftResult(status, counter: counter, phoneID: phoneID, key: record.key)
+    }
+
     // MARK: - 发给手机的东西
 
     func stateMessage(closed: Bool, for phoneID: UUID) -> Data? {

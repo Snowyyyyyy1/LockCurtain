@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showSettings = false
     @State private var showPairing = false
     @Namespace private var glassNS
@@ -73,6 +74,14 @@ struct HomeView: View {
         .sensoryFeedback(.warning, trigger: model.didTimeOut) { _, isTimedOut in
             isTimedOut
         }
+        .sensoryFeedback(.impact(weight: .light), trigger: model.liftTapCount)
+        .sensoryFeedback(.warning, trigger: model.liftWarningCount)
+        .sensoryFeedback(.success, trigger: model.showLiftedNote) { _, isShown in
+            isShown
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .background { model.appDidEnterBackground() }
+        }
     }
 
     // MARK: - Rows
@@ -134,7 +143,7 @@ struct HomeView: View {
 
     private var curtainSymbol: String {
         switch model.screenState {
-        case .curtain, .closing:
+        case .curtain, .closing, .lifting:
             "curtains.closed"
         case .desktop, .empty:
             "curtains.open"
@@ -156,6 +165,9 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 8) {
                 genericFooter
                 Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
+                if model.liftOnApproach {
+                    Text("以后回到电脑前，手机解锁着、走近，幕布就撤下。")
+                }
             }
         } else {
             genericFooter
@@ -215,6 +227,12 @@ struct HomeView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
+                    } else if model.showLiftedNote {
+                        Text("幕布撤下了。Mac 要是自己锁了屏，还得照常输密码。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .transition(.opacity)
                     }
                     coverButton
                 }
@@ -228,6 +246,9 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.didTimeOut)
         .animation(.smooth(duration: 0.35), value: model.connection)
         .animation(.smooth(duration: 0.35), value: model.connectionGaveUp)
+        .animation(.smooth(duration: 0.35), value: model.isLifting)
+        .animation(.smooth(duration: 0.35), value: model.liftNotice)
+        .animation(.smooth(duration: 0.35), value: model.showLiftedNote)
     }
 
     @ViewBuilder
@@ -265,19 +286,72 @@ struct HomeView: View {
         }
     }
 
+    /// 幕布盖着：「走近撤下」开着时两行说明 + 现在撤下；关着时两行说明、没有按钮
     private var closedNote: some View {
-        VStack(spacing: 2) {
-            Text("回到 Mac 前按任意键解锁。")
-                .font(.subheadline.weight(.semibold))
-            Text("手机上不能撤下幕布。")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        VStack(spacing: 10) {
+            if let notice = model.liftNotice {
+                Text(liftNoticeText(notice))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .transition(.opacity)
+            }
+            VStack(spacing: 2) {
+                if model.liftOnApproach {
+                    Text("回到电脑前，手机解锁着、走近，幕布就撤下。")
+                        .font(.subheadline.weight(.semibold))
+                    Text("手机锁着不算，别人拿着也撤不下来。")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("回到电脑前按任意键解锁。")
+                        .font(.subheadline.weight(.semibold))
+                    Text("「走近撤下」关着，手机撤不下来。")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            if model.liftOnApproach {
+                liftButton
+            }
         }
         .multilineTextAlignment(.center)
-        .padding(.vertical, 14)
+        .padding(.top, 14)
+        .padding(.bottom, model.liftOnApproach ? 6 : 14)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var liftButton: some View {
+        if model.isLifting {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("正在撤下…")
+            }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(minHeight: 44)
+            .accessibilityElement(children: .combine)
+        } else {
+            Button(model.liftNotice == .timedOut ? "再试一次" : "现在撤下") {
+                model.liftNow()
+            }
+            .font(.body.weight(.semibold))
+            .buttonStyle(.borderless)
+            .frame(minHeight: 44)
+            .accessibilityHint("先验证面容，再撤下这台 Mac 的幕布")
+        }
+    }
+
+    private func liftNoticeText(_ notice: AppModel.LiftNotice) -> String {
+        switch notice {
+        case .timedOut: "Mac 没有回应，幕布还盖着。"
+        case .tooFar: "离这台 Mac 太远，走近再试。"
+        // TODO(copy): Mac 收到了但没撤（不是太远：比如回答过期、幕布已经不是盖着的）。没有定稿的话
+        case .refused: "TODO(copy): Mac 没有撤下幕布"
+        }
     }
 
     // MARK: - Demo
@@ -315,14 +389,6 @@ struct HomeView: View {
 
     private var demoSection: some View {
         Section("演示里切换") {
-            if model.demoScenario == .away {
-                LabeledContent(
-                    "走远",
-                    value: model.phase == .closed ? "已盖上" : "已走远"
-                )
-                .foregroundStyle(.secondary)
-            }
-
             Picker(
                 "演示里切换",
                 selection: Binding(
@@ -332,9 +398,7 @@ struct HomeView: View {
             ) {
                 Text("已连上这台 Mac").tag(AppModel.DemoScenario.connected)
                 Text("幕布已盖上").tag(AppModel.DemoScenario.closed)
-                if AppModel.autoCoverVisible {
-                    Text("走远自动盖上").tag(AppModel.DemoScenario.away)
-                }
+                Text("幕布撤下了").tag(AppModel.DemoScenario.lifted)
             }
             .pickerStyle(.inline)
             .labelsHidden()

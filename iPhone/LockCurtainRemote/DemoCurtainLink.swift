@@ -49,6 +49,21 @@ final class DemoCurtainLink: CurtainLink {
         publish()
     }
 
+    /// 现在撤下 in the demo: no Face ID, no command — 0.8 s later the
+    /// curtain is simply up again (still marked demo).
+    func liftNow() async -> LiftOutcome {
+        guard snapshot.connection == .connected, snapshot.phase == .closed else {
+            return .unavailable
+        }
+        awayTask?.cancel()
+        try? await Task.sleep(for: .milliseconds(800))
+        guard !Task.isCancelled, snapshot.phase == .closed else { return .unavailable }
+        snapshot.phase = .open
+        snapshot.phoneLiftCount += 1
+        publish()
+        return .lifted
+    }
+
     // MARK: - Demo switcher
 
     /// 已连上这台 Mac

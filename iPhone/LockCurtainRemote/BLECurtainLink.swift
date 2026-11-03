@@ -13,11 +13,18 @@
 //
 // Mac 订阅上又在握手之前断开，连续 5 次就停止广播、停在「找到了，但连不上」，等用户点「再试一次」。
 //
+// 撤下幕布：幕布盖着时 Mac 每 2 秒往收件箱写一条签名的问询（Poll + nonce；写入会把后台的 App 叫醒），
+// 这里当场看 UIApplication.isProtectedDataAvailable，回一条签名的 Presence（解锁着 / 锁着 / 「走近撤下」关着），
+// 不记时间、不靠解锁通知。「现在撤下」等下一条问询，用它的 nonce 回 LiftNow（代替那一次的 Presence）。
+// 撤不撤由 Mac 判断（签名、计数、nonce、先锁过、距离），手机只如实回答。
+//
 // 服务 / 特征 UUID 必须和 Mac 端 PhonePairing 一致。
 
 import CoreBluetooth
 import CryptoKit
 import Foundation
+import OSLog
+import UIKit
 
 /// 一次配对请求卡在哪一步，界面按这个说话（copy v6.2 §8.5 的六句）
 enum PairResult: Equatable {
@@ -91,6 +98,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private var ackTimeout: Task<Void, Never>?
     private var pendingCover: CheckedContinuation<CoverOutcome, Never>?
     private var coverTimeout: Task<Void, Never>?
+    /// 「现在撤下」：等下一条问询；sentCounter = 已经发出去的 LiftNow 的计数，等 Mac 的结果
+    private var pendingLift: (sentCounter: UInt64?, cont: CheckedContinuation<LiftOutcome, Never>)?
+    private var liftTimeout: Task<Void, Never>?
+    /// Mac 说「撤下了」，等它的「开着」状态到了再告诉界面
+    private var awaitingLiftOpen = false
+    private static let liftLog = Logger(subsystem: "LockCurtainRemote", category: "lift")
+    /// 「现在撤下」最多等多久（Mac 每 2 秒问一次）
+    private static let liftTimeoutSeconds: Double = 5
 
     init(paired: Bool, macName: String?) {
         isPaired = paired
@@ -146,6 +161,24 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     func setAutoEnabled(_ isOn: Bool) {
         // 自动盖幕布的判断在 Mac 上，手机只显示；还没有对应的命令
+    }
+
+    /// 「现在撤下」（调用方已经过了面容 / 密码）：等 Mac 的下一条问询，用它的 nonce 发签名的 LiftNow，
+    /// 等 Mac 签名的结果。老版本的 Mac 不问询，就是超时。
+    func liftNow() async -> LiftOutcome {
+        guard mac != nil, ready, isPaired, LiftSetting.isOn, snapshot.phase == .closed else { return .unavailable }
+        finishLift(.unavailable)
+        Self.liftLog.info("lift-now requested; waiting for the next poll")
+        return await withCheckedContinuation { cont in
+            pendingLift = (nil, cont)
+            liftTimeout?.cancel()
+            liftTimeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.liftTimeoutSeconds))
+                guard !Task.isCancelled else { return }
+                Self.liftLog.info("lift-now timed out")
+                self?.finishLift(.timedOut)
+            }
+        }
     }
 
     // MARK: - 配对
@@ -311,6 +344,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         ready = false
         lastStateSeq = 0
         finishCover(.unavailable)
+        finishLift(.unavailable)
+        awaitingLiftOpen = false
         publish {
             $0.connection = .notPaired
             $0.macName = nil
@@ -333,6 +368,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
         let pending = pendingAck
         pendingAck = nil
         pending?.cont.resume(returning: result)
+    }
+
+    private func finishLift(_ outcome: LiftOutcome) {
+        liftTimeout?.cancel()
+        liftTimeout = nil
+        let pending = pendingLift
+        pendingLift = nil
+        pending?.cont.resume(returning: outcome)
     }
 
     private func finishCover(_ outcome: CoverOutcome) {
@@ -379,8 +422,36 @@ final class BLECurtainLink: NSObject, CurtainLink {
                                                       key: SymmetricKeyBox(record.key).key),
                   state.seq > lastStateSeq else { return }
             lastStateSeq = state.seq
-            publish { $0.phase = state.closed ? .closed : .open }
-            if state.closed { finishCover(.covered) }
+            let liftedByUs = !state.closed && awaitingLiftOpen
+            if state.closed || liftedByUs { awaitingLiftOpen = false }
+            publish {
+                $0.phase = state.closed ? .closed : .open
+                if liftedByUs { $0.phoneLiftCount += 1 }
+            }
+            if state.closed { finishCover(.covered) } else { finishLift(.lifted) }
+        case .poll:
+            answerPoll(message)
+        case .liftResult:
+            guard let record = PhoneKeychain.loadLink(),
+                  let result = PairingCrypto.openLiftResult(message, phoneID: PhoneKeychain.phoneID(),
+                                                            key: SymmetricKeyBox(record.key).key) else { return }
+            Self.liftLog.info("lift result from Mac: status \(result.status.rawValue), counter \(result.counter)")
+            if result.status == .lifted {
+                if snapshot.phase == .closed {
+                    awaitingLiftOpen = true
+                } else {
+                    publish { $0.phoneLiftCount += 1 }
+                }
+            }
+            if let pending = pendingLift, pending.sentCounter == result.counter {
+                switch result.status {
+                case .lifted:
+                    // 等 Mac 的「开着」状态到了再算撤下（界面要跟着 Mac 的回报走）
+                    if snapshot.phase != .closed { finishLift(.lifted) }
+                case .tooFar: finishLift(.tooFar)
+                case .refused: finishLift(.refused)
+                }
+            }
         case .revoke:
             guard let record = PhoneKeychain.loadLink(),
                   PairingCrypto.verifyRevoke(message, phoneID: PhoneKeychain.phoneID(),
@@ -391,6 +462,35 @@ final class BLECurtainLink: NSObject, CurtainLink {
         default:
             break
         }
+    }
+
+    /// Mac 的问询：签名验过才回。此刻解锁着没有，当场看系统的 isProtectedDataAvailable
+    private func answerPoll(_ message: Data) {
+        let phoneID = PhoneKeychain.phoneID()
+        guard isPaired, let record = PhoneKeychain.loadLink(),
+              let nonce = PairingCrypto.openPoll(message, phoneID: phoneID, key: SymmetricKeyBox(record.key).key) else {
+            Self.liftLog.info("poll ignored: not paired or bad signature")
+            return
+        }
+        guard let reserved = PhoneKeychain.reserveNextCounter() else { return }
+        let key = SymmetricKeyBox(reserved.record.key).key
+        if let pending = pendingLift, pending.sentCounter == nil, LiftSetting.isOn,
+           let data = PairingCrypto.sealLiftNow(nonce: nonce, phoneID: phoneID, counter: reserved.counter, key: key) {
+            pendingLift = (reserved.counter, pending.cont)
+            Self.liftLog.info("poll answered with lift-now, counter \(reserved.counter)")
+            send(data)
+            return
+        }
+        let status: PairingCrypto.PresenceStatus
+        if !LiftSetting.isOn {
+            status = .off
+        } else {
+            status = UIApplication.shared.isProtectedDataAvailable ? .unlocked : .locked
+        }
+        guard let data = PairingCrypto.sealPresence(status, nonce: nonce, phoneID: phoneID,
+                                                    counter: reserved.counter, key: key) else { return }
+        Self.liftLog.info("poll answered: status \(status.rawValue), counter \(reserved.counter)")
+        send(data)
     }
 
     // MARK: - 内部
@@ -511,6 +611,8 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         finishReply(.disconnected)
         finishAck(.failed)
         finishCover(.unavailable)
+        finishLift(.unavailable)
+        awaitingLiftOpen = false
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {

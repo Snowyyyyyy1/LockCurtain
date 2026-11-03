@@ -578,6 +578,14 @@ final class OverlayController {
     /// 紧急退出（菜单/快捷键用）
     func forceHide() { hide() }
 
+    /// 配对的手机撤下幕布（PhonePairing 已经验过签名、新鲜、边沿和距离）：
+    /// 和离开模式里「验证」通过一样直接撤，不先锁屏；也不碰系统锁屏 —— Mac 锁着就露出系统锁屏
+    func liftFromPhone() {
+        guard let mode else { return }
+        NSLog("phone lift -> 撤遮罩 (%@), system locked=%d", "\(mode)", sessionLocked() ? 1 : 0)
+        hide()
+    }
+
     // MARK: - 窗口构建
     /// 窗口整体不透明度略低于 1，系统就不会认为遮罩挡住了下面的窗口。
     /// 等于 1 时（实测 2026-10-26，macOS 26）：被遮罩完全盖住的窗口会从整屏截图里消失，

@@ -11,6 +11,11 @@
 // 连上之后每 2 秒读一次 RSSI 写进日志 —— 这是实验的证据：配对稳不稳、手机锁屏放兜里 5 分钟断不断、
 // 走远时 RSSI 怎么掉。还不按距离自动盖。
 //
+// 手机撤下幕布：幕布盖着、手机连着时，每 2 秒往手机收件箱写一条签名的问询（Poll，带新的随机 nonce；
+// 写入会把后台的 App 叫醒），手机回签名的 Presence（此刻解锁着 / 锁着 / 关着）。签名和计数由
+// PairingAuthority 验，撤不撤由 LiftGate 判（新鲜、边沿、近），撤就调 onLift（只撤 LockCurtain 的遮罩，
+// 不碰系统锁屏），再回手机一条签名的 LiftResult。「现在撤下」是手机用下一次问询的 nonce 回的 LiftNow。
+//
 // 连上了却在服务就绪（订阅上发件箱）之前就断，连续 5 次就停手，写一行 "stopped after 5 early drops"，
 // 等配对窗口重新打开再试。
 //
@@ -52,6 +57,8 @@ final class PhonePairing: NSObject, ObservableObject {
 
     /// 手机发来的命令（away / hide …），由 AppDelegate 接到原来的命令通道上
     var onCommand: ((String) async -> Void)?
+    /// 手机撤下幕布（条件都满足了）：撤 LockCurtain 的遮罩，和离开模式里「验证」通过一样，不碰系统锁屏
+    var onLift: (() -> Void)?
 
     private lazy var authority = PairingAuthority(store: KeychainPairingStore(), log: { Self.log($0) })
     private var central: CBCentralManager?
@@ -62,6 +69,10 @@ final class PhonePairing: NSObject, ObservableObject {
     private var rssiTimer: Timer?
     /// 幕布现在是不是盖着
     private var curtainClosed = false
+    /// 这次盖上的时刻 T（边沿规则从这里算）
+    private var curtainClosedAt: Date?
+    /// 每台手机的撤下判断（按 phoneID，断开重连也留着「盖上之后见过锁着」）
+    private var gates: [UUID: LiftGate] = [:]
 
     /// 一台连上的手机
     private final class Peer {
@@ -146,6 +157,7 @@ final class PhonePairing: NSObject, ObservableObject {
             }
         }
         UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
+        gates.removeAll()
         code = ""
         phase = .revoked
         if !windowOpen {
@@ -161,6 +173,12 @@ final class PhonePairing: NSObject, ObservableObject {
         let closed = state == "closed"
         guard curtainClosed != closed else { return }
         curtainClosed = closed
+        let now = Date()
+        curtainClosedAt = closed ? now : nil
+        for id in gates.keys {
+            if closed { gates[id]?.covered(at: now) } else { gates[id]?.uncovered() }
+        }
+        Self.log("lift: curtain \(closed ? "covered" : "uncovered")")
         for peer in peers.values {
             if let id = peer.phoneID, let message = authority.stateMessage(closed: closed, for: id) {
                 send(message, to: peer)
@@ -233,7 +251,11 @@ final class PhonePairing: NSObject, ObservableObject {
         let anyConnected = peers.values.contains { $0.peripheral.state == .connected }
         if anyConnected, rssiTimer == nil {
             rssiTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-                self?.peers.values.filter { $0.peripheral.state == .connected }.forEach { $0.peripheral.readRSSI() }
+                guard let self else { return }
+                for peer in self.peers.values where peer.peripheral.state == .connected {
+                    peer.peripheral.readRSSI()
+                    self.poll(peer)
+                }
             }
         } else if !anyConnected {
             rssiTimer?.invalidate()
@@ -287,6 +309,8 @@ final class PhonePairing: NSObject, ObservableObject {
                 send(reply, to: peer)
             }
             if authority.isLocked { code = "" }
+        case .presence, .liftNow:
+            handleAnswer(message, from: peer)
         case .command:
             switch authority.handleCommand(message) {
             case .accepted(let command, let phoneID, _, let confirmed, let ack):
@@ -306,6 +330,102 @@ final class PhonePairing: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - 撤下
+
+    private func gate(for phoneID: UUID) -> LiftGate {
+        if let gate = gates[phoneID] { return gate }
+        var gate = LiftGate()
+        if curtainClosed, let at = curtainClosedAt { gate.covered(at: at) }
+        return gate
+    }
+
+    /// 幕布盖着、手机认过身份：发一条签名的问询（新 nonce）
+    private func poll(_ peer: Peer) {
+        guard curtainClosed, let id = peer.phoneID, peer.subscribed, peer.inbox != nil else { return }
+        // 上一条还没写完（手机没回执）就不再堆
+        guard peer.writeQueue.isEmpty, !peer.writing else {
+            Self.log("lift: poll skipped for \(id.uuidString): previous write still pending")
+            return
+        }
+        let nonce = PairingCrypto.makeNonce()
+        guard let message = authority.pollMessage(nonce: nonce, for: id) else { return }
+        var gate = gate(for: id)
+        gate.issue(nonce, at: Date())
+        gates[id] = gate
+        Self.log("lift: poll sent to \(id.uuidString) nonce \(Self.short(nonce))")
+        send(message, to: peer)
+    }
+
+    private func handleAnswer(_ message: Data, from peer: Peer) {
+        guard case .accepted(let answer) = authority.handleAnswer(message) else { return }
+        let id = answer.phoneID
+        // 签名对，但不是这条连接上认过的那台手机：不理
+        guard peer.phoneID == id else {
+            Self.log("lift: answer from \(id.uuidString) on a connection identified as \(peer.phoneID?.uuidString ?? "nobody"); ignored")
+            return
+        }
+        let now = Date()
+        var gate = gate(for: id)
+        let wasArmed = gate.edgeArmed
+        let (median, samples) = gate.rssiMedian(at: now)
+        let rssiText = "rssi median \(median.map(String.init) ?? "-") of [\(samples.map(String.init).joined(separator: ","))], need >= \(LiftGate.nearMedianDBm)"
+        let decision: LiftGate.Decision
+        switch answer.kind {
+        case .presence(let status):
+            let word: String
+            switch status {
+            case .unlocked: word = "unlocked"
+            case .locked: word = "locked"
+            case .off: word = "off"
+            }
+            Self.log("lift: presence from \(id.uuidString): \(word), nonce \(Self.short(answer.nonce)), counter \(answer.counter), \(rssiText)")
+            decision = gate.presence(status, nonce: answer.nonce, at: now)
+            if !wasArmed && gate.edgeArmed {
+                Self.log("lift: edge armed for \(id.uuidString) (locked seen after cover)")
+            }
+        case .liftNow:
+            Self.log("lift: lift-now request from \(id.uuidString), nonce \(Self.short(answer.nonce)), counter \(answer.counter), \(rssiText)")
+            decision = gate.liftNow(nonce: answer.nonce, at: now)
+        }
+        gates[id] = gate
+
+        let isLiftNow = answer.kind == .liftNow
+        let label = isLiftNow ? "lift-now result" : "lift decision"
+        switch decision {
+        case .lift:
+            Self.log("lift: \(label): lifted (\(rssiText))")
+            if let reply = authority.liftResultMessage(.lifted, counter: answer.counter, for: id) { send(reply, to: peer) }
+            onLift?()
+        case .refuse(let why):
+            Self.log("lift: \(label): refused, \(Self.describe(why))")
+            if isLiftNow {
+                let status: PairingCrypto.LiftStatus
+                switch why {
+                case .notNear, .noRSSI: status = .tooFar
+                default: status = .refused
+                }
+                if let reply = authority.liftResultMessage(status, counter: answer.counter, for: id) { send(reply, to: peer) }
+            }
+        }
+    }
+
+    private static func describe(_ refusal: LiftGate.Refusal) -> String {
+        switch refusal {
+        case .notCovered: return "curtain not covered"
+        case .unknownNonce: return "nonce unknown or already used"
+        case .staleNonce: return "nonce stale (older than \(Int(LiftGate.challengeLifetime))s or from before cover)"
+        case .toggleOff: return "phone setting off"
+        case .phoneLocked: return "phone locked"
+        case .edgeNotArmed: return "edge rule: no locked report from this phone since cover"
+        case .notNear(let median): return "not near (median \(median) < \(LiftGate.nearMedianDBm))"
+        case .noRSSI(let samples): return "not near (only \(samples) fresh rssi samples, need \(LiftGate.rssiSamples))"
+        }
+    }
+
+    private static func short(_ nonce: Data) -> String {
+        nonce.prefix(4).map { String(format: "%02x", $0) }.joined()
+    }
+
     private func handle(_ command: String, phoneID: UUID, peer: Peer) {
         switch command.lowercased() {
         case "ping":
@@ -315,6 +435,7 @@ final class PhonePairing: NSObject, ObservableObject {
         case "unpair":
             Self.log("phone \(phoneID.uuidString) asked to unpair")
             _ = authority.revoke(phoneID)
+            gates[phoneID] = nil
             peer.phoneID = nil
             if !isPaired { UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey) }
             peer.disconnectAfterWrites = true
@@ -407,6 +528,7 @@ extension PhonePairing: CBCentralManagerDelegate {
         let duration = peer?.connectedAt.map { String(format: "%.1fs", Date().timeIntervalSince($0)) } ?? "?"
         Self.log("disconnected \(peripheral.identifier.uuidString) after \(duration), ready=\(wasReady): \(error?.localizedDescription ?? "no error")")
         let wasIdentified = peer?.phoneID != nil
+        if let id = peer?.phoneID { gates[id]?.resetRSSI() }
         peers[peripheral.identifier] = nil
         updateRSSITimer()
 
@@ -490,6 +612,11 @@ extension PhonePairing: CBPeripheralDelegate {
             Self.log("rssi \(peripheral.identifier.uuidString) read failed: \(error.localizedDescription)")
         } else {
             Self.log("rssi \(peripheral.identifier.uuidString) \(RSSI)")
+            if let id = peers[peripheral.identifier]?.phoneID {
+                var gate = gate(for: id)
+                gate.recordRSSI(RSSI.intValue, at: Date())
+                gates[id] = gate
+            }
         }
     }
 }

@@ -28,6 +28,18 @@
 //   Mac  → 手机 State     = ver | 0x05 | phoneID(16) | seq(8) | state(1: 0 开着 / 1 盖着) | mac(32)
 //   Mac  → 手机 Revoke    = ver | 0x04 | phoneID(16) | mac(32)   撤销通知，签名后 Mac 才删钥匙
 //
+// 手机撤下幕布（都是版本 1，新加的类型；老 Mac / 老手机见到不认识的类型就丢掉，不影响别的消息）：
+//   Mac  → 手机 Poll       = ver | 0x0B | phoneID(16) | nonce(16) | mac(32)
+//               幕布盖着、手机连着时 Mac 每 2 秒写一次（写进收件箱会把后台的 App 叫醒）；nonce 每次新随机
+//   手机 → Mac  Presence   = ver | 0x0C | phoneID(16) | counter(8) | nonce(16) | status(1) | mac(32)
+//               status 0 = 锁着，1 = 此刻解锁着（isProtectedDataAvailable），2 = 「走近撤下」关着
+//               counter 和命令共用同一个严格递增的计数；nonce 必须是 Mac 最近 5 秒内发的、没用过的
+//   手机 → Mac  LiftNow    = ver | 0x0D | phoneID(16) | counter(8) | nonce(16) | mac(32)
+//               「现在撤下」（手机先过了面容 / 密码）：不看「先锁过」那条，但照样要近、要新鲜、要签名
+//   Mac  → 手机 LiftResult = ver | 0x0E | phoneID(16) | counter(8) | status(1) | mac(32)
+//               counter 是被回复的那条 Presence / LiftNow 的计数；status 0 = 撤下了，1 = 太远，2 = 没撤（别的原因）
+//               Presence 只在撤下了的时候回；LiftNow 每次都回
+//
 // 分帧（PairingFraming）：任何一条消息按传输层的单包上限切块，每块前面 1 字节头：
 //   bit7 = 最后一块，低 7 位 = 块序号（模 128）。
 
@@ -56,11 +68,15 @@ enum PairingCrypto {
         case pairConfirm = 0x08
         case pairAccepted = 0x09
         case pairAbort = 0x0A
+        case poll = 0x0B
+        case presence = 0x0C
+        case liftNow = 0x0D
+        case liftResult = 0x0E
 
         var isHandshake: Bool {
             switch self {
             case .pairRequest, .pairResponse, .pairReject, .pairConfirm, .pairAccepted, .pairAbort: return true
-            case .command, .revoke, .state, .ack: return false
+            case .command, .revoke, .state, .ack, .poll, .presence, .liftNow, .liftResult: return false
             }
         }
 
@@ -463,7 +479,136 @@ enum PairingCrypto {
               uuid(b[2..<18]) == phoneID else { return false }
         return hmacValid(Data(b[18...]), for: Data(b[0..<18]), key: key)
     }
+
+    // MARK: - 手机撤下幕布
+
+    static let nonceLength = 16
+
+    static func makeNonce() -> Data {
+        var bytes = [UInt8](repeating: 0, count: nonceLength)
+        var rng = SystemRandomNumberGenerator()
+        for i in bytes.indices { bytes[i] = UInt8.random(in: 0...255, using: &rng) }
+        return Data(bytes)
+    }
+
+    /// Mac 的问询：签名的，手机只回它认得的 Mac
+    static func makePoll(nonce: Data, phoneID: UUID, key: SymmetricKey) -> Data? {
+        guard nonce.count == nonceLength else { return nil }
+        let signed = header(.poll) + bytes(phoneID) + nonce
+        return signed + hmac(signed, key: key)
+    }
+
+    /// 手机：验 Mac 的问询，返回 nonce
+    static func openPoll(_ data: Data, phoneID: UUID, key: SymmetricKey) -> Data? {
+        let b = [UInt8](data)
+        guard (try? check(b, .poll)) != nil, b.count == 2 + 16 + 16 + 32,
+              uuid(b[2..<18]) == phoneID,
+              hmacValid(Data(b[34...]), for: Data(b[0..<34]), key: key) else { return nil }
+        return Data(b[18..<34])
+    }
+
+    enum PresenceStatus: UInt8 {
+        case locked = 0
+        case unlocked = 1
+        /// 「走近撤下」关着：当成从来没解锁
+        case off = 2
+    }
+
+    /// 手机 → Mac 的签名回答（Presence 或 LiftNow）。签名验过之前里面的东西都不可信
+    struct PhoneAnswer: Equatable {
+        enum Kind: Equatable {
+            case presence(PresenceStatus)
+            case liftNow
+        }
+        var kind: Kind
+        var phoneID: UUID
+        var counter: UInt64
+        var nonce: Data
+        var mac: Data
+
+        static func signedPart(_ kind: Kind, phoneID: UUID, counter: UInt64, nonce: Data) -> Data {
+            switch kind {
+            case .presence(let status):
+                return header(.presence) + bytes(phoneID) + bigEndian(counter) + nonce + Data([status.rawValue])
+            case .liftNow:
+                return header(.liftNow) + bytes(phoneID) + bigEndian(counter) + nonce
+            }
+        }
+
+        var signedPart: Data { Self.signedPart(kind, phoneID: phoneID, counter: counter, nonce: nonce) }
+
+        func encoded() -> Data { signedPart + mac }
+
+        init(kind: Kind, phoneID: UUID, counter: UInt64, nonce: Data, mac: Data) {
+            self.kind = kind
+            self.phoneID = phoneID
+            self.counter = counter
+            self.nonce = nonce
+            self.mac = mac
+        }
+
+        init(decoding data: Data) throws {
+            let b = [UInt8](data)
+            guard b.count >= 2 else { throw WireError.wrongLength }
+            guard b[0] == version else { throw WireError.wrongVersion }
+            let head = 2 + 16 + 8 + 16
+            switch b[1] {
+            case PairingCrypto.Kind.presence.rawValue:
+                guard b.count == head + 1 + 32 else { throw WireError.wrongLength }
+                guard let status = PresenceStatus(rawValue: b[head]) else { throw WireError.wrongLength }
+                kind = .presence(status)
+                mac = Data(b[(head + 1)...])
+            case PairingCrypto.Kind.liftNow.rawValue:
+                guard b.count == head + 32 else { throw WireError.wrongLength }
+                kind = .liftNow
+                mac = Data(b[head...])
+            default:
+                throw WireError.wrongKind
+            }
+            phoneID = uuid(b[2..<18])
+            counter = uint64(b[18..<26])
+            nonce = Data(b[26..<42])
+        }
+    }
+
+    static func sealPresence(_ status: PresenceStatus, nonce: Data, phoneID: UUID, counter: UInt64, key: SymmetricKey) -> Data? {
+        guard nonce.count == nonceLength else { return nil }
+        let signed = PhoneAnswer.signedPart(.presence(status), phoneID: phoneID, counter: counter, nonce: nonce)
+        return signed + hmac(signed, key: key)
+    }
+
+    static func sealLiftNow(nonce: Data, phoneID: UUID, counter: UInt64, key: SymmetricKey) -> Data? {
+        guard nonce.count == nonceLength else { return nil }
+        let signed = PhoneAnswer.signedPart(.liftNow, phoneID: phoneID, counter: counter, nonce: nonce)
+        return signed + hmac(signed, key: key)
+    }
+
+    static func verifyAnswer(_ answer: PhoneAnswer, key: SymmetricKey) -> Bool {
+        hmacValid(answer.mac, for: answer.signedPart, key: key)
+    }
+
+    enum LiftStatus: UInt8 {
+        case lifted = 0
+        case tooFar = 1
+        case refused = 2
+    }
+
+    static func makeLiftResult(_ status: LiftStatus, counter: UInt64, phoneID: UUID, key: SymmetricKey) -> Data {
+        let signed = header(.liftResult) + bytes(phoneID) + bigEndian(counter) + Data([status.rawValue])
+        return signed + hmac(signed, key: key)
+    }
+
+    /// 手机：验 Mac 的撤下结果，返回 (counter, status)
+    static func openLiftResult(_ data: Data, phoneID: UUID, key: SymmetricKey) -> (counter: UInt64, status: LiftStatus)? {
+        let b = [UInt8](data)
+        guard (try? check(b, .liftResult)) != nil, b.count == 2 + 16 + 8 + 1 + 32,
+              uuid(b[2..<18]) == phoneID,
+              let status = LiftStatus(rawValue: b[26]),
+              hmacValid(Data(b[27...]), for: Data(b[0..<27]), key: key) else { return nil }
+        return (uint64(b[18..<26]), status)
+    }
 }
+
 
 // MARK: - 分帧
 
