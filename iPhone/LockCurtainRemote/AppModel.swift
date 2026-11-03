@@ -115,6 +115,13 @@ final class AppModel {
         recordEvent(from: link.snapshot)
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         if paired && !demoMode { link.activate() }
+        #if DEBUG
+        // 截图用：-lcDemoCovered 一启动就进演示、幕布已盖上
+        if ProcessInfo.processInfo.arguments.contains("-lcDemoCovered") {
+            setDemoMode(true)
+            selectDemoScenario(.closed)
+        }
+        #endif
     }
 
     // MARK: - Derived UI state

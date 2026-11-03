@@ -43,12 +43,12 @@ struct HomeView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
+        .safeAreaBar(edge: .top, spacing: 0) {
             if model.demoMode {
                 demoBanner
             }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+        .safeAreaBar(edge: .bottom, spacing: 0) {
             if showsBottomBar {
                 bottomBar
             }
@@ -375,10 +375,14 @@ struct HomeView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.orange.opacity(0.14), in: .rect(cornerRadius: 18))
+        .background {
+            // 不透明的页面底色垫底，再叠 14% 橙：列表滚到横幅下面也透不出来
+            RoundedRectangle(cornerRadius: 18)
+                .fill(Color(.systemGroupedBackground))
+                .overlay(RoundedRectangle(cornerRadius: 18).fill(.orange.opacity(0.14)))
+        }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color(.systemGroupedBackground), ignoresSafeAreaEdges: [])
         .accessibilityElement(children: .combine)
     }
 
