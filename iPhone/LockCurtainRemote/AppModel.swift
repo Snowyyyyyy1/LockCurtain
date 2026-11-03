@@ -131,6 +131,8 @@ final class AppModel {
     private(set) var showLiftedNote = false
     /// 「走近撤下」 (UserDefaults, default on)
     private(set) var liftOnApproach = LiftSetting.isOn
+    /// 「撤下前验证面容」 (UserDefaults, default on)
+    private(set) var liftNeedsFaceID = LiftAuthSetting.isOn
     /// Bumped when 现在撤下 passes the owner check (light impact haptic)
     private(set) var liftTapCount = 0
     /// Bumped on lift timeout / too far / refused (warning haptic)
@@ -392,17 +394,22 @@ final class AppModel {
         liftOnApproach = isOn
     }
 
+    func setLiftNeedsFaceID(_ isOn: Bool) {
+        LiftAuthSetting.isOn = isOn
+        liftNeedsFaceID = isOn
+    }
+
     /// 不看「走近撤下」开关：已连上、幕布盖着就能按
     var canLiftNow: Bool {
         connection == .connected && phase == .closed && !isLifting
     }
 
-    /// 现在撤下: Face ID or passcode first (not in the demo), then the signed lift-now.
+    /// 现在撤下: Face ID or passcode first (not in the demo, not with 撤下前验证面容 off), then the signed lift-now.
     /// Cancel / failure changes nothing and shows nothing.
     func liftNow() {
         guard canLiftNow else { return }
         liftNotice = nil
-        if demoMode {
+        if demoMode || !liftNeedsFaceID {
             startLift()
             return
         }

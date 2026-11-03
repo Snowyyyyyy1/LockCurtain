@@ -54,6 +54,16 @@ enum LiftSetting {
     }
 }
 
+/// 「撤下前验证面容」：关掉后「现在撤下」不弹面容 / 密码（默认开）
+enum LiftAuthSetting {
+    static let key = "lc.liftNeedsFaceID"
+
+    static var isOn: Bool {
+        get { UserDefaults.standard.object(forKey: key) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: key) }
+    }
+}
+
 /// Everything HomeView needs to draw itself. All values originate at the Mac;
 /// the demo link is the only implementation that produces them locally.
 struct CurtainSnapshot: Equatable, Sendable {

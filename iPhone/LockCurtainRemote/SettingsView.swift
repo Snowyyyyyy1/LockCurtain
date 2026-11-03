@@ -17,6 +17,7 @@ struct SettingsView: View {
                 macSection
                 if model.demoMode || model.paired {
                     liftSection
+                    liftAuthSection
                 }
                 if AppModel.autoCoverVisible {
                     autoSection
@@ -121,6 +122,25 @@ struct SettingsView: View {
             Text("撤下")
         } footer: {
             Text("手机解锁着、人走到这台电脑附近，幕布就撤下来。手机锁着的时候不撤。")
+        }
+    }
+
+    /// 撤下前验证面容 (copy v13.4 §11)：脚注跟着开关变，关着那句就在开关正下面
+    private var liftAuthSection: some View {
+        Section {
+            Toggle(
+                "撤下前验证面容",
+                isOn: Binding(
+                    get: { model.liftNeedsFaceID },
+                    set: { model.setLiftNeedsFaceID($0) }
+                )
+            )
+        } footer: {
+            if model.liftNeedsFaceID {
+                Text("点「现在撤下」时先看你一眼，免得别人拿起你解锁着的手机就把幕布撤了。")
+            } else {
+                Text("关着的时候，拿到你解锁着的手机的人也能撤下幕布。")
+            }
         }
     }
 
