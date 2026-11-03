@@ -61,6 +61,14 @@ struct SettingsView: View {
             } message: {
                 Text("配好以后，现在这台会断开；要再用它，得在这台手机上重新配一次。")
             }
+            #if DEBUG
+            .onAppear {
+                // 截图用：-lcOpenReplaceAlert 一打开设置就弹「换成另一台电脑？」
+                if ProcessInfo.processInfo.arguments.contains("-lcOpenReplaceAlert") {
+                    showReplaceAlert = true
+                }
+            }
+            #endif
         }
         .sheet(isPresented: $showPairing, onDismiss: { pairingReplaces = false }) {
             PairingSheet(replacing: pairingReplaces)
