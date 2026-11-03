@@ -18,6 +18,8 @@ static class Program
     [STAThread]
     static int Main(string[] args)
     {
+        // 必须在任何 COM / WinRT / WinForms 调用之前：蓝牙通知要靠它才能回调进（提权的）本进程，见 ComSecurity.cs
+        ComSecurity.Initialize();
         var i = Array.IndexOf(args, "--send");
         if (i >= 0) return ControlClient.Send(i + 1 < args.Length ? args[i + 1] : "status");
 
