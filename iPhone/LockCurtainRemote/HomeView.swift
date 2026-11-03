@@ -18,6 +18,7 @@ struct HomeView: View {
                     try? await Task.sleep(for: .milliseconds(800))
                     proxy.scrollTo("status", anchor: .top)
                 }
+
             }
             #endif
         }
@@ -25,31 +26,60 @@ struct HomeView: View {
 
     private var list: some View {
         List {
-            Section {
-                MacScreenIllustration(
-                    state: model.screenState,
-                    showsDemoBadge: model.demoMode
-                )
-                .frame(maxWidth: .infinity)
-                .listRowInsets(EdgeInsets(top: 20, leading: 0, bottom: 16, trailing: 0))
-            }
-
-            Section {
-                curtainRow
-                macRow
-                if AppModel.autoCoverVisible {
-                    autoRow
+            if isAXSize {
+                // v2.7.4 大字：不放示意图；「幕布」单独一组，说明紧贴在「已盖上」下面；「这台 Mac」另起一组
+                Section {
+                    curtainRow
+                } footer: {
+                    curtainFooterAX
                 }
-            } footer: {
-                sectionFooter
+                .id("status")
+
+                Section {
+                    macRow
+                    if AppModel.autoCoverVisible {
+                        autoRow
+                    }
+                } footer: {
+                    macFooterAX
+                }
+                .id("mac")
+            } else {
+                Section {
+                    MacScreenIllustration(
+                        state: model.screenState,
+                        showsDemoBadge: model.demoMode
+                    )
+                    .frame(maxWidth: .infinity)
+                    .listRowInsets(EdgeInsets(top: 20, leading: 0, bottom: 16, trailing: 0))
+                }
+
+                Section {
+                    curtainRow
+                    macRow
+                    if AppModel.autoCoverVisible {
+                        autoRow
+                    }
+                } footer: {
+                    standardFooter
+                }
+                .id("status")
             }
-            .id("status")
 
             if model.demoMode {
                 demoSection
+                    .id("demo")
             }
         }
         .listStyle(.insetGrouped)
+        #if DEBUG
+        // 截图用：-lcScrollToBottom 一启动就停在最底（真正的最大滚动位置，含底栏让出的空间）
+        .background {
+            if ProcessInfo.processInfo.arguments.contains("-lcScrollToBottom") {
+                DebugScrollToBottom()
+            }
+        }
+        #endif
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .navigationTitle("LockCurtain")
         .navigationBarTitleDisplayMode(.large)
@@ -187,17 +217,27 @@ struct HomeView: View {
         model.phase == .closed && !model.isPending
     }
 
+    /// 大字：「幕布」组的 footer = 状态行 + 两行说明（已连上时）
     @ViewBuilder
-    private var sectionFooter: some View {
+    private var curtainFooterAX: some View {
         if showsLiftFooter {
             VStack(alignment: .leading, spacing: 8) {
-                if model.justPaired {
+                axLiftFooter
+            }
+        }
+    }
+
+    /// 大字：「这台 Mac」组的 footer = 连接相关的提示（刚配好 / 没连上的排查）
+    @ViewBuilder
+    private var macFooterAX: some View {
+        if showsLiftFooter {
+            if model.justPaired {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("以后这台手机自己会连上；万一断了，打开一次 LockCurtain 就重连。")
                     if model.liftOnApproach && !showsClosedNote {
                         Text("以后回到电脑前，手机解锁着、走近，幕布就撤下。")
                     }
                 }
-                axLiftFooter
             }
         } else {
             standardFooter
@@ -212,17 +252,17 @@ struct HomeView: View {
                 Text(liftNoticeText(notice))
             }
             VStack(alignment: .leading, spacing: 2) {
-                if model.liftOnApproach {
-                    Text("回到电脑前，手机解锁着、走近，幕布就撤下。")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                    Text("手机锁着不算，别人拿着也撤不下来。")
-                } else {
-                    Text("回到电脑前按任意键解锁。")
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.primary)
-                    Text("「走近撤下」关着，手机撤不下来。")
-                }
+                // footer 默认整体是 secondary：第一行显式 Color.primary + 半粗，第二行显式 secondary
+                Text(model.liftOnApproach
+                     ? "回到电脑前，手机解锁着、走近，幕布就撤下。"
+                     : "回到电脑前按任意键解锁。")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                Text(model.liftOnApproach
+                     ? "手机锁着不算，别人拿着也撤不下来。"
+                     : "「走近撤下」关着，手机撤不下来。")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
         } else if !model.didTimeOut {
@@ -480,19 +520,7 @@ struct HomeView: View {
     // MARK: - Demo
 
     private var demoBanner: some View {
-        HStack(spacing: 8) {
-            Text("演示")
-                .font(.caption.bold())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(.orange, in: .capsule)
-                .foregroundStyle(.black)
-            Text("下面是模拟状态，没有连接任何 Mac")
-                .font(.footnote)
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
+        demoBannerContent
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
@@ -504,6 +532,25 @@ struct HomeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color(.systemGroupedBackground), ignoresSafeAreaEdges: [])
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("演示，下面是模拟状态，没有连接任何 Mac")
+    }
+
+    private var demoBannerContent: some View {
+        HStack(spacing: 8) {
+            Text("演示")
+                .font(.caption.bold())
+                .padding(.horizontal, 8)
+                .padding(.vertical, 2)
+                .background(.orange, in: .capsule)
+                .foregroundStyle(.black)
+            // 大字时横幅一直钉在上面，只放短句，免得占掉小半屏；VoiceOver 读整句（见 demoBanner）
+            Text(isAXSize ? "模拟状态" : "下面是模拟状态，没有连接任何 Mac")
+                .font(.footnote)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
         .accessibilityElement(children: .combine)
     }
 
@@ -582,3 +629,33 @@ struct GaveUpNotice: View {
             .environment(AppModel())
     }
 }
+
+#if DEBUG
+/// 截图用：-lcScrollToBottom 时找到 List 底下的 UIScrollView，滚到真正的最底（含底栏让出的 inset），并打印 inset 方便查
+private struct DebugScrollToBottom: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let v = UIView()
+        v.isUserInteractionEnabled = false
+        // 自适应高度的行要滚到了才量准，contentSize 会变：多滚几次直到不再变
+        for i in 0..<5 { DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + Double(i) * 0.4) {
+            guard let window = v.window,
+                  let sv = Self.scrollViews(in: window).max(by: { $0.contentSize.height < $1.contentSize.height })
+            else { print("lcScroll: no scroll view"); return }
+            let maxY = sv.contentSize.height + sv.adjustedContentInset.bottom - sv.bounds.height
+            sv.setContentOffset(CGPoint(x: 0, y: max(-sv.adjustedContentInset.top, maxY)), animated: false)
+            let msg = "lcScroll: content=\(sv.contentSize.height) bounds=\(sv.bounds.height) adjInset=\(sv.adjustedContentInset) contentInset=\(sv.contentInset) safe=\(sv.safeAreaInsets) offset=\(sv.contentOffset.y) svFrameInWindow=\(sv.convert(sv.bounds, to: nil)) window=\(window.bounds)"
+            let path = NSTemporaryDirectory() + "lcScroll.txt"
+            let old = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+            try? (old + msg + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        } }
+        return v
+    }
+    func updateUIView(_ uiView: UIView, context: Context) {}
+    static func scrollViews(in view: UIView) -> [UIScrollView] {
+        var out: [UIScrollView] = []
+        if let s = view as? UIScrollView { out.append(s) }
+        for sub in view.subviews { out += scrollViews(in: sub) }
+        return out
+    }
+}
+#endif
