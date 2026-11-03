@@ -49,18 +49,36 @@ enum TerminationNotice {
         }
     }
 
-    /// 启动时：上次被划掉过、还没正式问过 → 正式问一次提醒 + 声音
+    /// 正式那次请求还没回来（回前台好几次也只发一次）
+    @MainActor private static var fullRequestInFlight = false
+
+    /// 场景变成前台（App 打开 / 回前台）时：上次被划掉过、还没正式问过 → 正式问一次提醒 + 声音。
+    /// 不在 AppModel.init 里问：那时还没有窗口，弹框可能出不来、却已经记成问过了。
+    /// 「问过了」等请求回来才记（没出来 / 出错就下次再问）
+    @MainActor
     static func askAfterSwipeIfNeeded(paired: Bool) {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: Keys.didGetSwipedAway) else { return }
-        defaults.removeObject(forKey: Keys.didGetSwipedAway)
-        guard paired, !defaults.bool(forKey: Keys.didAskFullAuthorization) else { return }
-        defaults.set(true, forKey: Keys.didAskFullAuthorization)
+        guard paired, !defaults.bool(forKey: Keys.didAskFullAuthorization) else {
+            defaults.removeObject(forKey: Keys.didGetSwipedAway)
+            return
+        }
+        guard !fullRequestInFlight else { return }
+        fullRequestInFlight = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error {
                 log.error("term: full request failed: \(error.localizedDescription, privacy: .public)")
             } else {
                 log.info("term: full authorization \(granted ? "granted" : "denied", privacy: .public)")
+            }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    fullRequestInFlight = false
+                    if error == nil {
+                        UserDefaults.standard.set(true, forKey: Keys.didAskFullAuthorization)
+                        UserDefaults.standard.removeObject(forKey: Keys.didGetSwipedAway)
+                    }
+                }
             }
             refresh()
         }
@@ -102,11 +120,21 @@ enum TerminationNotice {
     }
 }
 
-/// 只为了拿到 `applicationWillTerminate`
+/// 拿 `applicationWillTerminate`；App 变成前台（包括刚打开）时看要不要正式问通知权限
 final class LockCurtainAppDelegate: NSObject, UIApplicationDelegate {
+    private var activeObserver: NSObjectProtocol?
+
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         TerminationNotice.refresh()
+        activeObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard let model = AppModel.current, !model.isPreviewFixture else { return }
+                TerminationNotice.askAfterSwipeIfNeeded(paired: model.paired && !model.demoMode)
+            }
+        }
         return true
     }
 

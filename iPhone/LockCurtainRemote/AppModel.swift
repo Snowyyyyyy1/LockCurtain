@@ -220,8 +220,6 @@ final class AppModel {
         // （-lcForceLinkState 的假连接不在这里启动：「没连上」要停在没广播的样子，等「再找一次」）
         if paired && !demoMode && forcedLink == nil { link.activate() }
         Self.current = self
-        // 上次是被划掉的：这次正式要一次通知权限（只问一次）
-        if forcedLink == nil, !previewConnected { TerminationNotice.askAfterSwipeIfNeeded(paired: paired) }
         #if DEBUG
         // 截图用：-lcDisconnectedFor <秒> —— 假装已经断开这么久（看 ②③④ 段）；带上 -lcEverConnected 就当连上过
         let fakeElapsed = UserDefaults.standard.double(forKey: "lcDisconnectedFor")
