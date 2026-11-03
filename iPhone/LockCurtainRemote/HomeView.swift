@@ -128,6 +128,7 @@ struct HomeView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background { model.appDidEnterBackground() }
+            if newPhase == .active { model.appDidBecomeActive() }
         }
     }
 
@@ -156,8 +157,17 @@ struct HomeView: View {
 
     private var macRow: some View {
         LabeledContent {
-            Text(model.macDisplayValue)
+            if model.unlinkedMacState == .waiting {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(model.macDisplayValue)
+                }
                 .foregroundStyle(.secondary)
+            } else {
+                Text(model.macDisplayValue)
+                    .foregroundStyle(.secondary)
+            }
         } label: {
             Label("这台 Mac", systemImage: "laptopcomputer")
         }
@@ -293,17 +303,18 @@ struct HomeView: View {
 
     @ViewBuilder
     private var genericFooter: some View {
-        switch model.connection {
-        case .notPaired:
-            Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
-        case .notConnected:
-            Text("Mac 要醒着、在附近，蓝牙也要开着。")
-        case .macOffline:
-            Text("Mac 睡了或者没开机，它醒着时会自己连上。")
-        case .bluetoothOff:
-            Text("打开 iPhone 的蓝牙，才能找到这台 Mac。")
-        case .connected:
-            EmptyView()
+        if let state = model.unlinkedMacState {
+            // 配过对、没连上的三种：等这台 Mac 来连… / 没连上 / 蓝牙关了
+            Text(state.footer)
+        } else {
+            switch model.connection {
+            case .notPaired:
+                Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+            case .bluetoothOff:
+                Text(AppModel.UnlinkedMacState.bluetoothOff.footer)
+            case .notConnected, .connected:
+                EmptyView()
+            }
         }
     }
 

@@ -28,6 +28,36 @@ final class AppModel {
         case alreadyUncovered
     }
 
+    /// 配过对、不在演示、没连上时「这台 Mac」那一行只有这三种（design v2.8 / copy v8.8）。
+    /// 手机是外设，没法知道 Mac 在不在：只说手机这边看得到的事。
+    /// 时长和文字都只在这里。
+    enum UnlinkedMacState: Equatable {
+        /// 正在广播，而且广播（重新）开始 / 断开 / 回到前台还不到 waitWindow
+        case waiting
+        /// 过了 waitWindow 还没有 Mac 来订阅，或者已经不广播了
+        case stopped
+        case bluetoothOff
+
+        /// 「等这台 Mac 来连…」最多显示多久
+        static let waitWindow: Duration = .seconds(20)
+
+        var value: String {
+            switch self {
+            case .waiting: "等这台 Mac 来连…"
+            case .stopped: "没连上"
+            case .bluetoothOff: "蓝牙关了"
+            }
+        }
+
+        var footer: String {
+            switch self {
+            case .waiting: "Mac 上开着 LockCurtain、人也在附近就行。"
+            case .stopped: "先打开 LockCurtain，等它连上就不用管了。"
+            case .bluetoothOff: "打开 iPhone 的蓝牙，这台 Mac 才找得到它。"
+            }
+        }
+    }
+
     private enum Keys {
         static let paired = "lc.paired"
         static let macName = "lc.macName"
@@ -51,6 +81,10 @@ final class AppModel {
     private(set) var connectionGaveUp = false
     /// 这次启动里刚配对成功：主屏在连接那一行下面提示一句「以后会自己连上」，下次启动就不再显示
     private(set) var justPaired = false
+    /// 连接正在广播（想广播、没停下）
+    private(set) var linkAdvertising = false
+    /// 还在「等这台 Mac 来连…」的 20 秒里
+    private(set) var withinWaitWindow = false
 
     /// 现在撤下 sent, waiting for the Mac to report the curtain uncovered
     private(set) var isLifting = false
@@ -79,6 +113,8 @@ final class AppModel {
     @ObservationIgnored private var liftTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var demoLiftTask: Task<Void, Never>?
     @ObservationIgnored private var lastPhoneLiftCount = 0
+    @ObservationIgnored private var waitWindowTask: Task<Void, Never>?
+    @ObservationIgnored private var lastWaitEpoch = 0
 
     init() {
         // 删了重装 = 从没配过对：第一次启动先清掉钥匙串里残留的东西
@@ -92,8 +128,20 @@ final class AppModel {
         let previewConnected = false
         #endif
         isPreviewFixture = previewConnected
+        #if DEBUG
+        // 截图用：-lcForceLinkState waiting|stopped|btoff —— 假装配过对、没连上
+        let forcedLink = UserDefaults.standard.string(forKey: "lcForceLinkState")
+            .flatMap { DebugForcedCurtainLink(argument: $0, macName: "Studio 的 MacBook Pro") }
+        #else
+        let forcedLink: (any CurtainLink)? = nil
+        #endif
 
-        if previewConnected {
+        if let forcedLink {
+            paired = true
+            demoMode = false
+            macName = "Studio 的 MacBook Pro"
+            link = forcedLink
+        } else if previewConnected {
             paired = true
             demoMode = false
             macName = "Studio 的 MacBook Pro"
@@ -115,6 +163,8 @@ final class AppModel {
         recordEvent(from: link.snapshot)
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         if paired && !demoMode { link.activate() }
+        // 一打开 App 就算一次「回到前台」：开始等 20 秒
+        restartWaitWindow()
         #if DEBUG
         // 截图用：-lcDemoCovered 一启动就进演示、幕布已盖上
         if ProcessInfo.processInfo.arguments.contains("-lcDemoCovered") {
@@ -167,11 +217,17 @@ final class AppModel {
     var macDisplayValue: String {
         switch connection {
         case .connected: "已连接"
-        case .notConnected: "没连上"
-        case .macOffline: "Mac 不在线"
+        case .notConnected: unlinkedMacState?.value ?? "没连上"
         case .bluetoothOff: "蓝牙关了"
         case .notPaired: "没配对"
         }
+    }
+
+    /// 配过对、不在演示、没连上：三种里的哪一种；其他时候是 nil
+    var unlinkedMacState: UnlinkedMacState? {
+        guard paired, !demoMode, connection != .connected, connection != .notPaired else { return nil }
+        if connection == .bluetoothOff { return .bluetoothOff }
+        return linkAdvertising && withinWaitWindow ? .waiting : .stopped
     }
 
     var isPending: Bool {
@@ -332,6 +388,29 @@ final class AppModel {
     /// The success line goes away when the app goes to the background
     func appDidEnterBackground() {
         showLiftedNote = false
+        waitWindowTask?.cancel()
+        waitWindowTask = nil
+        withinWaitWindow = false
+    }
+
+    /// 回到前台：重新等 20 秒
+    func appDidBecomeActive() {
+        restartWaitWindow()
+    }
+
+    /// 广播（重新）开始、断开、回到前台：「等这台 Mac 来连…」从现在起再显示 waitWindow，过了就是「没连上」
+    private func restartWaitWindow() {
+        waitWindowTask?.cancel()
+        guard UIApplication.shared.applicationState != .background else {
+            withinWaitWindow = false
+            return
+        }
+        withinWaitWindow = true
+        waitWindowTask = Task { [weak self] in
+            try? await Task.sleep(for: UnlinkedMacState.waitWindow)
+            guard let self, !Task.isCancelled else { return }
+            self.withinWaitWindow = false
+        }
     }
 
     func selectDemoScenario(_ scenario: DemoScenario) {
@@ -493,6 +572,11 @@ final class AppModel {
         }
         isAway = snapshot.isAway
         connectionGaveUp = snapshot.gaveUpConnecting
+        linkAdvertising = snapshot.isAdvertising
+        if snapshot.waitEpoch != lastWaitEpoch {
+            lastWaitEpoch = snapshot.waitEpoch
+            restartWaitWindow()
+        }
         if snapshot.phase == .closed || snapshot.connection != .connected {
             isCovering = false
         }

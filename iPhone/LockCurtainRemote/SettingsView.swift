@@ -75,7 +75,7 @@ struct SettingsView: View {
                 if !model.demoMode && !model.paired {
                     Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
                 }
-                Text("第一次连上、或者断开以后重新连上，要在手机上把 LockCurtain 打开一下。")
+                Text("断开以后要重新连，打开 LockCurtain 等十几秒；连上以后锁屏、切后台都不会断，不用一直开着。")
             }
         }
     }

@@ -4,8 +4,8 @@ import Foundation
 /// link, never by the views.
 enum CurtainConnection: Equatable, Sendable {
     case connected
+    /// 配过对、没连上。手机是外设（只广播），没法知道 Mac 在不在：主屏只分「等这台 Mac 来连…」和「没连上」
     case notConnected
-    case macOffline
     case bluetoothOff
     case notPaired
 }
@@ -66,6 +66,10 @@ struct CurtainSnapshot: Equatable, Sendable {
     var isAway: Bool = false
     /// 连续 5 次连上又在握手前断开，已经停止广播；等用户点「再试一次」/ 重新打开配对
     var gaveUpConnecting: Bool = false
+    /// 手机想广播、而且没停下（没撤销配对、没连续断 5 次）：「等这台 Mac 来连…」只在这时出现
+    var isAdvertising: Bool = false
+    /// 广播（重新）开始、或者 Mac 断开时加一：主屏从这一刻重新算「等这台 Mac 来连…」的 20 秒
+    var waitEpoch: Int = 0
     /// Bumped each time the Mac reports the curtain uncovered right after a
     /// lift this phone caused (walk-up or 现在撤下).
     var phoneLiftCount: Int = 0
@@ -99,3 +103,35 @@ protocol CurtainLink: AnyObject {
     /// didn't happen), so the screen never sticks on a stale state.
     func requestState()
 }
+
+#if DEBUG
+/// 截图用：-lcForceLinkState waiting|stopped|btoff —— 假装配过对、没连上，停在指定的那一种状态。
+/// 不碰蓝牙、不发任何东西。
+@MainActor
+final class DebugForcedCurtainLink: CurtainLink {
+    private(set) var snapshot: CurtainSnapshot
+    var onSnapshotChange: ((CurtainSnapshot) -> Void)?
+
+    init?(argument: String, macName: String) {
+        var snap = CurtainSnapshot(connection: .notConnected, phase: .open, auto: .off, macName: macName)
+        switch argument {
+        case "waiting":
+            snap.isAdvertising = true
+            snap.waitEpoch = 1
+        case "stopped":
+            snap.isAdvertising = false
+        case "btoff":
+            snap.connection = .bluetoothOff
+        default:
+            return nil
+        }
+        snapshot = snap
+    }
+
+    func activate() {}
+    func cover() async -> CoverOutcome { .unavailable }
+    func setAutoEnabled(_ isOn: Bool) {}
+    func liftNow() async -> LiftOutcome { .unavailable }
+    func requestState() {}
+}
+#endif

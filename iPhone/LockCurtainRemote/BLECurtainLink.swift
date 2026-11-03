@@ -122,6 +122,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     func activate() {
         wantsAdvertising = true
+        publishAdvertising()
         if manager == nil {
             manager = CBPeripheralManager(delegate: self, queue: .main,
                                           options: [CBPeripheralManagerOptionShowPowerAlertKey: true,
@@ -137,6 +138,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         if gaveUp {
             gaveUp = false
             publish { $0.gaveUpConnecting = false }
+            publishAdvertising()
         }
         activate()
     }
@@ -265,6 +267,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         forgetLocally()
         // 没配对就不用一直广播：给那条 unpair 一点时间发出去再停
         wantsAdvertising = false
+        publishAdvertising()
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self, !self.wantsAdvertising else { return }
@@ -536,6 +539,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
             CBAdvertisementDataServiceUUIDsKey: [Identity.service],
             CBAdvertisementDataLocalNameKey: Identity.localName,
         ])
+        // 广播（重新）开始：主屏重新算「等这台 Mac 来连…」
+        publish { $0.waitEpoch += 1 }
+    }
+
+    /// 「想广播、而且没停下」告诉界面
+    private func publishAdvertising() {
+        let on = wantsAdvertising && !gaveUp
+        publish { $0.isAdvertising = on }
     }
 
     /// Mac 订阅上又在握手 / 身份确认之前断了
@@ -545,6 +556,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         gaveUp = true
         manager?.stopAdvertising()
         publish { $0.gaveUpConnecting = true }
+        publishAdvertising()
     }
 }
 
@@ -585,6 +597,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         }
         serviceAdded = outbox != nil && inbox != nil
         wantsAdvertising = true
+        publishAdvertising()
         if let central = outbox?.subscribedCentrals?.first {
             mac = central
             macEverSubscribed = true
@@ -618,7 +631,11 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         sendQueue.removeAll()
         assembler.reset()
         if !wasReady { noteEarlyDrop() }
-        publish { $0.connection = self.isPaired ? .macOffline : .notPaired }
+        // 断了：手机不知道 Mac 在不在，只说「没连上」；主屏从这一刻重新等 20 秒
+        publish {
+            $0.connection = self.isPaired ? .notConnected : .notPaired
+            $0.waitEpoch += 1
+        }
         finishReply(.disconnected)
         finishAck(.failed)
         finishCover(.unavailable)
