@@ -61,7 +61,7 @@ private struct StatusPanelView: View {
             HStack(spacing: 8) {
                 Button(action: enterAway) { Label("进入离开模式", systemImage: "figure.walk.departure") }
                     .buttonStyle(.borderedProminent)
-                Button("预览遮罩", action: preview)
+                Button("预览幕布", action: preview)
                 Button("配对手机", action: openPairing)
                 Spacer()
                 Button(action: openSettings) { Image(systemName: "gearshape") }
@@ -166,7 +166,7 @@ private struct SleepBlockersCard: View {
             }
         }
         .fixedSize()
-        .help("不盖遮罩，只让 Mac 不睡；屏幕照样会熄灭")
+        .help("不盖幕布，只让 Mac 不睡；屏幕照样会熄灭")
     }
 
     private var timePicker: some View {

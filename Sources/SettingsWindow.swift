@@ -184,10 +184,10 @@ private struct GeneralPane: View {
                     Toggle("裁成圆形", isOn: $roundImage)
                 }
             } header: {
-                Text("遮罩图案")
+                Text("幕布图案")
             } footer: {
-                Text(art == .custom ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示遮罩时生效。"
-                                    : "显示在遮罩中间、提示文案上方。下次显示遮罩时生效。")
+                Text(art == .custom ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示幕布时生效。"
+                                    : "显示在幕布中间、提示文案上方。下次显示幕布时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -198,19 +198,19 @@ private struct GeneralPane: View {
                 }
                 .task { backgroundThumbs = await BackgroundTile.thumbnails() }
             } header: {
-                Text("遮罩背景")
+                Text("幕布背景")
             } footer: {
-                Text("壁纸和模糊壁纸用显示遮罩时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次显示遮罩时生效。")
+                Text("壁纸和模糊壁纸用显示幕布时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次显示幕布时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
                 TextField("标题", text: $curtainTitle, prompt: Text("不显示"))
                 TextField("提示", text: $curtainSubtitle, prompt: Text("不显示"))
             } header: {
-                Text("遮罩文字")
+                Text("幕布文字")
             } footer: {
                 HStack {
-                    Text("显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示遮罩时生效。")
+                    Text("显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示幕布时生效。")
                         .foregroundStyle(.secondary)
                     if curtainTitle != Prefs.defaultCurtainTitle || curtainSubtitle != Prefs.defaultCurtainSubtitle {
                         Button("恢复默认") {
@@ -221,11 +221,11 @@ private struct GeneralPane: View {
                 }
             }
             Section {
-                Toggle("锁屏时显示遮罩", isOn: $curtainOnLock)
+                Toggle("锁屏时显示幕布", isOn: $curtainOnLock)
             } header: {
                 Text("锁屏")
             } footer: {
-                Text("在系统锁屏界面上盖一层遮罩。离开模式和规则不受这个开关影响。")
+                Text("在系统锁屏界面上盖一层幕布。离开模式和规则不受这个开关影响。")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -241,7 +241,7 @@ private struct GeneralPane: View {
                 Text("关于")
             } footer: {
                 if Updater.shared.isAvailable {
-                    Text("每天检查一次 GitHub 上的新版本，有新版本时提示，点了才安装。遮罩显示时不提示、不重启。")
+                    Text("每天检查一次 GitHub 上的新版本，有新版本时提示，点了才安装。幕布显示时不提示、不重启。")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -353,19 +353,19 @@ private struct AwayPane: View {
             } header: {
                 Text("防休眠")
             } footer: {
-                Text("关掉「屏幕常亮」后只阻止系统休眠，屏幕可以熄灭；如果系统设置了熄屏后立即要求密码，会话会被锁上。亮度只对内置屏有效，撤掉遮罩时恢复。设置在下次进入离开模式时生效。")
+                Text("关掉「屏幕常亮」后只阻止系统休眠，屏幕可以熄灭；如果系统设置了熄屏后立即要求密码，会话会被锁上。亮度只对内置屏有效，撤下幕布时恢复。设置在下次进入离开模式时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
                 Picker("回来时", selection: $unlock) {
-                    Text("先锁屏，再撤掉遮罩").tag(AwayUnlock.lockScreen)
-                    Text("验证 Mac 密码或触控 ID，通过后撤掉遮罩").tag(AwayUnlock.systemAuth)
+                    Text("先锁屏，再撤下幕布").tag(AwayUnlock.lockScreen)
+                    Text("验证 Mac 密码或触控 ID，通过后撤下幕布").tag(AwayUnlock.systemAuth)
                 }
                 Button("立即进入离开模式", action: actions.enterAway)
             } header: {
                 Text("离开模式")
             } footer: {
-                Text("遮罩期间你的按键、点击、滚动、鼠标移动和触控板手势都会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。选「验证」时，按一下键盘或点一下，遮罩下方出现解锁面板，像锁屏一样输密码或用触控 ID；密码由系统在本机核对，LockCurtain 只拿到通过与否，不保存。通过就直接撤遮罩，连错 3 次改成先锁屏再撤；Esc 或 60 秒没操作只收起面板，遮罩留着。设置在下次进入离开模式时生效。")
+                Text("幕布期间你的按键、点击、滚动、鼠标移动和触控板手势都会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。选「验证」时，按一下键盘或点一下，幕布下方出现解锁面板，像锁屏一样输密码或用触控 ID；密码由系统在本机核对，LockCurtain 只拿到通过与否，不保存。通过就直接撤幕布，连错 3 次改成先锁屏再撤；Esc 或 60 秒没操作只收起面板，幕布留着。设置在下次进入离开模式时生效。")
                     .foregroundStyle(.secondary)
             }
         }
@@ -379,9 +379,9 @@ private struct RemotePane: View {
     private let cli = Bundle.main.executablePath ?? "/Applications/LockCurtain.app/Contents/MacOS/LockCurtain"
     private let commands: [(String, String)] = [
         ("away", "进入离开模式（App 没运行时会先拉起）"),
-        ("hide", "撤掉遮罩；离开模式下先锁屏再撤"),
+        ("hide", "撤下幕布；离开模式下先锁屏再撤"),
         ("status", "查询状态，输出一行 JSON"),
-        ("preview", "显示预览遮罩"),
+        ("preview", "显示预览幕布"),
         ("settings", "打开这个窗口"),
     ]
 
@@ -431,11 +431,11 @@ private struct PermissionsPane: View {
     var body: some View {
         Form {
             Section {
-                row("屏幕录制", ok: screenRecording, detail: "读取当前壁纸，画遮罩背景") {
+                row("屏幕录制", ok: screenRecording, detail: "读取当前壁纸，画幕布背景") {
                     _ = CGRequestScreenCaptureAccess()
                     open("Privacy_ScreenCapture")
                 }
-                row("辅助功能", ok: accessibility, detail: "监听并吞掉真人输入，碰一下就退出遮罩") {
+                row("辅助功能", ok: accessibility, detail: "监听并吞掉真人输入，碰一下就退出幕布") {
                     let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
                     _ = AXIsProcessTrustedWithOptions(opts)
                 }

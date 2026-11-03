@@ -258,7 +258,7 @@ final class OverlayController {
     // MARK: - 隐藏
     func hide() {
         NSLog("overlay hide")
-        dismissUnlock("遮罩撤掉")
+        dismissUnlock("幕布撤下")
         removeExitMonitors()
         watchdog?.cancel(); watchdog = nil
         power.release()
@@ -437,7 +437,7 @@ final class OverlayController {
         unlockAuth = ctx
         // 回调在别的线程，只带标识回主线程比对，LAContext 本身不能跨线程传
         let id = ObjectIdentifier(ctx)
-        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "撤掉 LockCurtain 的遮罩") { [weak self] ok, error in
+        ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "撤下 LockCurtain 的幕布") { [weak self] ok, error in
             let code = (error as? LAError)?.code
             Task { @MainActor in self?.touchIDFinished(id, ok: ok, code: code) }
         }

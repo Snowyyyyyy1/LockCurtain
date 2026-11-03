@@ -334,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let away = NSMenuItem(title: "进入离开模式", action: #selector(enterAway), keyEquivalent: "")
         away.target = self; menu.addItem(away)
 
-        let pv = NSMenuItem(title: "锁屏遮罩预览", action: #selector(toggleOverlay), keyEquivalent: "")
+        let pv = NSMenuItem(title: "锁屏幕布预览", action: #selector(toggleOverlay), keyEquivalent: "")
         pv.target = self; menu.addItem(pv)
 
         let pair = NSMenuItem(title: "配对手机…", action: #selector(openPairing), keyEquivalent: "")
@@ -343,7 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let revoke = NSMenuItem(title: "撤销配对", action: #selector(revokePairing), keyEquivalent: "")
         revoke.target = self; menu.addItem(revoke)
 
-        let fh = NSMenuItem(title: "紧急关闭遮罩", action: #selector(forceHideOverlay), keyEquivalent: "")
+        let fh = NSMenuItem(title: "紧急撤下幕布", action: #selector(forceHideOverlay), keyEquivalent: "")
         fh.target = self; menu.addItem(fh)
 
         menu.addItem(.separator())
