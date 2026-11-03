@@ -16,12 +16,23 @@
 // PairingAuthority 验，撤不撤由 LiftGate 判（新鲜、边沿、近），撤就调 onLift（只撤 LockCurtain 的遮罩，
 // 不碰系统锁屏），再回手机一条签名的 LiftResult。「现在撤下」是手机用下一次问询的 nonce 回的 LiftNow。
 //
-// 连上了却在服务就绪（订阅上发件箱）之前就断，连续 5 次就停手，写一行 "stopped after 5 early drops"，
-// 等配对窗口重新打开再试。
+// 重连（见 ReconnectPolicy.swift 的不变式：配过对 + 蓝牙开着 + 没连上 ⇒ 一直在试，间隔翻倍、最多 5 分钟）：
+//   * 早断（连上了却在订阅上发件箱之前就断）：没配过手机（只开着配对窗口）时连续 5 次就硬停，
+//     写一行 "stopped after 5 early drops"，等配对窗口重新打开；配过手机时从第 5 次起只是退避
+//     （30 s → 60 s → … → 5 min），到点自己接着连。认得的外设报「service not found」（手机 App 没在跑）不算早断，
+//     只给这个标识退避一下。
+//   * 订阅上了 30 秒还不用签名命令表明身份：断开，这个标识暂时不理（30 s → … → 5 min），到点自动放出来。
+//   * 配过、蓝牙开着、没连上时扫描一直开着（允许重复上报）：退避只拉开挂起式连接的失败重试，
+//     一扫到手机的服务（手机 App 刚重新打开 / 手机重启后打开 App）就马上连、退避清零。App 一启动就扫、就连，不等。
+//   * 健康检查：每 30 秒，配过、蓝牙开着、没有认过身份的手机连着时，把记得的标识（退避中的除外）重新挂上连接、
+//     确保在扫、放出到点的标识。系统唤醒（NSWorkspace.didWake / screensDidWake）也会重新挂。
+//   * 记得的标识按手机记（每台最近 2 个）；一台手机认过身份，它别的没认身份的连接悄悄断掉（不拉黑）。
+//   * 服务变了（didModifyServices）、发件箱退订、连续 3 次写失败：主动断开，交给正常重连。
 //
 // 日志：/tmp/lockcurtain-ble.log，每步一行。不写码、不写钥匙。
 // CBCentralManager 的回调都投递到 main 队列，所以这里的 @Published 永远在主线程上改。
 
+import AppKit
 import Combine
 import CoreBluetooth
 import Foundation
@@ -46,11 +57,19 @@ final class PhonePairing: NSObject, ObservableObject {
 
     /// 老版本用 UserDefaults 记的配对（明文配对，现在不认了）
     private static let legacyPairedKey = "phonePairing.pairedCentrals"
-    /// 配过的手机的外设标识（不是秘密，只用来挂起式重连）
+    /// 配过的手机的外设标识（不是秘密，只用来挂起式重连）。格式见 KnownPeripherals（ReconnectPolicy.swift）
     private static let knownPeripheralsKey = "phonePairing.knownPeripherals"
-    private static let maxEarlyDrops = 5
-    /// 窗口关着时，连上的手机这么久还没用签名命令表明身份，就断开、本次运行不再连它
-    private static let identifyTimeout: TimeInterval = 15
+    /// 窗口关着时，订阅上发件箱的手机这么久还没用签名命令表明身份，就断开、这个标识暂时不理（限时，见 TimedIgnoreList）
+    private static let identifyTimeout: TimeInterval = 30
+    /// 连上了这么久还没订阅上发件箱（查服务 / 特征卡住了）：断开，交给正常重连
+    private static let setupTimeout: TimeInterval = 30
+    /// 健康检查的间隔
+    private static let healthInterval: TimeInterval = 30
+    /// 连续写失败这么多次：当链路死了，断开重连
+    private static let maxWriteErrors = 3
+    /// 认得的标识上没找到服务（手机 App 没在跑）：这个标识的退避
+    private static let missingServiceBase: TimeInterval = 30
+    private static let missingServiceCap: TimeInterval = 300
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var code = ""
@@ -64,9 +83,18 @@ final class PhonePairing: NSObject, ObservableObject {
     private var central: CBCentralManager?
     private var wantsBluetooth = false
     private var windowOpen = false
+    /// 只在没配过手机（配对窗口模式）时会变 true
     private var stoppedAfterEarlyDrops = false
-    private var earlyDrops = 0
+    private var earlyDrops = EarlyDropPolicy()
+    /// 早断退避到点时接着连
+    private var earlyDropResume: DispatchWorkItem?
+    /// 认得的标识各自的退避（手机 App 没在跑）
+    private var identifierBackoff: [UUID: ReconnectBackoff] = [:]
     private var rssiTimer: Timer?
+    private var healthTimer: Timer?
+    /// 这次扫描里已经写过日志的标识（允许重复上报，不每包都写一行）
+    private var seenThisScan: Set<UUID> = []
+    private var wakeObservers: [NSObjectProtocol] = []
     /// 幕布现在是不是盖着
     private var curtainClosed = false
     /// 这次盖上的时刻 T（边沿规则从这里算）
@@ -88,11 +116,17 @@ final class PhonePairing: NSObject, ObservableObject {
         var writeQueue: [Data] = []
         var writing = false
         var disconnectAfterWrites = false
+        /// 连续写失败几次
+        var writeErrors = 0
+        /// 这次连接上没找到我们的服务
+        var serviceMissing = false
+        /// 我们自己悄悄断的（重复连接 / 服务变了…）：断开时不算早断
+        var quietCancel = false
         init(_ peripheral: CBPeripheral) { self.peripheral = peripheral }
     }
     private var peers: [UUID: Peer] = [:]
-    /// 本次运行不再理的外设（窗口关着时连上了却说不出自己是谁）
-    private var ignored: Set<UUID> = []
+    /// 暂时不理的外设（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
+    private var ignored = TimedIgnoreList<UUID>()
 
     override init() {
         super.init()
@@ -106,6 +140,8 @@ final class PhonePairing: NSObject, ObservableObject {
     /// App 启动时（已配过手机）调用：开始找手机。第一次创建 CBCentralManager 会弹系统蓝牙权限。
     func prepare() {
         wantsBluetooth = true
+        startHealthTimer()
+        observeWake()
         if central == nil {
             Self.log("central: create")
             central = CBCentralManager(delegate: self, queue: .main,
@@ -123,11 +159,12 @@ final class PhonePairing: NSObject, ObservableObject {
         windowOpen = true
         phase = .waiting
         ignored.removeAll()
+        identifierBackoff.removeAll()
         if stoppedAfterEarlyDrops {
             Self.log("pairing window reopened: resuming after early-drop stop")
             stoppedAfterEarlyDrops = false
-            earlyDrops = 0
         }
+        resetEarlyDrops(reason: "pairing window opened")
         prepare()
     }
 
@@ -157,6 +194,7 @@ final class PhonePairing: NSObject, ObservableObject {
             }
         }
         UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
+        identifierBackoff.removeAll()
         gates.removeAll()
         code = ""
         phase = .revoked
@@ -209,24 +247,61 @@ final class PhonePairing: NSObject, ObservableObject {
         wantsBluetooth && (windowOpen || isPaired) && !stoppedAfterEarlyDrops
     }
 
-    private func resume() {
+    /// 配过对、早断退避还没到点：先不连、不扫
+    private var holdingAfterEarlyDrops: Bool {
+        isPaired && earlyDrops.holding(at: Date())
+    }
+
+    /// 重新挂上记得的手机、开始扫描。
+    /// fresh = 唤醒 / 蓝牙重新打开：之前的退避都不算了，认得的标识全都再试一次（暂时不理的也给一次机会）
+    private func resume(fresh: Bool = false) {
         guard let central, central.state == .poweredOn, shouldRun else { return }
-        // 记得的手机：挂起式连接，它一回来就连上
-        let known = (UserDefaults.standard.stringArray(forKey: Self.knownPeripheralsKey) ?? []).compactMap(UUID.init(uuidString:))
-        if isPaired, !known.isEmpty {
-            for peripheral in central.retrievePeripherals(withIdentifiers: known) where peers[peripheral.identifier] == nil {
-                connect(peripheral, reason: "pending reconnect to known phone")
-            }
+        if fresh {
+            identifierBackoff.removeAll()
+            resetEarlyDrops(reason: "fresh resume")
+        }
+        if holdingAfterEarlyDrops {
+            Self.log("backoff: early-drop hold, \(Int(earlyDrops.remaining(at: Date())))s left; scanning only, no pending reconnects yet")
+        } else {
+            pendKnown(reason: "pending reconnect to known phone", bypassIgnore: fresh)
         }
         startScan()
     }
 
+    /// 记得的手机：挂起式连接，它一回来就连上。退避中的标识、已经有认过身份的连接的那台手机的标识跳过
+    private func pendKnown(reason: String, bypassIgnore: Bool) {
+        guard let central, isPaired else { return }
+        let known = knownEntries()
+        guard !known.isEmpty else { return }
+        let now = Date()
+        let identifiedPhones = Set(peers.values.compactMap(\.phoneID))
+        var skipped: [String] = []
+        for peripheral in central.retrievePeripherals(withIdentifiers: known.map(\.identifier))
+        where peers[peripheral.identifier] == nil {
+            let id = peripheral.identifier
+            if let phone = KnownPeripherals.phoneID(of: id, in: known), identifiedPhones.contains(phone) { continue }
+            if let backoff = identifierBackoff[id], backoff.holding(at: now) {
+                skipped.append("\(id.uuidString) (no service, \(Int(backoff.remaining(at: now)))s left)")
+                continue
+            }
+            if !bypassIgnore, ignored.contains(id, at: now) {
+                skipped.append("\(id.uuidString) (ignored)")
+                continue
+            }
+            connect(peripheral, reason: reason)
+        }
+        if !skipped.isEmpty { Self.log("backoff: not re-pending \(skipped.joined(separator: ", "))") }
+    }
+
     private func startScan() {
+        // 早断退避中也照样扫：退避只拉开挂起式连接，扫到手机就马上连
         guard let central, central.state == .poweredOn, shouldRun, !central.isScanning else { return }
         // 已经有一台验明身份的手机连着、窗口也没开：不用再扫
         if !windowOpen, peers.values.contains(where: { $0.phoneID != nil }) { return }
+        // 允许重复上报：手机走开再回来、App 重新打开，同一个标识也会再报一次（只扫我们的服务，报的只有 LockCurtain 手机）
+        seenThisScan.removeAll()
         central.scanForPeripherals(withServices: [Self.serviceUUID],
-                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
+                                   options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
         Self.log("scan start (window \(windowOpen ? "open" : "closed"), paired \(isPaired))")
     }
 
@@ -240,11 +315,90 @@ final class PhonePairing: NSObject, ObservableObject {
         central.connect(peripheral, options: nil)
     }
 
-    private func remember(_ peripheral: CBPeripheral) {
-        var known = UserDefaults.standard.stringArray(forKey: Self.knownPeripheralsKey) ?? []
-        guard !known.contains(peripheral.identifier.uuidString) else { return }
-        known.append(peripheral.identifier.uuidString)
-        UserDefaults.standard.set(known, forKey: Self.knownPeripheralsKey)
+    private func knownEntries() -> [KnownPeripherals.Entry] {
+        KnownPeripherals.parse(UserDefaults.standard.stringArray(forKey: Self.knownPeripheralsKey) ?? [])
+    }
+
+    private func remember(_ peripheral: CBPeripheral, as phoneID: UUID) {
+        let old = knownEntries()
+        let new = KnownPeripherals.remember(old, identifier: peripheral.identifier, phoneID: phoneID)
+        guard new != old else { return }
+        let dropped = Set(old.map(\.identifier)).subtracting(new.map(\.identifier))
+        if !dropped.isEmpty {
+            Self.log("known peripherals: forgetting older identifier(s) \(dropped.map(\.uuidString).joined(separator: ", ")) (keep last \(KnownPeripherals.keepPerPhone) per phone)")
+        }
+        UserDefaults.standard.set(KnownPeripherals.encode(new), forKey: Self.knownPeripheralsKey)
+    }
+
+    // MARK: - 退避 / 健康检查
+
+    private func resetEarlyDrops(reason: String) {
+        if earlyDrops.drops > 0 || earlyDrops.holdUntil != nil {
+            Self.log("backoff: early-drop count reset (\(reason))")
+        }
+        earlyDrops.reset()
+        earlyDropResume?.cancel()
+        earlyDropResume = nil
+    }
+
+    /// 早断退避到点：接着连
+    private func scheduleEarlyDropResume(after delay: TimeInterval) {
+        earlyDropResume?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.earlyDropResume = nil
+            Self.log("backoff: early-drop hold over; reconnecting")
+            self.resume()
+        }
+        earlyDropResume = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1, execute: work)
+    }
+
+    private func startHealthTimer() {
+        guard healthTimer == nil else { return }
+        healthTimer = Timer.scheduledTimer(withTimeInterval: Self.healthInterval, repeats: true) { [weak self] _ in
+            self?.healthCheck()
+        }
+    }
+
+    /// 每 30 秒：配过、蓝牙开着、没有认过身份的手机连着 ⇒ 放出到点的标识、重新挂记得的标识（退避中的除外）、确保在扫
+    private func healthCheck() {
+        let now = Date()
+        let released = ignored.expire(at: now)
+        if !released.isEmpty {
+            Self.log("health: ignore expired for \(released.map(\.uuidString).joined(separator: ", "))")
+        }
+        guard let central, central.state == .poweredOn, wantsBluetooth, isPaired, !stoppedAfterEarlyDrops,
+              !peers.values.contains(where: { $0.phoneID != nil }) else { return }
+        if holdingAfterEarlyDrops {
+            Self.log("health: early-drop hold, \(Int(earlyDrops.remaining(at: now)))s left; scanning only")
+            startScan()
+            return
+        }
+        if !released.isEmpty { seenThisScan.subtract(released) }
+        Self.log("health: paired, no identified phone; re-pending known identifiers, scanner \(central.isScanning ? "on" : "restarting")")
+        pendKnown(reason: "pending reconnect to known phone (health check)", bypassIgnore: false)
+        startScan()
+    }
+
+    /// 系统唤醒：有时候蓝牙状态不会变一次，单靠 centralManagerDidUpdateState 接不回来
+    private func observeWake() {
+        guard wakeObservers.isEmpty else { return }
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            wakeObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self else { return }
+                Self.log("system \(note.name == NSWorkspace.didWakeNotification ? "wake" : "screens wake"): resuming")
+                self.resume(fresh: true)
+            })
+        }
+    }
+
+    /// 我们自己断开一条连接（不拉黑、不算早断），交给正常重连
+    private func cancelQuietly(_ peer: Peer, why: String) {
+        Self.log("cancelling \(peer.peripheral.identifier.uuidString): \(why)")
+        peer.quietCancel = true
+        central?.cancelPeripheralConnection(peer.peripheral)
     }
 
     private func updateRSSITimer() {
@@ -314,8 +468,10 @@ final class PhonePairing: NSObject, ObservableObject {
         case .command:
             switch authority.handleCommand(message) {
             case .accepted(let command, let phoneID, _, let confirmed, let ack):
+                let firstTime = peer.phoneID == nil
                 peer.phoneID = phoneID
-                remember(peer.peripheral)
+                remember(peer.peripheral, as: phoneID)
+                if firstTime { identified(peer, as: phoneID) }
                 send(ack, to: peer)
                 if confirmed {
                     phase = .paired
@@ -433,7 +589,13 @@ final class PhonePairing: NSObject, ObservableObject {
             _ = authority.revoke(phoneID)
             gates[phoneID] = nil
             peer.phoneID = nil
-            if !isPaired { UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey) }
+            if !isPaired {
+                UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
+            } else {
+                let known = knownEntries()
+                UserDefaults.standard.set(KnownPeripherals.encode(KnownPeripherals.forget(known, phoneID: phoneID)),
+                                          forKey: Self.knownPeripheralsKey)
+            }
             peer.disconnectAfterWrites = true
             if let inbox = peer.inbox { pump(peer, inbox) }
             if !shouldRun { central?.stopScan() }
@@ -444,14 +606,45 @@ final class PhonePairing: NSObject, ObservableObject {
         }
     }
 
-    /// 窗口关着时连上一台说不出身份的手机：等一会儿，还不说就断开、本次运行不再连它
+    /// 一条连接第一次认出是哪台手机：这个标识的退避 / 拉黑记录都清掉；
+    /// 同一台手机别的还没认身份的连接（iPhone 会用好几个标识出现）悄悄断掉，不拉黑
+    private func identified(_ peer: Peer, as phoneID: UUID) {
+        let id = peer.peripheral.identifier
+        ignored.forgive(id)
+        identifierBackoff[id] = nil
+        let known = knownEntries()
+        for other in peers.values where other !== peer && other.phoneID == nil && !other.quietCancel {
+            guard KnownPeripherals.phoneID(of: other.peripheral.identifier, in: known) == phoneID else { continue }
+            cancelQuietly(other, why: "duplicate link to phone \(phoneID.uuidString), already identified on \(id.uuidString)")
+        }
+    }
+
+    /// 连上了：这么久还没订阅上发件箱就断开（不拉黑），交给正常重连。只认这一次连接（同一个标识重连了不算）
+    private func scheduleSetupCheck(_ peer: Peer) {
+        let id = peer.peripheral.identifier
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.setupTimeout) { [weak self, weak peer] in
+            guard let self, let peer, self.peers[id] === peer, !peer.subscribed,
+                  peer.peripheral.state == .connected else { return }
+            Self.log("peripheral \(id.uuidString) not subscribed within \(Int(Self.setupTimeout))s of connecting; disconnecting")
+            self.central?.cancelPeripheralConnection(peer.peripheral)
+        }
+    }
+
+    /// 窗口关着时订阅上了却说不出身份：等 identifyTimeout，还不说就断开、这个标识暂时不理（限时、翻倍，最多 5 分钟）。
+    /// 计时绑在这一次连接上：同一个标识断了又连上，老的计时不会算到新连接头上。
     private func scheduleIdentifyCheck(_ peer: Peer) {
         let id = peer.peripheral.identifier
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.identifyTimeout) { [weak self] in
-            guard let self, let peer = self.peers[id], peer.phoneID == nil, !self.windowOpen,
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.identifyTimeout) { [weak self, weak peer] in
+            guard let self, let peer, self.peers[id] === peer, peer.phoneID == nil, !self.windowOpen,
                   peer.peripheral.state == .connected else { return }
-            Self.log("peripheral \(id.uuidString) did not identify within \(Int(Self.identifyTimeout))s; ignoring it this session")
-            self.ignored.insert(id)
+            // 配过对、或者是认得的标识：只是限时不理；都不是才本次运行不再理
+            let known = self.knownEntries().contains { $0.identifier == id }
+            let permanent = !self.isPaired && !known
+            if let d = self.ignored.ignore(id, at: Date(), permanent: permanent) {
+                Self.log("peripheral \(id.uuidString) did not identify within \(Int(Self.identifyTimeout))s of subscribing; ignoring it for \(Int(d))s")
+            } else {
+                Self.log("peripheral \(id.uuidString) did not identify within \(Int(Self.identifyTimeout))s of subscribing; ignoring it this session")
+            }
             self.central?.cancelPeripheralConnection(peer.peripheral)
         }
     }
@@ -481,7 +674,7 @@ extension PhonePairing: CBCentralManagerDelegate {
         switch central.state {
         case .poweredOn:
             if phase == .bluetoothOff || phase == .unauthorized { phase = windowOpen ? .waiting : .idle }
-            resume()
+            resume(fresh: true)
         case .poweredOff, .resetting:
             // 蓝牙关掉时系统不会逐个回调断开，连接全都作废：清掉旧连接，否则重新开蓝牙后以为手机还连着，不再扫也不再连
             if !peers.isEmpty {
@@ -502,9 +695,23 @@ extension PhonePairing: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
+        let id = peripheral.identifier
+        // 允许重复上报：已经在连 / 连着的不再管，也不每包写一行
+        guard peers[id] == nil else { return }
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? "(no name)"
-        Self.log("discovered \(peripheral.identifier.uuidString) name=\(name) rssi=\(RSSI)")
-        guard shouldRun, !ignored.contains(peripheral.identifier) else { return }
+        let firstThisScan = seenThisScan.insert(id).inserted
+        guard shouldRun else { return }
+        if ignored.contains(id, at: Date()) {
+            if firstThisScan { Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI) (ignored for now)") }
+            return
+        }
+        Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI)")
+        // 手机在广播我们的服务（App 在跑）：这个标识和早断的退避都清零，马上连
+        if identifierBackoff.removeValue(forKey: id) != nil {
+            Self.log("backoff: \(id.uuidString) advertising again; identifier backoff reset")
+        }
+        // （只在配过对时：没配过时早断 5 次的硬停照旧）
+        if isPaired, earlyDrops.drops > 0 { resetEarlyDrops(reason: "phone discovered by scan") }
         connect(peripheral, reason: "discovered by scan")
     }
 
@@ -514,9 +721,15 @@ extension PhonePairing: CBCentralManagerDelegate {
         peers[peripheral.identifier] = peer
         peer.connectedAt = Date()
         peripheral.delegate = self
+        // 同一台手机已经在别的标识上认过身份：这条是重复的，悄悄断掉（不拉黑）
+        if let phone = KnownPeripherals.phoneID(of: peripheral.identifier, in: knownEntries()),
+           peers.values.contains(where: { $0 !== peer && $0.phoneID == phone }) {
+            cancelQuietly(peer, why: "duplicate link to phone \(phone.uuidString), already identified on another identifier")
+            return
+        }
         peripheral.discoverServices([Self.serviceUUID])
         updateRSSITimer()
-        if !windowOpen { scheduleIdentifyCheck(peer) }
+        scheduleSetupCheck(peer)
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
@@ -526,29 +739,58 @@ extension PhonePairing: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-        let peer = peers[peripheral.identifier]
+        let id = peripheral.identifier
+        let peer = peers[id]
         let wasReady = peer?.subscribed ?? false
         let duration = peer?.connectedAt.map { String(format: "%.1fs", Date().timeIntervalSince($0)) } ?? "?"
-        Self.log("disconnected \(peripheral.identifier.uuidString) after \(duration), ready=\(wasReady): \(error?.localizedDescription ?? "no error")")
+        Self.log("disconnected \(id.uuidString) after \(duration), ready=\(wasReady): \(error?.localizedDescription ?? "no error")")
         let wasIdentified = peer?.phoneID != nil
-        if let id = peer?.phoneID { gates[id]?.resetRSSI() }
-        peers[peripheral.identifier] = nil
+        let quiet = peer?.quietCancel ?? false
+        let serviceMissing = peer?.serviceMissing ?? false
+        if let phone = peer?.phoneID { gates[phone]?.resetRSSI() }
+        peers[id] = nil
         updateRSSITimer()
+        let now = Date()
+        let known = knownEntries().contains { $0.identifier == id }
 
-        if !wasReady && shouldRun && !ignored.contains(peripheral.identifier) {
-            earlyDrops += 1
-            Self.log("early drop \(earlyDrops)/\(Self.maxEarlyDrops)")
-            if earlyDrops >= Self.maxEarlyDrops {
+        if quiet {
+            // 我们自己断的（重复连接 / 服务变了 / 链路死了）：不算早断
+        } else if serviceMissing && known && isPaired {
+            // 认得的手机、但上面没有我们的服务：手机 App 没在跑（被划掉 / 手机重启过），不算早断。
+            // 这个标识退避一下再挂；扫描一直开着，App 一打开就扫到、马上连
+            var backoff = identifierBackoff[id] ?? ReconnectBackoff(base: Self.missingServiceBase, cap: Self.missingServiceCap)
+            let d = backoff.fail(at: now)
+            identifierBackoff[id] = backoff
+            Self.log("backoff: \(id.uuidString) has no LockCurtain service (phone app not running); not an early drop, re-pending in \(Int(d))s")
+            DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.1) { [weak self] in
+                guard let self, self.shouldRun, self.peers[id] == nil,
+                      self.identifierBackoff[id].map({ !$0.holding(at: Date()) }) ?? false else { return }
+                if self.peers.values.contains(where: { $0.phoneID != nil }) { return }
+                self.pendKnown(reason: "pending reconnect after missing service backoff", bypassIgnore: false)
+            }
+        } else if !wasReady && shouldRun && !ignored.contains(id, at: now) {
+            switch earlyDrops.noteDrop(paired: isPaired, at: now) {
+            case .keepGoing:
+                Self.log("early drop \(earlyDrops.drops)/\(EarlyDropPolicy.maxEarlyDrops)")
+            case .backoff(let d):
+                Self.log("early drop \(earlyDrops.drops) (paired): backoff \(Int(d))s before pending reconnects; scanning stays on")
+                scheduleEarlyDropResume(after: d)
+            case .stop:
+                // 没配过手机（只开着配对窗口）：硬停，等重新打开窗口
                 stoppedAfterEarlyDrops = true
                 central.stopScan()
                 for p in peers.values { central.cancelPeripheralConnection(p.peripheral) }
-                Self.log("stopped after \(Self.maxEarlyDrops) early drops; reopen the pairing window to retry")
+                Self.log("stopped after \(EarlyDropPolicy.maxEarlyDrops) early drops (not paired); reopen the pairing window to retry")
                 return
             }
         }
-        guard shouldRun, !ignored.contains(peripheral.identifier) else { return }
+        guard shouldRun, !ignored.contains(id, at: now) else { startScan(); return }
         if wasIdentified && isPaired {
-            connect(peripheral, reason: "pending reconnect after drop")
+            if holdingAfterEarlyDrops {
+                Self.log("backoff: early-drop hold; not re-pending \(id.uuidString) yet")
+            } else {
+                connect(peripheral, reason: "pending reconnect after drop")
+            }
         }
         startScan()
     }
@@ -560,6 +802,7 @@ extension PhonePairing: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.serviceUUID }) else {
             Self.log("service not found on \(peripheral.identifier.uuidString): \(error?.localizedDescription ?? "-")")
+            peers[peripheral.identifier]?.serviceMissing = true
             central?.cancelPeripheralConnection(peripheral)
             return
         }
@@ -587,9 +830,24 @@ extension PhonePairing: CBPeripheralDelegate {
             Self.log("subscribe failed on \(peripheral.identifier.uuidString): \(error.localizedDescription)")
             return
         }
+        let wasSubscribed = peer.subscribed
         peer.subscribed = characteristic.isNotifying
         Self.log("\(characteristic.isNotifying ? "subscribed" : "unsubscribed") outbox on \(peripheral.identifier.uuidString)")
-        if characteristic.isNotifying { earlyDrops = 0 }
+        if characteristic.isNotifying {
+            resetEarlyDrops(reason: "subscribed")
+            // 计时从订阅上开始（不是从连上开始）：手机后台时表明身份要好几秒
+            if !wasSubscribed, !windowOpen { scheduleIdentifyCheck(peer) }
+        } else if peripheral.state == .connected {
+            // 连着却退订了（手机那边服务重建过）：这条连接没用了，断开交给正常重连
+            cancelQuietly(peer, why: "outbox no longer notifying")
+        }
+    }
+
+    func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }),
+              let peer = peers[peripheral.identifier] else { return }
+        // 手机的服务重建了（App 重启而连接没断）：旧的特征都作废了，断开交给正常重连
+        cancelQuietly(peer, why: "LockCurtain service invalidated (didModifyServices)")
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -604,8 +862,15 @@ extension PhonePairing: CBPeripheralDelegate {
         guard let peer = peers[peripheral.identifier], let inbox = peer.inbox else { return }
         peer.writing = false
         if let error {
-            Self.log("write to inbox of \(peripheral.identifier.uuidString) failed: \(error.localizedDescription)")
+            peer.writeErrors += 1
+            Self.log("write to inbox of \(peripheral.identifier.uuidString) failed (\(peer.writeErrors)/\(Self.maxWriteErrors)): \(error.localizedDescription)")
             peer.writeQueue.removeAll()
+            if peer.writeErrors >= Self.maxWriteErrors {
+                cancelQuietly(peer, why: "\(peer.writeErrors) consecutive write errors")
+                return
+            }
+        } else {
+            peer.writeErrors = 0
         }
         pump(peer, inbox)
     }
