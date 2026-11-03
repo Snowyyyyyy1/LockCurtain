@@ -435,7 +435,7 @@ private struct PermissionsPane: View {
                     _ = CGRequestScreenCaptureAccess()
                     open("Privacy_ScreenCapture")
                 }
-                row("辅助功能", ok: accessibility, detail: "监听并吞掉真人输入，碰一下就退出幕布") {
+                row("辅助功能", ok: accessibility, detail: "监听并吞掉真人输入，一碰就撤下幕布") {
                     let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
                     _ = AXIsProcessTrustedWithOptions(opts)
                 }
