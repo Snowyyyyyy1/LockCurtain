@@ -7,6 +7,9 @@ struct SettingsView: View {
 
     @State private var showUnpairConfirmation = false
     @State private var showPairing = false
+    /// 换电脑（copy v11 §13）
+    @State private var showReplaceAlert = false
+    @State private var pairingReplaces = false
 
     var body: some View {
         NavigationStack {
@@ -48,9 +51,19 @@ struct SettingsView: View {
             } message: {
                 Text("以后要重新配对才能控制这台电脑。")
             }
+            // 换电脑：先说清楚是「换」，不是「加」；取消或者没配上，原来那台不动
+            .alert("换成另一台电脑？", isPresented: $showReplaceAlert) {
+                Button("取消", role: .cancel) {}
+                Button("继续配对") {
+                    pairingReplaces = true
+                    showPairing = true
+                }
+            } message: {
+                Text("配好以后，现在这台会断开；要再用它，得在这台手机上重新配一次。")
+            }
         }
-        .sheet(isPresented: $showPairing) {
-            PairingSheet()
+        .sheet(isPresented: $showPairing, onDismiss: { pairingReplaces = false }) {
+            PairingSheet(replacing: pairingReplaces)
         }
     }
 
@@ -60,11 +73,18 @@ struct SettingsView: View {
         Section {
             if model.demoMode || model.paired {
                 LabeledContent("已配对", value: model.macName ?? "这台电脑")
+                if model.paired && !model.demoMode {
+                    Button("配另一台电脑") {
+                        showReplaceAlert = true
+                    }
+                    .foregroundStyle(.tint)
+                }
                 Button("撤销配对", role: .destructive) {
                     showUnpairConfirmation = true
                 }
             } else {
                 Button("配对") {
+                    pairingReplaces = false
                     showPairing = true
                 }
             }

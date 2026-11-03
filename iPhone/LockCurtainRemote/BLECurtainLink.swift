@@ -74,7 +74,23 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private var ready = false
     private var isPaired: Bool
     private var assembler = PairingFraming.Assembler()
-    private var sendQueue: [Data] = []
+    /// 待发的块，各自记着发给谁（换电脑时会同时跟两台说话）
+    private var sendQueue: [(central: CBCentral, chunk: Data)] = []
+
+    // 换电脑（copy v11 §13 / design v2.9 P2-6）：新配对在旁边配，原来那台的钥匙、连接、界面一概不碰；
+    // 新的钥匙只放在内存里，Mac 签收了第一条命令才写进钥匙串、换掉原来那台。
+    /// 正在换电脑
+    private var replacing = false
+    /// 用户关了配对页：这次换电脑作废
+    private var replaceAborted = false
+    /// 来配对的那台新电脑（不是原来那台）
+    private var pairingCentral: CBCentral?
+    private var pairingEverSubscribed = false
+    private var pairingAssembler = PairingFraming.Assembler()
+    /// 新电脑的钥匙，配成之前只在这里
+    private var stagedRecord: PhoneLinkRecord?
+    private var pendingStagedAck: (counter: UInt64, cont: CheckedContinuation<Bool, Never>)?
+    private var stagedAckTimeout: Task<Void, Never>?
     private var lastStateSeq: UInt64 = 0
 
     private var consecutiveFailures = 0
@@ -256,6 +272,160 @@ final class BLECurtainLink: NSObject, CurtainLink {
         }
     }
 
+    // MARK: - 换电脑
+
+    /// 已经配着一台、要换成另一台。原来那台在整个过程中照常用；
+    /// 只有新电脑验过握手、又签收了第一条命令，才把钥匙换掉，并告诉原来那台「解除配对」。
+    /// 取消、失败、中途断开：什么都不动。
+    func pairReplacing(code: String) async -> PairResult {
+        guard isPaired else { return await pair(code: code) }
+        replacing = true
+        replaceAborted = false
+        defer { endReplacing() }
+        activate()
+
+        // 新电脑还没订阅就等它来（最多 15 秒）
+        if pairingCentral == nil {
+            pairingEverSubscribed = false
+            let deadline = Date().addingTimeInterval(15)
+            while Date() < deadline, pairingCentral == nil, !replaceAborted {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        if replaceAborted { return .disconnected }
+        guard let central = pairingCentral else { return pairingEverSubscribed ? .connectFailed : .notFound }
+
+        let phoneID = PhoneKeychain.phoneID()
+        guard let (request, session) = PairingCrypto.phoneStart(code: code, phoneID: phoneID) else { return .macRefused }
+
+        let message: Data
+        switch await requestReply(request.encoded(), to: central, seconds: 8) {
+        case .timeout: return .noResponse
+        case .disconnected: return .disconnected
+        case .message(let data): message = data
+        }
+        if let reason = PairingCrypto.decodePairReject(message) {
+            return reason == .wrongCode ? .wrongCode : .macRefused
+        }
+        guard let response = try? PairingCrypto.PairResponse(decoding: message) else { return .macRefused }
+        let confirm: PairingCrypto.PairConfirm
+        let key: SymmetricKey
+        switch PairingCrypto.phoneFinish(response, session: session) {
+        case .confirm(let c, let k):
+            confirm = c
+            key = k
+        case .wrongCode:
+            send(PairingCrypto.pairAbort(phoneID: phoneID, sid: session.sid), to: central)
+            return .wrongCode
+        case .invalid:
+            send(PairingCrypto.pairAbort(phoneID: phoneID, sid: session.sid), to: central)
+            return .macRefused
+        }
+        if replaceAborted { return .disconnected }
+
+        let accepted: Data
+        switch await requestReply(confirm.encoded(), to: central, seconds: 8) {
+        case .timeout: return .noResponse
+        case .disconnected: return .disconnected
+        case .message(let data): accepted = data
+        }
+        if let reason = PairingCrypto.decodePairReject(accepted) {
+            return reason == .wrongCode ? .wrongCode : .macRefused
+        }
+        guard PairingCrypto.verifyPairAccepted(accepted, phoneID: phoneID, sid: session.sid, key: key) else {
+            return .macRefused
+        }
+        if replaceAborted { return .disconnected }
+
+        // 钥匙确认：新电脑签收这条用新钥匙签的 ping，才算配上。钥匙这时还只在内存里。
+        let record = PhoneLinkRecord(key: key.withUnsafeBytes { Data($0) },
+                                     macIdentifier: central.identifier.uuidString, counter: 0)
+        guard await confirmStaged(record, on: central) else {
+            return pairingCentral == nil ? .disconnected : .macRefused
+        }
+        // 最后一刻用户关了页面：还是作废
+        guard !replaceAborted, pairingCentral?.identifier == central.identifier,
+              let confirmed = stagedRecord else { return .disconnected }
+        guard adoptReplacement(confirmed, central: central) else { return .macRefused }
+        return .accepted
+    }
+
+    /// 用户关了配对页：这次换电脑作废，原来那台不动
+    func cancelReplacing() {
+        guard replacing else { return }
+        replaceAborted = true
+        finishReply(.disconnected)
+        finishStagedAck(false)
+    }
+
+    private func endReplacing() {
+        replacing = false
+        stagedRecord = nil
+        finishStagedAck(false)
+        if let central = pairingCentral {
+            // 没换成：那台新电脑就晾着，不再理它
+            dropQueued(for: central)
+            pairingCentral = nil
+        }
+        pairingAssembler.reset()
+    }
+
+    /// 用新钥匙签一条 ping 发给新电脑，等它签收
+    private func confirmStaged(_ record: PhoneLinkRecord, on central: CBCentral) async -> Bool {
+        var next = record
+        next.counter += 1
+        stagedRecord = next
+        guard let data = PairingCrypto.sealCommand("ping", phoneID: PhoneKeychain.phoneID(), counter: next.counter,
+                                                   key: SymmetricKeyBox(next.key).key) else { return false }
+        finishStagedAck(false)
+        return await withCheckedContinuation { cont in
+            pendingStagedAck = (next.counter, cont)
+            send(data, to: central)
+            stagedAckTimeout?.cancel()
+            stagedAckTimeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled else { return }
+                self?.finishStagedAck(false)
+            }
+        }
+    }
+
+    private func finishStagedAck(_ ok: Bool) {
+        stagedAckTimeout?.cancel()
+        stagedAckTimeout = nil
+        let pending = pendingStagedAck
+        pendingStagedAck = nil
+        pending?.cont.resume(returning: ok)
+    }
+
+    /// 新电脑配成了：先用旧钥匙告诉原来那台「解除配对」，再把钥匙换掉，改跟新电脑说话
+    private func adoptReplacement(_ record: PhoneLinkRecord, central: CBCentral) -> Bool {
+        if let old = mac, ready, let reserved = PhoneKeychain.reserveNextCounter(),
+           let data = PairingCrypto.sealCommand("unpair", phoneID: PhoneKeychain.phoneID(), counter: reserved.counter,
+                                                key: SymmetricKeyBox(reserved.record.key).key) {
+            send(data, to: old)
+        }
+        guard PhoneKeychain.saveLink(record) else { return false }
+        // 原来那台的事全部收尾
+        finishAck(.failed)
+        finishCover(.unavailable)
+        finishLift(.unavailable)
+        awaitingLiftOpen = false
+        lastStateSeq = 0
+        // 改跟新电脑说话
+        mac = central
+        macEverSubscribed = true
+        assembler = pairingAssembler
+        pairingAssembler = PairingFraming.Assembler()
+        pairingCentral = nil
+        stagedRecord = nil
+        publish { $0.phase = .open }
+        markReady()
+        // 让新电脑报一次幕布状态
+        requestState()
+        return true
+    }
+
     /// 手机这边解除配对：连着就先发一条签名的 unpair（Mac 收到会删它的钥匙），再删自己的钥匙
     func unpair() {
         if mac != nil, ready, let reserved = PhoneKeychain.reserveNextCounter(),
@@ -287,10 +457,10 @@ final class BLECurtainLink: NSObject, CurtainLink {
         return macEverSubscribed ? .connectFailed : .notFound
     }
 
-    private func requestReply(_ message: Data, seconds: Double) async -> Reply {
+    private func requestReply(_ message: Data, to target: CBCentral? = nil, seconds: Double) async -> Reply {
         await withCheckedContinuation { cont in
             pendingReply = cont
-            send(message)
+            if let target { send(message, to: target) } else { send(message) }
             replyTimeout?.cancel()
             replyTimeout = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds))
@@ -325,8 +495,10 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     /// 已经配过对的手机：Mac 订阅上来就用签名的 ping 表明身份，Mac 签收了才算已连接
     private func confirmLink() async {
+        let central = mac?.identifier
         let result = await sendSigned("ping")
-        guard mac != nil else { return }
+        // 这期间换了一台（或者断了）：这次的结果不算
+        guard mac != nil, mac?.identifier == central else { return }
         switch result {
         case .ok:
             markReady()
@@ -393,14 +565,23 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     private func send(_ message: Data) {
         guard let mac else { return }
-        sendQueue.append(contentsOf: PairingFraming.chunks(message, maxChunk: mac.maximumUpdateValueLength))
+        send(message, to: mac)
+    }
+
+    private func send(_ message: Data, to central: CBCentral) {
+        let chunks = PairingFraming.chunks(message, maxChunk: central.maximumUpdateValueLength)
+        sendQueue.append(contentsOf: chunks.map { (central, $0) })
         pump()
     }
 
+    private func dropQueued(for central: CBCentral) {
+        sendQueue.removeAll { $0.central.identifier == central.identifier }
+    }
+
     private func pump() {
-        guard let manager, let outbox, let mac else { sendQueue.removeAll(); return }
-        while let chunk = sendQueue.first {
-            guard manager.updateValue(chunk, for: outbox, onSubscribedCentrals: [mac]) else { return }
+        guard let manager, let outbox else { sendQueue.removeAll(); return }
+        while let item = sendQueue.first {
+            guard manager.updateValue(item.chunk, for: outbox, onSubscribedCentrals: [item.central]) else { return }
             sendQueue.removeFirst()
         }
     }
@@ -408,6 +589,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private func receive(_ message: Data) {
         switch PairingCrypto.kind(of: message) {
         case .pairResponse, .pairReject, .pairAccepted:
+            // 换电脑时配对的回话只认新电脑那条线（见 receivePairing）
+            guard !replacing else { return }
             finishReply(.message(message))
         case .ack:
             guard let ack = try? PairingCrypto.Ack(decoding: message),
@@ -466,6 +649,22 @@ final class BLECurtainLink: NSObject, CurtainLink {
             PhoneKeychain.deleteLink()
             forgetLocally()
             onRevoked?()
+        default:
+            break
+        }
+    }
+
+    /// 换电脑时，新电脑发来的：只认配对回话和那条 ping 的收据（用内存里的新钥匙验）
+    private func receivePairing(_ message: Data) {
+        switch PairingCrypto.kind(of: message) {
+        case .pairResponse, .pairReject, .pairAccepted:
+            finishReply(.message(message))
+        case .ack:
+            guard let ack = try? PairingCrypto.Ack(decoding: message),
+                  let pending = pendingStagedAck, ack.counter == pending.counter,
+                  ack.phoneID == PhoneKeychain.phoneID(), let record = stagedRecord else { return }
+            finishStagedAck(ack.status == .accepted
+                            && PairingCrypto.verifyAck(ack, key: SymmetricKeyBox(record.key).key))
         default:
             break
         }
@@ -580,6 +779,12 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             serviceAdded = false
             mac = nil
             ready = false
+            if pairingCentral != nil {
+                pairingCentral = nil
+                pairingAssembler.reset()
+                finishStagedAck(false)
+            }
+            if replacing { finishReply(.disconnected) }
             publish { $0.connection = .bluetoothOff }
         default:
             break
@@ -612,11 +817,27 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                            didSubscribeTo characteristic: CBCharacteristic) {
         guard characteristic.uuid == Identity.outbox else { return }
+        if central.identifier == mac?.identifier || central.identifier == pairingCentral?.identifier { return }
+        if isPaired && replacing {
+            // 换电脑：原来那台（认得它的标识、且现在没连着）照常接回来；别的电脑就是来配对的
+            let isOldComputer = mac == nil && central.identifier.uuidString == PhoneKeychain.loadLink()?.macIdentifier
+            if !isOldComputer {
+                if pairingCentral == nil {
+                    pairingCentral = central
+                    pairingEverSubscribed = true
+                    pairingAssembler.reset()
+                }
+                return
+            }
+        } else if isPaired && ready && mac != nil {
+            // 已经和配着的那台连好了：别的电脑来连不理它，免得把好好的连接顶掉
+            return
+        }
+        if let old = mac { dropQueued(for: old) }
         mac = central
         macEverSubscribed = true
         ready = false
         assembler.reset()
-        sendQueue.removeAll()
         if isPaired {
             Task { await self.confirmLink() }
         }
@@ -624,11 +845,24 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
 
     func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral,
                            didUnsubscribeFrom characteristic: CBCharacteristic) {
-        guard characteristic.uuid == Identity.outbox, central.identifier == mac?.identifier else { return }
+        guard characteristic.uuid == Identity.outbox else { return }
+        if central.identifier == pairingCentral?.identifier {
+            // 来配对的新电脑走了：这次换电脑失败，原来那台不受影响
+            dropQueued(for: central)
+            pairingCentral = nil
+            pairingAssembler.reset()
+            finishReply(.disconnected)
+            finishStagedAck(false)
+            return
+        }
+        guard central.identifier == mac?.identifier else {
+            dropQueued(for: central)
+            return
+        }
         let wasReady = ready
         mac = nil
         ready = false
-        sendQueue.removeAll()
+        dropQueued(for: central)
         assembler.reset()
         if !wasReady { noteEarlyDrop() }
         // 断了：手机不知道 Mac 在不在，只说「没连上」；主屏从这一刻重新等 20 秒
@@ -636,7 +870,8 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             $0.connection = self.isPaired ? .notConnected : .notPaired
             $0.waitEpoch += 1
         }
-        finishReply(.disconnected)
+        // 换电脑时原来那台断了，不影响正在跟新电脑配的那一轮
+        if !replacing { finishReply(.disconnected) }
         finishAck(.failed)
         finishCover(.unavailable)
         finishLift(.unavailable)
@@ -667,9 +902,13 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         peripheral.respond(to: first, withResult: .success)
         for request in requests {
             guard let chunk = request.value else { continue }
-            if let message = assembler.feed(chunk) {
-                receive(message)
+            let from = request.central.identifier
+            if from == pairingCentral?.identifier {
+                if let message = pairingAssembler.feed(chunk) { receivePairing(message) }
+            } else if mac == nil || from == mac?.identifier {
+                if let message = assembler.feed(chunk) { receive(message) }
             }
+            // 别的电脑写进来的：不理
         }
     }
 }

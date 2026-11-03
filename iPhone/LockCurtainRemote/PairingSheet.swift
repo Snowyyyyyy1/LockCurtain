@@ -145,12 +145,19 @@ struct PairingSheet: View {
         .presentationDetents([.large])
         .onAppear {
             model.prepareForPairing()
-            session.verify = { [model] code in await model.pair(code: code) }
+            let replacing = replacing
+            session.verify = { [model] code in
+                replacing ? await model.pairReplacing(code: code) : await model.pair(code: code)
+            }
             session.onRetry = { [model] in model.prepareForPairing() }
             session.start()
         }
         .onDisappear {
             session.cancel()
+            if replacing && session.step != .success {
+                // 中途关掉：新配对作废，原来那台不动
+                model.cancelReplacing()
+            }
             completeIfNeeded()
         }
         .onChange(of: session.step) { _, newStep in

@@ -514,6 +514,23 @@ final class AppModel {
         return result
     }
 
+    /// 换电脑（copy v11 §13）：已经配着一台，在旁边配另一台；配成了才换掉，没配成原来那台一概不动
+    func pairReplacing(code: String) async -> PairResult {
+        guard paired, !demoMode, let ble = link as? BLECurtainLink else { return await pair(code: code) }
+        let result = await ble.pairReplacing(code: code)
+        if result == .accepted {
+            let name = "这台电脑"
+            macName = name
+            UserDefaults.standard.set(name, forKey: Keys.macName)
+        }
+        return result
+    }
+
+    /// 换电脑中途关掉配对页：作废，不弹任何提示
+    func cancelReplacing() {
+        (link as? BLECurtainLink)?.cancelReplacing()
+    }
+
     func completePairing(macName: String) {
         // 只有 Mac 真的接受了握手（钥匙串里有共享钥匙）才记成已配对
         guard demoMode || PhoneKeychain.loadLink() != nil else { return }
