@@ -108,6 +108,8 @@ final class AppModel {
 
     @ObservationIgnored private var link: any CurtainLink
     @ObservationIgnored private var demoLink: DemoCurtainLink?
+    /// 进演示时暂存的真连接：演示只是不发真命令，蓝牙连接照旧留着，退出演示原样接回来
+    @ObservationIgnored private var parkedLink: BLECurtainLink?
     /// 只有「自动」露面时才建：藏起来的时候一次都不碰定位
     @ObservationIgnored private var coverTask: Task<Void, Never>?
     @ObservationIgnored private var timeoutTask: Task<Void, Never>?
@@ -488,13 +490,20 @@ final class AppModel {
         if isOn {
             showDemoExitNotice = false
             demoScenario = .connected
+            if let ble = link as? BLECurtainLink { parkedLink = ble }
             let link = DemoCurtainLink()
             demoLink = link
             adopt(link)
         } else {
             demoLink = nil
             demoScenario = .connected
-            adopt(BLECurtainLink(paired: paired, macName: macName))
+            if let ble = parkedLink {
+                parkedLink = nil
+                adopt(ble)
+            } else {
+                adopt(BLECurtainLink(paired: paired, macName: macName))
+            }
+            if paired { link.activate() }
             if !paired {
                 showDemoExitNotice = true
                 scheduleNoticeClear()
@@ -555,7 +564,7 @@ final class AppModel {
         justPaired = false
         macName = nil
         UserDefaults.standard.removeObject(forKey: Keys.macName)
-        if let ble = link as? BLECurtainLink {
+        if let ble = (link as? BLECurtainLink) ?? parkedLink {
             ble.unpair()
         } else {
             PhoneKeychain.deleteLink()
