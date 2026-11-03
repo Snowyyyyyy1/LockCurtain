@@ -5,6 +5,7 @@
 
 using System.Drawing;
 using System.Runtime.InteropServices;
+using LockCurtain.Phone;
 
 namespace LockCurtain;
 
@@ -27,6 +28,9 @@ internal sealed partial class TrayApp : ApplicationContext
     bool panelOpening;
     long panelClosedAt;
     SettingsWindow? settings;
+    /// 配对手机（蓝牙）：手机盖上 / 撤下幕布
+    readonly PhoneLink phone;
+    PairingForm? pairing;
 
     public TrayApp(bool stealth, bool preview)
     {
@@ -53,9 +57,18 @@ internal sealed partial class TrayApp : ApplicationContext
         overlay.StateChanged += UpdateTrayIcon;
         keepAwake.Changed += UpdateTrayIcon;
 
+        var ui = SynchronizationContext.Current!;
+        phone = new PhoneLink(ui)
+        {
+            // 手机签名的命令（盖上幕布 = away）走和 --send away 一样的路
+            OnCommand = cmd => overlay.HandleCommand(cmd),
+            // 只撤遮罩，不解锁 Windows
+            OnLift = overlay.LiftFromPhone,
+        };
+        overlay.StateChanged += () => phone.ReportCurtainState(overlay.Mode != null);
         server.Start();
         ruleEngine.Start();
-        var ui = SynchronizationContext.Current!;
+        if (phone.IsPaired) phone.Prepare();
         Updater.Start(idle: () => overlay.Mode == null, exit: () => ui.Post(_ => ExitAfterUpdate(), null));
         keepAwake.Restore();
         Log.Write($"LockCurtain started, stealth={stealth}, locked={Session.QueryLocked()?.ToString() ?? "unknown"}");
@@ -68,6 +81,7 @@ internal sealed partial class TrayApp : ApplicationContext
         panel?.Close();
         keepAwake.Dispose();
         settings?.Close();
+        pairing?.Close();
         overlay.Hide();
         server.Stop();
         watcher.Dispose();
@@ -122,6 +136,8 @@ internal sealed partial class TrayApp : ApplicationContext
             new("进入离开模式", () => overlay.Show(CurtainMode.Away), idle),
             new("遮罩预览", () => overlay.Show(CurtainMode.Preview), idle),
             new("紧急关闭遮罩", overlay.Hide, !idle),
+            new("配对手机", ShowPairing, SeparatorBefore: true),
+            .. phone.IsPaired ? new[] { new TrayCommand("撤销配对", () => PairingForm.ConfirmUnpair(phone)) } : [],
             new("设置…", ShowSettings, SeparatorBefore: true),
             .. Updater.Available ? new[] { new TrayCommand("检查更新…", Updater.CheckNow) } : [],
             new("打开日志文件夹", Log.OpenDir),
@@ -148,6 +164,20 @@ internal sealed partial class TrayApp : ApplicationContext
         if (settings.WindowState == FormWindowState.Minimized) settings.WindowState = FormWindowState.Normal;
         settings.Show();
         settings.Activate();
+    }
+
+    /// 只开一个配对窗口；已开着就提到前面（码不变）
+    void ShowPairing()
+    {
+        if (pairing != null)
+        {
+            if (pairing.WindowState == FormWindowState.Minimized) pairing.WindowState = FormWindowState.Normal;
+            pairing.Activate();
+            return;
+        }
+        pairing = new PairingForm(phone);
+        pairing.FormClosed += (_, _) => pairing = null;
+        pairing.Open();
     }
 
     /// 先在后台读谁在阻止睡眠（powercfg 要一两百毫秒）和过去 24 小时的睡眠，读完再弹，省得面板弹出来再变高

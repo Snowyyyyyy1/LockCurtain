@@ -190,6 +190,15 @@ internal sealed class OverlayController
         finally { locking = false; }
     }
 
+    /// 配对的手机撤下幕布（PhoneLink 已验过签名、新鲜、边沿、近）：只撤遮罩，不碰 Windows 的锁屏，更不会解锁 Windows。
+    /// 离开模式下也不先锁屏 —— 人就在电脑前、手机此刻解锁着，撤下来就是为了直接接着用；Windows 已经锁着的话锁屏照样在
+    public void LiftFromPhone()
+    {
+        if (Mode is not { } mode) return;
+        Log.Write($"phone lift -> 撤遮罩 ({mode}), system locked={Session.IsLocked()}");
+        Hide();
+    }
+
     /// 会话锁上了：锁屏界面已经挡住桌面，遮罩没用了
     public void OnSessionLockChanged(bool locked)
     {
