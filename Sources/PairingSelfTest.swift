@@ -693,6 +693,13 @@ enum LiftTests {
         g = coveredNear(armed: false)
         g.issue(nonce(2), at: at(6))
         expect(g.liftNow(nonce: nonce(2), at: at(6.5)) == .lift, "现在撤下：没见过锁着也撤（不看边沿）")
+        // 「现在撤下」不看「走近撤下」开关：手机刚报过「关着」，现在撤下照样撤
+        g = coveredNear(armed: false)
+        g.issue(nonce(7), at: at(5))
+        let offReport = g.presence(.off, nonce: nonce(7), at: at(5.2))
+        g.issue(nonce(2), at: at(6))
+        expect(offReport == .refuse(.toggleOff) && g.liftNow(nonce: nonce(2), at: at(6.5)) == .lift,
+               "现在撤下：「走近撤下」关着也撤（不看开关）")
         g = coveredNear(armed: false, rssi: [-75, -72, -78])
         g.issue(nonce(2), at: at(6))
         expect(g.liftNow(nonce: nonce(2), at: at(6.5)) == .refuse(.notNear(median: -75)), "现在撤下：太远 → 不撤")
