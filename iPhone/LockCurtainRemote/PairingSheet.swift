@@ -24,7 +24,7 @@ final class PairingSession {
     @ObservationIgnored private var started = false
     /// 由界面在出现时接上真的配对：把码交给 Mac 的那一步
     @ObservationIgnored var verify: @MainActor (String) async -> PairResult = { _ in .notFound }
-    /// 「再找一次 / 再试一次」时重新开始连接（连续失败暂停着广播时，马上接着来、不等暂停到点）
+    /// 「再找一次 / 再试一次」时重新开始连接（连续失败之后，计数清零、马上接着来）
     @ObservationIgnored var onRetry: @MainActor () -> Void = {}
 
     func start() {
@@ -57,7 +57,7 @@ final class PairingSession {
         start()
     }
 
-    /// 连续断了几次、暂停着广播时点「再试一次」：清掉错误，马上重新开始连接
+    /// 连续断了几次以后点「现在再试一次」：清掉错误，马上重新开始连接
     func restart() {
         task?.cancel()
         isVerifying = false
@@ -199,7 +199,7 @@ struct PairingSheet: View {
 
     // MARK: - Steps
 
-    /// 连续断了 5 次、正暂停着广播：换掉一般的失败提示
+    /// 连续断了 5 次：换掉一般的失败提示
     private var showsGaveUp: Bool {
         model.connectionGaveUp && session.step != .success
     }

@@ -635,7 +635,7 @@ struct HomeView: View {
     }
 }
 
-/// 配对页：连续断了几次、正暂停着广播时显示（暂停到点会自己接着广播；点按钮马上接着来）。
+/// 配对页：连续断了几次时显示（手机一直在广播，电脑隔一会儿再来连；点按钮清零、马上接着来）。
 /// 主屏不再用它（design v2.10 A：按经过时间分段，见 AppModel.UnlinkedMacState）。字：copy v13.3 §8.6「配对页断开时」
 struct GaveUpNotice: View {
     /// 主屏底栏用玻璃大按钮；配对页里用普通的 bordered 按钮

@@ -111,7 +111,7 @@ final class AppModel {
     private(set) var lastEventText = "没连上"
     private(set) var lastEventDate = Date()
     private(set) var isPreviewFixture = false
-    /// 连续 5 次连上又断，正暂停着广播（到点自己接着广播）。主屏不再看它（只按经过时间分段）；配对页还在用
+    /// 连续 5 次连上又断（手机照旧广播）。主屏不再看它（只按经过时间分段）；配对页还在用
     private(set) var connectionGaveUp = false
     /// 这次启动里刚配对成功：主屏在连接那一行下面提示一句「以后会自己连上」，下次启动就不再显示
     private(set) var justPaired = false
