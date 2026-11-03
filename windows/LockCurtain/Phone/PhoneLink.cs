@@ -11,17 +11,24 @@
 //       - 或者是苹果的「溢出区」广播（厂商数据 0x004C、类型 0x01、16 字节位图）：iPhone App 在后台广播时，
 //         服务 UUID 不出现在广播里，只在这张位图里占一位，只有苹果设备认得。Mac 的 CoreBluetooth 能按 UUID 找到它，
 //         Windows 不能，所以已配对、没连着时把溢出区广播当候选去连，连上后用签名的 ping 认人（和 Mac 一样，说不出身份的
-//         15 秒后断开、本次运行不再连）。连上认出来以后，从这台手机自己的溢出区广播里记下位图，以后只连位图对得上的。
+//         订阅上 30 秒后断开、这个地址暂时不理，30 s → … → 5 min 到点放出来）。连上认出来以后，从这台手机自己的溢出区广播里
+//         学位图（多次观察取交集，只留每次都在的位），以后只连位图对得上的；配过、没连着、2 分钟都没有对得上的，就先不看位图。
 //     如果用服务 UUID 过滤，手机锁屏 / App 在后台时 Windows 就再也找不到它（蓝牙关了又开、电脑睡醒以后重连不上）。
 //   * 连接：BluetoothLEDevice.FromBluetoothAddressAsync + GattSession.MaintainConnection = true（相当于 Mac 的挂起式连接）。
-//     配过的手机记住它最后的蓝牙地址（phone-link.json），没连着时每 10 秒试一次；iPhone 的地址会轮换，所以同时一直扫描兜底。
+//     配过的手机记住它最后的蓝牙地址（phone-link.json），没连着时去连它，失败了退避 10 s → 20 s → … → 5 min，
+//     看到我们的广播就清零；iPhone 的地址会轮换，所以同时一直扫描兜底，扫到的「我们的」广播可以打断正在连的旧地址。
 //   * RSSI：WinRT 没有「读已连接设备的 RSSI」（Mac 用 readRSSI）。改用这台手机的广播包 RSSI：手机连着以后照样在广播，
 //     扫描器一直开着，每 2 秒取过去 2 秒里收到的、和连接同一个蓝牙地址的广播包的 RSSI 平均值当一次样本；
 //     这 2 秒里一个都没收到就不记（不够 3 次就是「不够近」，宁可不撤）。门槛和 Mac 一样：最近 3 次的中位数 >= -65 dBm。
 //   * 蓝牙开关：Windows.Devices.Radios 的 Radio.StateChanged。关了就把所有连接当作已断（和 Mac 1331f8f 的修正一样，
 //     不等逐个断开回调），开了就重启扫描、重连记得的手机。
 //   * 睡眠 / 唤醒：SystemEvents.PowerModeChanged。睡前丢掉所有连接、停扫描；醒来 3 秒后重新开始。
-//   * 另外每 10 秒自检一次：该扫没在扫就重启扫描器；配过、没连着就重连记得的地址 —— 以上事件漏了也能在一分钟内接回来。
+//   * 重连不停手（见 ReconnectPolicy.cs 的不变式：配过对 + 蓝牙开着 + 没连上 ⇒ 一直在试，间隔翻倍、最长 5 分钟）：
+//       - 早断（订阅好之前就断）：没配过（只开着配对窗口）时连续 5 次硬停，等重新打开窗口；配过时从第 5 次起只是退避
+//         （30 s → … → 5 min，只拉开去连记得的地址；扫描照开，看到我们的广播马上连、清零）。
+//       - 连续 3 次写失败（不只是超时）、手机的 GATT 服务变了（GattServicesChanged）：当断开处理，交给正常重连。
+//   * 另外每 10 秒自检一次（配过就一直跑，不管早断）：扫描器没在跑 / 状态是 Aborted 或 Stopped 就重启；
+//     「睡着了」挂了超过 60 秒（漏了 Resume 事件）就当醒了；放出到点的不理地址；配过、没连着就（按退避）重连记得的地址。
 //
 // 手机撤下幕布：幕布盖着、手机连着并认过身份时，每 2 秒往手机收件箱写一条签名的问询（Poll + 新 nonce），手机回签名的
 // Presence（此刻解锁着 / 锁着 / 关着）。签名和计数由 PairingAuthority 验，撤不撤由 LiftGate 判（新鲜、边沿、近），
@@ -68,9 +75,16 @@ internal sealed class PhoneLink
     const string LocalName = "LockCurtain";
     const ushort AppleCompanyId = 0x004C;
 
-    const int MaxEarlyDrops = 5;
-    /// 窗口关着时，连上的手机这么久还没用签名命令表明身份，就断开、本次运行不再连它
-    static readonly TimeSpan IdentifyTimeout = TimeSpan.FromSeconds(15);
+    /// 窗口关着时，订阅上的手机这么久还没用签名命令表明身份，就断开、这个地址暂时不理（限时，见 TimedIgnoreList）
+    static readonly TimeSpan IdentifyTimeout = TimeSpan.FromSeconds(30);
+    /// 去连记得的地址失败后的退避
+    static readonly TimeSpan KnownBackoffBase = TimeSpan.FromSeconds(10);
+    /// 「睡着了」挂了这么久还没醒（漏了 Resume 事件）：当醒了（自检的计时器只在醒着时跑）
+    static readonly TimeSpan StaleSuspend = TimeSpan.FromSeconds(60);
+    /// 配过、没连着，这么久没有对得上位图的溢出区广播：先不看位图
+    static readonly TimeSpan OverflowFallbackAfter = TimeSpan.FromMinutes(2);
+    /// 连续写失败这么多次：当断开
+    const int MaxWriteErrors = 3;
     /// 码开着多久作废（文案「过期」）
     static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(10);
     /// 每次 RSSI 样本取多长时间窗里的广播包
@@ -91,9 +105,16 @@ internal sealed class PhoneLink
     readonly PairingAuthority authority;
     readonly PhoneDeviceMemory memory = new();
 
-    bool wantsBluetooth, initialized, initializing, windowOpen, stoppedAfterEarlyDrops, suspended;
+    bool wantsBluetooth, initialized, initializing, windowOpen, suspended;
+    /// 只在没配过手机（配对窗口模式）时会变 true
+    bool stoppedAfterEarlyDrops;
+    DateTime? suspendedAt;
     bool? radioOn;
-    int earlyDrops;
+    readonly EarlyDropPolicy earlyDrops = new();
+    /// 去连记得的地址的退避（失败一次翻倍，看到我们的广播清零）
+    readonly ReconnectBackoff knownBackoff = new(KnownBackoffBase, Reconnect.Cap);
+    /// 最近一次「对得上」：认出身份的手机连着，或者位图对得上的溢出区广播（2 分钟没有就先不看位图）
+    DateTime lastOverflowMatch = DateTime.UtcNow;
     /// 留着引用，StateChanged 才一直有
     Radio? radio;
     BluetoothLEAdvertisementWatcher? watcher;
@@ -136,6 +157,7 @@ internal sealed class PhoneLink
         public GattCharacteristic? Inbox, Outbox;
         public TypedEventHandler<BluetoothLEDevice, object>? StatusHandler;
         public TypedEventHandler<GattCharacteristic, GattValueChangedEventArgs>? ValueHandler;
+        public TypedEventHandler<BluetoothLEDevice, object>? ServicesChangedHandler;
         public int MaxChunk = 20;
     }
 
@@ -156,13 +178,17 @@ internal sealed class PhoneLink
         public DateTime? ConnectedAt;
         public readonly Queue<byte[]> WriteQueue = new();
         public bool Writing, DisconnectAfterWrites;
+        /// 连续写失败几次
+        public int WriteErrors;
+        /// 去连的是记得的地址（ConnectKnown）：扫到我们的广播时可以打断它
+        public bool ViaKnown;
         public string Name => FormatAddress(Address);
         public int MaxChunk => Link?.MaxChunk ?? 20;
     }
 
     readonly Dictionary<ulong, Peer> peers = new();
-    /// 本次运行不再理的地址（窗口关着时连上了却说不出自己是谁）
-    readonly HashSet<ulong> ignored = new();
+    /// 暂时不理的地址（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
+    readonly TimedIgnoreList<ulong> ignored = new();
     /// 每个地址最近收到的广播 RSSI（只记相关的：我们的服务 / 溢出区 / 连着的）
     readonly Dictionary<ulong, List<(int Rssi, DateTime At)>> adverts = new();
     readonly Dictionary<ulong, DateTime> lastCandidateTry = new();
@@ -274,8 +300,8 @@ internal sealed class PhoneLink
         {
             PhoneLog.Write("pairing window reopened: resuming after early-drop stop");
             stoppedAfterEarlyDrops = false;
-            earlyDrops = 0;
         }
+        ResetBackoffs("pairing window opened");
         RestartExpiry();
         SetPhase(radioOn == false ? PhonePhase.BluetoothOff : Phase == PhonePhase.Unsupported ? PhonePhase.Unsupported : PhonePhase.Waiting);
         Prepare();
@@ -373,13 +399,33 @@ internal sealed class PhoneLink
         StartWatcher();
     }
 
-    /// 记得的手机：按地址连（它的地址没轮换、人在附近就能连上）
+    /// 早断 / 记得的地址的退避全清零（唤醒、蓝牙重新打开、打开配对窗口、看到手机的广播）
+    void ResetBackoffs(string why)
+    {
+        if (earlyDrops.Drops > 0 || knownBackoff.Step > 0)
+            PhoneLog.Write($"backoff: reset ({why}; early drops {earlyDrops.Drops}, known-address step {knownBackoff.Step})");
+        earlyDrops.Reset();
+        knownBackoff.Reset();
+    }
+
+    /// 记得的手机：按地址连（它的地址没轮换、人在附近就能连上）。失败了退避（10 s → … → 5 min）
     void ConnectKnown(string reason)
     {
         if (!IsPaired || memory.Address is not { } address || peers.ContainsKey(address) || connecting != null) return;
         if (HasIdentifiedPeer) return;
+        var now = DateTime.UtcNow;
+        if (earlyDrops.Holding(now))
+        {
+            PhoneLog.Write($"backoff: early-drop hold, {earlyDrops.Remaining(now).TotalSeconds:0}s left; not connecting known address ({reason})");
+            return;
+        }
+        if (knownBackoff.Holding(now))
+        {
+            PhoneLog.Write($"backoff: known address {FormatAddress(address)} retry in {knownBackoff.Remaining(now).TotalSeconds:0}s (step {knownBackoff.Step}); skipping ({reason})");
+            return;
+        }
         // iPhone 用的是随机地址
-        Connect(address, BluetoothAddressType.Random, reason);
+        Connect(address, BluetoothAddressType.Random, reason, viaKnown: true);
     }
 
     void StartWatcher()
@@ -498,25 +544,47 @@ internal sealed class PhoneLink
             foreach (var stale in adverts.Where(kv => kv.Value.Count == 0 || at - kv.Value[^1].At > TimeSpan.FromSeconds(30)).Select(kv => kv.Key).ToList())
                 adverts.Remove(stale);
 
-        // 认出来的手机自己的溢出区位图：记下来，以后只连位图对得上的
-        if (overflow != null && peers.TryGetValue(address, out var known) && known.PhoneID != null && known.Subscribed
-            && (memory.OverflowMask == null || !memory.OverflowMask.AsSpan().SequenceEqual(overflow)))
+        // 认出来的手机自己的溢出区位图：和以前学的取交集（只留每次都在的位），以后只连位图对得上的
+        if (overflow != null && peers.TryGetValue(address, out var known) && known.PhoneID != null && known.Subscribed)
         {
-            PhoneLog.Write($"learned background advertisement bitmap of {Who(known.PhoneID.Value)}: {Bytes.Hex(overflow)}");
-            memory.LearnOverflowMask(overflow);
+            var learned = OverflowBitmap.Intersect(memory.OverflowMask, overflow);
+            if (memory.OverflowMask == null || !memory.OverflowMask.AsSpan().SequenceEqual(learned))
+            {
+                PhoneLog.Write($"learned background advertisement bitmap of {Who(known.PhoneID.Value)}: {Bytes.Hex(learned)} (observed {Bytes.Hex(overflow)})");
+                memory.LearnOverflowMask(learned);
+            }
         }
+        if (HasIdentifiedPeer) lastOverflowMatch = at;
 
-        if (!ShouldRun || peers.ContainsKey(address) || ignored.Contains(address)) return;
+        // 我们的广播（手机 App 在前台）：手机就在附近、App 在跑，退避全清零
+        if (ours && IsPaired && !HasIdentifiedPeer && (knownBackoff.Step > 0 || earlyDrops.Drops > 0)) ResetBackoffs("our advertisement seen");
+
+        if (!ShouldRun || peers.ContainsKey(address) || ignored.Contains(address, at)) return;
         // 已经有一台验明身份的手机连着、窗口也没开：不用再连别的
         if (!windowOpen && HasIdentifiedPeer) return;
         string reason;
         if (ours) reason = "discovered by scan";
         else
         {
-            // 溢出区候选：只在配过、没连着的时候；学到过位图就要对得上
+            // 溢出区候选：只在配过、没连着的时候；学到过位图就要对得上（2 分钟都没对得上的，先不看位图）
             if (overflow == null || !IsPaired || HasIdentifiedPeer) return;
-            if (memory.OverflowMask is { } mask && !Contains(overflow, mask)) return;
-            reason = "discovered by scan (apple background advertisement)";
+            if (memory.OverflowMask is { } mask && !OverflowBitmap.Contains(overflow, mask))
+            {
+                if (at - lastOverflowMatch < OverflowFallbackAfter) return;
+                reason = "discovered by scan (apple background advertisement, unfiltered fallback: no bitmap match for 2 min)";
+            }
+            else
+            {
+                if (memory.OverflowMask != null) lastOverflowMatch = at;
+                reason = "discovered by scan (apple background advertisement)";
+            }
+        }
+        // 正在连记得的旧地址（可能已经轮换掉了），而扫到的是我们的广播：打断它，先连扫到的
+        if (ours && connecting is { ViaKnown: true } oldTry && oldTry.Address != address && !oldTry.Closed)
+        {
+            PhoneLog.Write($"connect to known address {oldTry.Name} pre-empted: our advertisement seen from {FormatAddress(address)}");
+            Drop(oldTry, null);
+            connecting = null;
         }
         // 同一时间只连一台：正在连就先不理（不记这次尝试，下一个广播再来）
         if (connecting != null) return;
@@ -528,14 +596,7 @@ internal sealed class PhoneLink
         Connect(address, type, reason);
     }
 
-    static bool Contains(byte[] bits, byte[] mask)
-    {
-        for (var i = 0; i < 16; i++)
-            if ((bits[i] & mask[i]) != mask[i]) return false;
-        return true;
-    }
-
-    void Connect(ulong address, BluetoothAddressType type, string reason)
+    void Connect(ulong address, BluetoothAddressType type, string reason, bool viaKnown = false)
     {
         if (peers.ContainsKey(address)) return;
         if (connecting != null)
@@ -543,7 +604,7 @@ internal sealed class PhoneLink
             PhoneLog.Write($"connect to {FormatAddress(address)} ({reason}) deferred: still connecting {connecting.Name}");
             return;
         }
-        var peer = new Peer(address, type);
+        var peer = new Peer(address, type) { ViaKnown = viaKnown };
         peers[address] = peer;
         RefreshPeerAddresses();
         PhoneLog.Write($"connect requested {peer.Name} ({reason})");
@@ -578,7 +639,7 @@ internal sealed class PhoneLink
         peer.Link = r.Link;
         peer.ConnectedAt = DateTime.UtcNow;
         peer.Subscribed = true;
-        earlyDrops = 0;
+        ResetBackoffs("subscribed");
         PhoneLog.Write($"subscribed outbox on {peer.Name}");
         UpdateTick();
         if (!windowOpen) ScheduleIdentifyCheck(peer);
@@ -614,6 +675,9 @@ internal sealed class PhoneLink
                 ui.Post(_ => OnConnectionStatus(peer, s), null);
             };
             device.ConnectionStatusChanged += link.StatusHandler;
+            // 手机的 GATT 服务变了（App 重启而连接没断）：旧的特征都作废了，当断开处理
+            link.ServicesChangedHandler = (_, _) => ui.Post(_ => OnServicesChanged(peer), null);
+            device.GattServicesChanged += link.ServicesChangedHandler;
             try
             {
                 var session = link.Session = await Op("GattSession.FromDeviceIdAsync",
@@ -720,6 +784,7 @@ internal sealed class PhoneLink
         var clock = System.Diagnostics.Stopwatch.StartNew();
         try { if (l.Outbox != null && l.ValueHandler != null) l.Outbox.ValueChanged -= l.ValueHandler; } catch (Exception) { }
         try { if (l.Device != null && l.StatusHandler != null) l.Device.ConnectionStatusChanged -= l.StatusHandler; } catch (Exception) { }
+        try { if (l.Device != null && l.ServicesChangedHandler != null) l.Device.GattServicesChanged -= l.ServicesChangedHandler; } catch (Exception) { }
         try { if (l.Session != null) l.Session.MaintainConnection = false; } catch (Exception) { }
         try { l.Service?.Dispose(); } catch (Exception) { }
         try { l.Session?.Dispose(); } catch (Exception) { }
@@ -740,7 +805,22 @@ internal sealed class PhoneLink
     {
         PhoneLog.Write($"failed to connect {peer.Name}: {why}");
         Drop(peer, null);
+        if (peer.ViaKnown && IsPaired)
+        {
+            // 记得的地址连不上（地址轮换掉了 / 手机 App 没在跑）：退避，别一直占着唯一的连接口子
+            var d = knownBackoff.Fail(DateTime.UtcNow);
+            PhoneLog.Write($"backoff: known address {peer.Name} failed (step {knownBackoff.Step}); next try in {d.TotalSeconds:0}s");
+        }
         StartWatcher();
+    }
+
+    void OnServicesChanged(Peer peer)
+    {
+        uiStep = "OnServicesChanged";
+        if (peer.Closed || peer.Link == null) return;
+        PhoneLog.Write($"gatt services changed on {peer.Name}");
+        peer.ConnectedAt ??= DateTime.UtcNow;
+        Disconnected(peer, "gatt services changed", ownCancel: true);
     }
 
     void OnConnectionStatus(Peer peer, BluetoothConnectionStatus status)
@@ -757,8 +837,8 @@ internal sealed class PhoneLink
         if (status == BluetoothConnectionStatus.Disconnected) Disconnected(peer, "link lost");
     }
 
-    /// 断了（对应 Mac 的 didDisconnectPeripheral）
-    void Disconnected(Peer peer, string why)
+    /// 断了（对应 Mac 的 didDisconnectPeripheral）。ownCancel = 我们自己判定链路死了（服务变了 / 写失败），不算早断
+    void Disconnected(Peer peer, string why, bool ownCancel = false)
     {
         if (peer.Closed) return;
         var wasReady = peer.Subscribed;
@@ -766,22 +846,31 @@ internal sealed class PhoneLink
         PhoneLog.Write($"disconnected {peer.Name} after {duration}, ready={wasReady.ToString().ToLowerInvariant()}: {why}");
         var wasIdentified = peer.PhoneID != null;
         Drop(peer, null);
+        var now = DateTime.UtcNow;
 
-        if (!wasReady && ShouldRun && !ignored.Contains(peer.Address))
+        if (!ownCancel && !wasReady && ShouldRun && !ignored.Contains(peer.Address, now))
         {
-            earlyDrops++;
-            PhoneLog.Write($"early drop {earlyDrops}/{MaxEarlyDrops}");
-            if (earlyDrops >= MaxEarlyDrops)
+            var (outcome, delay) = earlyDrops.NoteDrop(IsPaired, now);
+            switch (outcome)
             {
-                stoppedAfterEarlyDrops = true;
-                StopWatcher();
-                foreach (var p in peers.Values.ToList()) Drop(p, null);
-                PhoneLog.Write($"stopped after {MaxEarlyDrops} early drops; reopen the pairing window to retry");
-                return;
+                case EarlyDropOutcome.KeepGoing:
+                    PhoneLog.Write($"early drop {earlyDrops.Drops}/{EarlyDropPolicy.MaxEarlyDrops}");
+                    break;
+                case EarlyDropOutcome.Backoff:
+                    // 配过对：不停手，只是先不去连记得的地址；扫描照开，看到我们的广播马上连
+                    PhoneLog.Write($"early drop {earlyDrops.Drops} (paired): backoff {delay.TotalSeconds:0}s before reconnecting the known address; scanning stays on");
+                    break;
+                case EarlyDropOutcome.Stop:
+                    // 没配过手机（只开着配对窗口）：硬停，等重新打开窗口
+                    stoppedAfterEarlyDrops = true;
+                    StopWatcher();
+                    foreach (var p in peers.Values.ToList()) Drop(p, null);
+                    PhoneLog.Write($"stopped after {EarlyDropPolicy.MaxEarlyDrops} early drops (not paired); reopen the pairing window to retry");
+                    return;
             }
         }
-        if (!ShouldRun || ignored.Contains(peer.Address)) return;
-        if (wasIdentified && IsPaired) ConnectKnown("pending reconnect after drop");
+        if (!ShouldRun) return;
+        if (!ignored.Contains(peer.Address, now) && wasIdentified && IsPaired) ConnectKnown("pending reconnect after drop");
         StartWatcher();
     }
 
@@ -817,7 +906,7 @@ internal sealed class PhoneLink
         foreach (var p in peers.Values.ToList()) Drop(p, null);
     }
 
-    /// 窗口关着时连上一台说不出身份的手机：等一会儿，还不说就断开、本次运行不再连它
+    /// 窗口关着时订阅上一台说不出身份的手机：等 IdentifyTimeout，还不说就断开、这个地址暂时不理（30 s → … → 5 min，到点放出来）
     void ScheduleIdentifyCheck(Peer peer)
     {
         var t = new System.Windows.Forms.Timer { Interval = (int)IdentifyTimeout.TotalMilliseconds };
@@ -826,8 +915,8 @@ internal sealed class PhoneLink
             t.Stop();
             t.Dispose();
             if (peer.Closed || peer.PhoneID != null || windowOpen) return;
-            PhoneLog.Write($"peripheral {peer.Name} did not identify within {(int)IdentifyTimeout.TotalSeconds}s; ignoring it this session");
-            ignored.Add(peer.Address);
+            var d = ignored.Ignore(peer.Address, DateTime.UtcNow);
+            PhoneLog.Write($"peripheral {peer.Name} did not identify within {(int)IdentifyTimeout.TotalSeconds}s of subscribing; ignoring it for {d.TotalSeconds:0}s");
             Drop(peer, null);
             StartWatcher();
         };
@@ -855,6 +944,7 @@ internal sealed class PhoneLink
             if (Phase == PhonePhase.BluetoothOff) SetPhase(windowOpen ? (Code.Length > 0 ? PhonePhase.Waiting : PhonePhase.CodeDead) : PhonePhase.Idle);
             ignored.Clear();
             lastCandidateTry.Clear();
+            ResetBackoffs("bluetooth on");
             Resume();
         }
     }
@@ -866,6 +956,7 @@ internal sealed class PhoneLink
         {
             PhoneLog.Write("system suspend");
             suspended = true;
+            suspendedAt = DateTime.UtcNow;
             DropAll("system suspend");
             StopWatcher();
         }
@@ -878,23 +969,51 @@ internal sealed class PhoneLink
                 t.Stop();
                 t.Dispose();
                 suspended = false;
+                suspendedAt = null;
                 // 睡眠中蓝牙栈可能重置过，旧连接全当作废
                 DropAll("system resume");
                 StopWatcher();
                 ignored.Clear();
                 lastCandidateTry.Clear();
+                ResetBackoffs("system resume");
                 Resume();
             };
             t.Start();
         }
     }
 
-    /// 每 10 秒：该扫没在扫就重启扫描器；配过、没连着就重连记得的地址
+    /// 每 10 秒（配过就一直跑，不管早断）：漏了 Resume 的「睡着了」超过 60 秒就当醒了；扫描器没在跑 / Aborted / Stopped 就重启；
+    /// 放出到点的不理地址；配过、没连着就（按退避）重连记得的地址
     void HealthCheck()
     {
         uiStep = "HealthCheck";
+        var now = DateTime.UtcNow;
+        // 这个计时器只在醒着时跑：「睡着了」挂了这么久，一定是漏了 Resume 事件
+        if (suspended && suspendedAt is { } since && now - since > StaleSuspend)
+        {
+            PhoneLog.Write($"health: suspended for {(now - since).TotalSeconds:0}s without a resume event; treating as resumed");
+            suspended = false;
+            suspendedAt = null;
+            ignored.Clear();
+            lastCandidateTry.Clear();
+            ResetBackoffs("stale suspend cleared");
+        }
+        var released = ignored.Expire(now);
+        if (released.Count > 0) PhoneLog.Write($"health: ignore expired for {string.Join(", ", released.Select(FormatAddress))}");
         if (!initialized || radioOn != true || !ShouldRun) return;
-        if (watcher == null && !watcherStarting)
+        if (watcher is { } w)
+        {
+            BluetoothLEAdvertisementWatcherStatus status;
+            try { status = w.Status; } catch (Exception) { status = BluetoothLEAdvertisementWatcherStatus.Aborted; }
+            if (status is BluetoothLEAdvertisementWatcherStatus.Aborted or BluetoothLEAdvertisementWatcherStatus.Stopped)
+            {
+                PhoneLog.Write($"health: scanner status {status}, restarting");
+                watcher = null;
+                StopOff(w);
+                StartWatcher();
+            }
+        }
+        else if (!watcherStarting)
         {
             PhoneLog.Write("health: scanner not running, restarting");
             StartWatcher();
@@ -1033,14 +1152,26 @@ internal sealed class PhoneLink
             finally { peer.Writing = false; }
             uiStep = "Pump result";
             if (peer.Closed) return;
-            if (r.Error == null) continue;
-            PhoneLog.Write($"write to inbox of {peer.Name} failed: {r.Error}");
+            if (r.Error == null)
+            {
+                peer.WriteErrors = 0;
+                continue;
+            }
+            peer.WriteErrors++;
+            PhoneLog.Write($"write to inbox of {peer.Name} failed ({peer.WriteErrors}/{MaxWriteErrors}): {r.Error}");
             peer.WriteQueue.Clear();
             // 写了 10 秒没回执：链路已经死了（手机走远了），当断开处理，好重新连
             if (r.TimedOut)
             {
                 peer.ConnectedAt ??= DateTime.UtcNow;
                 Disconnected(peer, "write timed out");
+                return;
+            }
+            // 连着写失败好几次（Unreachable / ATT 错误…）：链路也是死的，当断开处理
+            if (peer.WriteErrors >= MaxWriteErrors)
+            {
+                peer.ConnectedAt ??= DateTime.UtcNow;
+                Disconnected(peer, $"{peer.WriteErrors} consecutive write failures", ownCancel: true);
                 return;
             }
         }
@@ -1103,6 +1234,7 @@ internal sealed class PhoneLink
                 }
                 var phoneID = c.PhoneID!.Value;
                 peer.PhoneID = phoneID;
+                ignored.Forgive(peer.Address);
                 memory.Remember(peer.Address);
                 Send(c.Ack!, peer);
                 if (c.ConfirmedPairing)

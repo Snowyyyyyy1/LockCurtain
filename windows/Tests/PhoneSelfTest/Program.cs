@@ -8,6 +8,8 @@
 //      这里用 C# 实现重算 / 解码，逐字节对上：CPace 生成元 / ISK / 标签、握手四条消息、命令签名、收据、状态、撤销、
 //      问询 / 回答 / 结果、分帧、计数重放（同一串消息喂给两边的 PairingAuthority，结果一样）、LiftGate 全部场景。
 //   2. 本地：对照 Sources/PairingSelfTest.swift 的握手 / 冒充 / 错码 / 重放 / 撤销测试（码规则按 Windows 文案：一个码错 3 次）。
+//   3. 重连退避（Phone/ReconnectPolicy.cs）：封顶 5 分钟、配过对时早断只退避不停手、没配过时第 5 次硬停、限时不理、位图取交集；
+//      「现在撤下」不看「走近撤下」开关。
 // 全部通过返回 0，有失败返回 1。
 
 using System.Text.Json;
@@ -302,6 +304,65 @@ Console.WriteLine("== LiftGate 场景（和 Swift LiftGate 逐步一样）==");
         }
         Check(mismatches.Count == 0, $"{S(sc, "name")}{(mismatches.Count > 0 ? "：" + string.Join("; ", mismatches) : "")}");
     }
+}
+
+// MARK: - 重连退避
+Console.WriteLine("== 重连退避 ==");
+{
+    var t0 = new DateTime(2027, 1, 15, 8, 0, 0, DateTimeKind.Utc);
+    TimeSpan Sec(double v) => TimeSpan.FromSeconds(v);
+    var delays = Enumerable.Range(0, 8).Select(i => Reconnect.Delay(i, Sec(30), Reconnect.Cap).TotalSeconds).ToArray();
+    Check(delays.SequenceEqual(new double[] { 30, 60, 120, 240, 300, 300, 300, 300 }), "退避：30 s 起翻倍，封顶 5 分钟");
+    Check(Reconnect.Delay(1000, Sec(30), Reconnect.Cap) == Reconnect.Cap, "退避：次数很大也不溢出");
+
+    var known = new ReconnectBackoff(Sec(10), Reconnect.Cap);
+    var kd = Enumerable.Range(0, 7).Select(_ => known.Fail(t0).TotalSeconds).ToArray();
+    Check(kd.SequenceEqual(new double[] { 10, 20, 40, 80, 160, 300, 300 }), "记得的地址：10 s → 20 s → … → 5 分钟");
+    Check(known.Holding(t0.AddSeconds(299)) && !known.Holding(t0.AddSeconds(300)), "记得的地址：到点就放开");
+    known.Reset();
+    Check(!known.Holding(t0) && known.Fail(t0) == Sec(10), "记得的地址：看到我们的广播清零后从头算");
+
+    var paired = new EarlyDropPolicy();
+    var outs = Enumerable.Range(0, 12).Select(i => paired.NoteDrop(true, t0.AddSeconds(i))).ToList();
+    Check(outs.Take(4).All(o => o.Outcome == EarlyDropOutcome.KeepGoing), "早断（配过对）：前 4 次照常");
+    Check(outs.Skip(4).Take(5).Select(o => o.Delay.TotalSeconds).SequenceEqual(new double[] { 30, 60, 120, 240, 300 })
+          && outs.Skip(4).All(o => o.Outcome == EarlyDropOutcome.Backoff), "早断（配过对）：第 5 次起退避 30/60/120/240/300 秒");
+    Check(outs.All(o => o.Outcome != EarlyDropOutcome.Stop), "早断（配过对）：从不硬停");
+    Check(paired.Holding(t0.AddSeconds(12)) && !paired.Holding(t0.AddSeconds(11 + 300)), "早断（配过对）：到点自己放开");
+    paired.Reset();
+    Check(paired.Drops == 0 && !paired.Holding(t0), "早断：订阅成功 / 唤醒 / 蓝牙打开后清零");
+    var unpaired = new EarlyDropPolicy();
+    var u = Enumerable.Range(0, 5).Select(_ => unpaired.NoteDrop(false, t0).Outcome).ToList();
+    Check(u.Take(4).All(o => o == EarlyDropOutcome.KeepGoing) && u[4] == EarlyDropOutcome.Stop, "早断（没配过）：第 5 次硬停");
+
+    var ign = new TimedIgnoreList<ulong>();
+    Check(ign.Ignore(7, t0) == Sec(30) && ign.Contains(7, t0.AddSeconds(29)) && !ign.Contains(7, t0.AddSeconds(30)), "不理：第一次 30 秒，到点放出来");
+    Check(ign.Expire(t0.AddSeconds(31)).SequenceEqual(new ulong[] { 7 }) && ign.Count == 0, "不理：自检把到点的清掉");
+    var seq = Enumerable.Range(0, 6).Select(_ => ign.Ignore(7, t0).TotalSeconds).ToArray();
+    Check(seq.SequenceEqual(new double[] { 60, 120, 240, 300, 300, 300 }), "不理：再犯翻倍，封顶 5 分钟，永远限时");
+    ign.Forgive(7);
+    Check(!ign.Contains(7, t0) && ign.Ignore(7, t0) == Sec(30), "不理：认出身份后从头算");
+
+    byte[] Bits(params int[] on) { var b = new byte[16]; foreach (var i in on) b[i / 8] |= (byte)(1 << (i % 8)); return b; }
+    var ours = 42;
+    var learned = OverflowBitmap.Intersect(null, Bits(ours, 3, 77));
+    learned = OverflowBitmap.Intersect(learned, Bits(ours, 77, 100));
+    learned = OverflowBitmap.Intersect(learned, Bits(ours, 5));
+    Check(learned.SequenceEqual(Bits(ours)), "位图：多次观察取交集，别的后台 App 的位筛掉");
+    Check(OverflowBitmap.Contains(Bits(ours, 9, 120), learned) && !OverflowBitmap.Contains(Bits(9, 120), learned),
+          "位图：别的后台 App 换了也对得上，没有我们那一位就对不上");
+    Check(OverflowBitmap.Intersect(Bits(1), Bits(2)).SequenceEqual(Bits(2)), "位图：交集空了就从这次重新学");
+
+    // 「现在撤下」不看「走近撤下」开关（电脑这边的 LiftGate）
+    var g = new LiftGate();
+    g.Covered(t0);
+    for (var i = 0; i < 3; i++) g.RecordRSSI(-60, t0.AddSeconds(i * 2));
+    var n7 = Enumerable.Repeat((byte)7, 16).ToArray();
+    var n2 = Enumerable.Repeat((byte)2, 16).ToArray();
+    g.Issue(n7, t0.AddSeconds(5));
+    var off = g.Presence(PresenceStatus.Off, n7, t0.AddSeconds(5.2));
+    g.Issue(n2, t0.AddSeconds(6));
+    Check(!off.Lift && off.Why == Refusal.ToggleOff && g.LiftNow(n2, t0.AddSeconds(6.5)).Lift, "现在撤下：「走近撤下」关着也撤（不看开关）");
 }
 
 // MARK: - 本地：握手 / 码规则 / 冒充（对照 PairingSelfTest.swift）

@@ -91,7 +91,8 @@ internal sealed class DpapiPairingStore : IPairingRecordStore
 internal sealed class PhoneDeviceMemory
 {
     public ulong? Address { get; private set; }
-    /// 苹果溢出区位图（16 字节）：这台手机在后台广播时，我们服务 UUID 落在哪几位
+    /// 苹果溢出区位图（16 字节）：这台手机在后台广播时，我们服务 UUID 落在哪几位。
+    /// 存的是多次观察的交集（OverflowBitmap.Intersect，由 PhoneLink 算好再交进来），别的后台 App 的位会被筛掉
     public byte[]? OverflowMask { get; private set; }
 
     readonly string path = Path.Combine(Log.Dir, "phone-link.json");
