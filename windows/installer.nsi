@@ -8,7 +8,7 @@ Name "LockCurtain"
 OutFile "dist/LockCurtain-${VERSION}-setup.exe"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
-ShowInstDetails show
+ShowInstDetails hide
 
 !include "MUI2.nsh"
 !include "x64.nsh"
