@@ -192,6 +192,13 @@ internal sealed class PhoneLink
     /// 每个地址最近收到的广播 RSSI（只记相关的：我们的服务 / 溢出区 / 连着的）
     readonly Dictionary<ulong, List<(int Rssi, DateTime At)>> adverts = new();
     readonly Dictionary<ulong, DateTime> lastCandidateTry = new();
+    /// 系统醒了以后 3 秒再重启：只有一个计时器，再来一次 Resume 就重新计时
+    readonly System.Windows.Forms.Timer resumeTimer = new() { Interval = 3000 };
+    readonly ResumeDebounce resumeDebounce = new();
+    int resumeArmed;
+    /// 反复出现的日志（退避 / RSSI / 问询）：只在状态变了时写，或每分钟最多一行
+    readonly LogThrottle logThrottle = new();
+    static readonly TimeSpan RepeatLogEvery = TimeSpan.FromMinutes(1);
 
     public PhoneLink(SynchronizationContext ui, IPairingRecordStore? store = null)
     {
@@ -199,6 +206,7 @@ internal sealed class PhoneLink
         authority = new PairingAuthority(store ?? new DpapiPairingStore(), PhoneLog.Write);
         tick.Tick += (_, _) => Tick();
         health.Tick += (_, _) => HealthCheck();
+        resumeTimer.Tick += (_, _) => OnResumeTimer();
         codeExpiry.Tick += (_, _) =>
         {
             codeExpiry.Stop();
@@ -414,16 +422,20 @@ internal sealed class PhoneLink
         if (!IsPaired || memory.Address is not { } address || peers.ContainsKey(address) || connecting != null) return;
         if (HasIdentifiedPeer) return;
         var now = DateTime.UtcNow;
+        // 自检每 10 秒都会走到这里：同一个退避状态只写一行
         if (earlyDrops.Holding(now))
         {
-            PhoneLog.Write($"backoff: early-drop hold, {earlyDrops.Remaining(now).TotalSeconds:0}s left; not connecting known address ({reason})");
+            if (logThrottle.Changed("connectKnown", $"hold {earlyDrops.Drops}"))
+                PhoneLog.Write($"backoff: early-drop hold, {earlyDrops.Remaining(now).TotalSeconds:0}s left; not connecting known address ({reason})");
             return;
         }
         if (knownBackoff.Holding(now))
         {
-            PhoneLog.Write($"backoff: known address {FormatAddress(address)} retry in {knownBackoff.Remaining(now).TotalSeconds:0}s (step {knownBackoff.Step}); skipping ({reason})");
+            if (logThrottle.Changed("connectKnown", $"known {knownBackoff.Step}"))
+                PhoneLog.Write($"backoff: known address {FormatAddress(address)} retry in {knownBackoff.Remaining(now).TotalSeconds:0}s (step {knownBackoff.Step}); skipping ({reason})");
             return;
         }
+        logThrottle.Changed("connectKnown", "connect");
         // iPhone 用的是随机地址
         Connect(address, BluetoothAddressType.Random, reason, viaKnown: true);
     }
@@ -955,6 +967,8 @@ internal sealed class PhoneLink
         if (mode == PowerModes.Suspend)
         {
             PhoneLog.Write("system suspend");
+            resumeTimer.Stop();
+            resumeDebounce.Cancel();
             suspended = true;
             suspendedAt = DateTime.UtcNow;
             DropAll("system suspend");
@@ -962,24 +976,28 @@ internal sealed class PhoneLink
         }
         else if (mode == PowerModes.Resume)
         {
-            PhoneLog.Write("system resume: restarting in 3s");
-            var t = new System.Windows.Forms.Timer { Interval = 3000 };
-            t.Tick += (_, _) =>
-            {
-                t.Stop();
-                t.Dispose();
-                suspended = false;
-                suspendedAt = null;
-                // 睡眠中蓝牙栈可能重置过，旧连接全当作废
-                DropAll("system resume");
-                StopWatcher();
-                ignored.Clear();
-                lastCandidateTry.Clear();
-                ResetBackoffs("system resume");
-                Resume();
-            };
-            t.Start();
+            // 同一次醒来常常连报两次 Resume：只留一个计时，重新计时（第二个计时到点会把第一个刚连上的断掉）
+            PhoneLog.Write(resumeDebounce.Pending ? "system resume again: restarting the 3s timer" : "system resume: restarting in 3s");
+            resumeArmed = resumeDebounce.Arm();
+            resumeTimer.Stop();
+            resumeTimer.Start();
         }
+    }
+
+    void OnResumeTimer()
+    {
+        uiStep = "OnResumeTimer";
+        resumeTimer.Stop();
+        if (!resumeDebounce.Fire(resumeArmed)) return;
+        suspended = false;
+        suspendedAt = null;
+        // 睡眠中蓝牙栈可能重置过，旧连接全当作废
+        DropAll("system resume");
+        StopWatcher();
+        ignored.Clear();
+        lastCandidateTry.Clear();
+        ResetBackoffs("system resume");
+        Resume();
     }
 
     /// 每 10 秒（配过就一直跑，不管早断）：漏了 Resume 的「睡着了」超过 60 秒就当醒了；扫描器没在跑 / Aborted / Stopped 就重启；
@@ -1063,11 +1081,14 @@ internal sealed class PhoneLink
             ? list.Where(x => now - x.At <= RssiWindow).Select(x => x.Rssi).Where(v => v < 0).ToList() : [];
         if (recent.Count == 0)
         {
-            PhoneLog.Write($"rssi {peer.Name} read failed: no advertisement in the last {RssiWindow.TotalSeconds:0.#}s");
+            if (logThrottle.ShouldLog($"rssi.{peer.Address}", "failed", now, RepeatLogEvery))
+                PhoneLog.Write($"rssi {peer.Name} read failed: no advertisement in the last {RssiWindow.TotalSeconds:0.#}s");
             return;
         }
         var value = (int)Math.Round(recent.Average());
-        PhoneLog.Write($"rssi {peer.Name} {value} (advertisements n={recent.Count}, [{string.Join(",", recent)}])");
+        // 每 2 秒一个样本：每分钟最多写一行
+        if (logThrottle.ShouldLog($"rssi.{peer.Address}", "ok", now, RepeatLogEvery))
+            PhoneLog.Write($"rssi {peer.Name} {value} (advertisements n={recent.Count}, [{string.Join(",", recent)}]; logged at most once a minute)");
         if (peer.PhoneID is { } id) Gate(id).RecordRSSI(value, now);
     }
 
@@ -1087,13 +1108,15 @@ internal sealed class PhoneLink
         // 上一条还没写完（手机没回执）就不再堆
         if (peer.WriteQueue.Count > 0 || peer.Writing)
         {
-            PhoneLog.Write($"lift: poll skipped for {Who(id)}: previous write still pending");
+            if (logThrottle.ShouldLog($"poll.{id}", "skipped", DateTime.UtcNow, RepeatLogEvery))
+                PhoneLog.Write($"lift: poll skipped for {Who(id)}: previous write still pending");
             return;
         }
         var nonce = PairingCrypto.MakeNonce();
         if (authority.PollMessage(nonce, id) is not { } message) return;
         Gate(id).Issue(nonce, DateTime.UtcNow);
-        PhoneLog.Write($"lift: poll sent to {Who(id)} nonce {Short(nonce)}");
+        if (logThrottle.ShouldLog($"poll.{id}", "sent", DateTime.UtcNow, RepeatLogEvery))
+            PhoneLog.Write($"lift: poll sent to {Who(id)} nonce {Short(nonce)} (logged at most once a minute)");
         Send(message, peer);
     }
 
@@ -1302,7 +1325,9 @@ internal sealed class PhoneLink
         if (!answer.IsLiftNow)
         {
             var word = answer.Status switch { PresenceStatus.Unlocked => "unlocked", PresenceStatus.Locked => "locked", _ => "off" };
-            PhoneLog.Write($"lift: presence from {Who(id)}: {word}, nonce {Short(answer.Nonce)}, counter {answer.Counter}, {rssiText}");
+            // 每 2 秒一条：状态变了才写，没变每分钟最多一行
+            if (logThrottle.ShouldLog($"presence.{id}", word, now, RepeatLogEvery))
+                PhoneLog.Write($"lift: presence from {Who(id)}: {word}, nonce {Short(answer.Nonce)}, counter {answer.Counter}, {rssiText}");
             decision = gate.Presence(answer.Status, answer.Nonce, now);
             if (!wasArmed && gate.EdgeArmed) PhoneLog.Write($"lift: edge armed for {Who(id)} (locked seen after cover)");
         }
@@ -1320,7 +1345,9 @@ internal sealed class PhoneLink
         }
         else
         {
-            PhoneLog.Write($"lift: {label}: refused, {Describe(decision)}");
+            var why = Describe(decision);
+            if (answer.IsLiftNow || logThrottle.ShouldLog($"refuse.{id}", why, now, RepeatLogEvery))
+                PhoneLog.Write($"lift: {label}: refused, {why}");
             if (answer.IsLiftNow && authority.LiftResultMessage(LiftGate.ResultStatus(decision.Why), answer.Counter, id) is { } reply)
                 Send(reply, peer);
         }

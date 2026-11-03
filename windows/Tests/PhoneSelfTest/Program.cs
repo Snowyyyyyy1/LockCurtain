@@ -353,6 +353,23 @@ Console.WriteLine("== 重连退避 ==");
           "位图：别的后台 App 换了也对得上，没有我们那一位就对不上");
     Check(OverflowBitmap.Intersect(Bits(1), Bits(2)).SequenceEqual(Bits(2)), "位图：交集空了就从这次重新学");
 
+    // 系统醒了：连报两次 Resume 只动手一次（只有最后那次的计时算）
+    var rd = new ResumeDebounce();
+    var first = rd.Arm();
+    var second = rd.Arm();
+    Check(!rd.Fire(first) && rd.Fire(second) && !rd.Fire(second), "醒来：两次 Resume 只留一个计时、只动手一次");
+    var third = rd.Arm();
+    rd.Cancel();
+    Check(!rd.Fire(third) && !rd.Pending, "醒来：计时没到又睡了，作废");
+
+    // 日志去重
+    var th = new LogThrottle();
+    var written = Enumerable.Range(0, 60).Count(k => th.ShouldLog("rssi", "ok", t0.AddSeconds(k * 2), TimeSpan.FromMinutes(1)));
+    Check(written == 2, $"日志：每 2 秒一样的 RSSI，2 分钟只写 2 行（实际 {written}）");
+    Check(th.ShouldLog("presence", "locked", t0, TimeSpan.FromMinutes(1)) && th.ShouldLog("presence", "unlocked", t0.AddSeconds(2), TimeSpan.FromMinutes(1)),
+          "日志：状态变了马上写");
+    Check(th.Changed("k", "hold 5") && !th.Changed("k", "hold 5") && th.Changed("k", "hold 6"), "日志：退避只在状态变了时写");
+
     // 「现在撤下」不看「走近撤下」开关（电脑这边的 LiftGate）
     var g = new LiftGate();
     g.Covered(t0);

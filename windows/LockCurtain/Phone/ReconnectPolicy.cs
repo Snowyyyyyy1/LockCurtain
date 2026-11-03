@@ -145,3 +145,52 @@ internal static class OverflowBitmap
 
     public static bool IsEmpty(byte[] bits) => bits.All(b => b == 0);
 }
+
+/// 系统「醒了」只留一个重启计时：再来一次 Resume 就重新计时（不再另开一个），
+/// 只有最后一次的计时到点才动手——两个计时各自到点，第二个会把第一个刚连上的连接全断掉
+internal sealed class ResumeDebounce
+{
+    int generation;
+    bool pending;
+
+    /// 又来一次 Resume：返回这一次的编号（旧的作废）
+    public int Arm()
+    {
+        pending = true;
+        return ++generation;
+    }
+
+    /// 计时到点：只有最新的那一次、而且还没动过手才算
+    public bool Fire(int armed)
+    {
+        if (!pending || armed != generation) return false;
+        pending = false;
+        return true;
+    }
+
+    /// 又睡了：没到点的作废
+    public void Cancel() => pending = false;
+
+    public bool Pending => pending;
+}
+
+/// 日志去重：同一个 key 的内容没变就每 every 最多写一次；变了马上写（和 Mac 的 LogThrottle 一样）
+internal sealed class LogThrottle
+{
+    readonly Dictionary<string, (string Value, DateTime At)> last = new();
+
+    public bool ShouldLog(string key, string value, DateTime now, TimeSpan every)
+    {
+        if (last.TryGetValue(key, out var prev) && prev.Value == value && now - prev.At < every) return false;
+        last[key] = (value, now);
+        return true;
+    }
+
+    /// 只在内容变了时写
+    public bool Changed(string key, string value)
+    {
+        if (last.TryGetValue(key, out var prev) && prev.Value == value) return false;
+        last[key] = (value, DateTime.UtcNow);
+        return true;
+    }
+}
