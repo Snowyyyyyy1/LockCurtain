@@ -6,10 +6,11 @@
 //   一轮握手只能试一个码、录下来的数据没法离线验别的码；错 5 次码作废；签名命令收下；
 //   同一个计数重放被拒；改过的命令被拒；不认识的手机被拒；明文命令被拒；
 //   确认收据 / 幕布状态 / 撤销通知的签名；分帧切块再拼回来；
-//   手机撤下幕布：条件都满足才撤、少一条都不撤、边沿规则、「现在撤下」、过期 / 重放 / 错 nonce、开关关着。
+//   手机撤下幕布：条件都满足才撤、少一条都不撤、边沿规则、「现在撤下」、过期 / 重放 / 错 nonce、开关关着；
+//   重连退避（ReconnectPolicy）：翻倍封顶 5 分钟、配过对时早断只退避不停手、没配过时第 5 次硬停、限时不理、每台手机留 2 个标识。
 //
 // 两个入口：
-//   * Tests/PairingCryptoSelfTest.swift（verify.sh 里跑，和本文件 + PairingCrypto + PairingAuthority + LiftGate 一起编）
+//   * Tests/PairingCryptoSelfTest.swift（verify.sh 里跑，和本文件 + PairingCrypto + PairingAuthority + LiftGate + ReconnectPolicy 一起编）
 //   * 正在运行的 App：LockCurtain --send pairselftest，结果写到 /tmp/lockcurtain-pairtest.txt（不退出 App）
 
 import CryptoKit
@@ -184,6 +185,9 @@ enum PairingSelfTest {
         // 16. 手机撤下幕布：判断（LiftGate）+ 签名 / 计数 / nonce（PairingAuthority）
         LiftTests.gate(expect)
         LiftTests.wire(expect, log: log, code: code)
+
+        // 17. 重连退避
+        ReconnectTests.run(expect)
 
         // 日志里不许出现码
         expect(!authorityLog.contains { $0.contains(code) }, "日志：不含配对码")
@@ -858,5 +862,74 @@ enum LiftTests {
     private static func answerRejected(_ outcome: PairingAuthority.AnswerOutcome, _ reason: PairingAuthority.RejectReason) -> Bool {
         if case .rejected(let r, _) = outcome { return r == reason }
         return false
+    }
+}
+
+// MARK: - 重连退避
+
+enum ReconnectTests {
+    static func run(_ expect: (Bool, String) -> Void) {
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+        // 翻倍、封顶 5 分钟
+        let delays = (0..<8).map { ReconnectBackoff.delay(step: $0, base: 30, cap: reconnectBackoffCap) }
+        expect(delays == [30, 60, 120, 240, 300, 300, 300, 300], "重连：30 s 起翻倍，封顶 5 分钟")
+        expect(ReconnectBackoff.delay(step: 1000, base: 30, cap: 300) == 300, "重连：退避次数很大也不溢出")
+        var b = ReconnectBackoff(base: 2, cap: 30)
+        expect(b.fail(at: t0) == 2 && b.fail(at: t0) == 4 && b.holding(at: t0.addingTimeInterval(3))
+               && !b.holding(at: t0.addingTimeInterval(4)), "重连：退避到点就放开")
+        b.reset()
+        expect(!b.holding(at: t0) && b.fail(at: t0) == 2, "重连：清零后从头算")
+
+        // 配过对：早断永远不停手，只退避（30 s → … → 5 min）
+        var paired = EarlyDropPolicy()
+        var outcomes: [EarlyDropPolicy.Outcome] = []
+        for i in 0..<12 { outcomes.append(paired.noteDrop(paired: true, at: t0.addingTimeInterval(Double(i)))) }
+        expect(outcomes.prefix(4).allSatisfy { $0 == .keepGoing }, "早断（配过对）：前 4 次照常重连")
+        expect(Array(outcomes[4...8]) == [.backoff(30), .backoff(60), .backoff(120), .backoff(240), .backoff(300)],
+               "早断（配过对）：第 5 次起退避 30/60/120/240/300 秒")
+        expect(!outcomes.contains(.stop), "早断（配过对）：从不硬停")
+        expect(outcomes.last == .backoff(300), "早断（配过对）：退避封顶 5 分钟")
+        expect(paired.holding(at: t0.addingTimeInterval(12)) && !paired.holding(at: t0.addingTimeInterval(11 + 300)),
+               "早断（配过对）：退避到点自己放开")
+        paired.reset()
+        expect(paired.drops == 0 && !paired.holding(at: t0), "早断：订阅成功 / 唤醒 / 扫到手机后清零")
+
+        // 没配过（配对窗口模式）：第 5 次硬停
+        var unpaired = EarlyDropPolicy()
+        let u = (0..<5).map { _ in unpaired.noteDrop(paired: false, at: t0) }
+        expect(Array(u.prefix(4)) == Array(repeating: .keepGoing, count: 4) && u[4] == .stop, "早断（没配过）：第 5 次硬停")
+
+        // 限时不理：30 s 起翻倍，封顶 5 分钟，到点放出来；认出身份清零
+        var ignored = TimedIgnoreList<UUID>()
+        let id = UUID()
+        let first = ignored.ignore(id, at: t0)
+        expect(first == 30 && ignored.contains(id, at: t0.addingTimeInterval(29)) && !ignored.contains(id, at: t0.addingTimeInterval(30)),
+               "不理：第一次 30 秒，到点放出来")
+        expect(ignored.expire(at: t0.addingTimeInterval(31)) == [id] && ignored.isEmpty, "不理：健康检查把到点的清掉")
+        var seq: [TimeInterval?] = []
+        for _ in 0..<6 { seq.append(ignored.ignore(id, at: t0)) }
+        expect(seq == [60, 120, 240, 300, 300, 300], "不理：再犯就翻倍，封顶 5 分钟，永远是限时的")
+        ignored.forgive(id)
+        expect(!ignored.contains(id, at: t0) && ignored.ignore(id, at: t0) == 30, "不理：认出身份后从头算")
+        let stranger = UUID()
+        expect(ignored.ignore(stranger, at: t0, permanent: true) == nil
+               && ignored.contains(stranger, at: t0.addingTimeInterval(86_400)), "不理：没配过、不认得的才本次运行不再理")
+
+        // 记得的标识：每台手机只留最近 2 个；老格式读得懂；撤销时删掉
+        let phoneA = UUID(), phoneB = UUID()
+        let i1 = UUID(), i2 = UUID(), i3 = UUID(), i4 = UUID(), legacy = UUID()
+        var known = KnownPeripherals.parse([legacy.uuidString])
+        expect(known == [.init(identifier: legacy, phoneID: nil)], "记得的标识：老版本只记标识的也读得懂")
+        known = KnownPeripherals.remember(known, identifier: i1, phoneID: phoneA)
+        known = KnownPeripherals.remember(known, identifier: i2, phoneID: phoneA)
+        known = KnownPeripherals.remember(known, identifier: i4, phoneID: phoneB)
+        known = KnownPeripherals.remember(known, identifier: i3, phoneID: phoneA)
+        expect(known.filter { $0.phoneID == phoneA }.map(\.identifier) == [i2, i3], "记得的标识：同一台手机只留最近 2 个")
+        expect(KnownPeripherals.phoneID(of: i4, in: known) == phoneB, "记得的标识：别的手机的不受影响")
+        known = KnownPeripherals.remember(known, identifier: i2, phoneID: phoneA)
+        expect(known.filter { $0.phoneID == phoneA }.map(\.identifier) == [i3, i2], "记得的标识：再认出来挪到最新")
+        expect(KnownPeripherals.parse(KnownPeripherals.encode(known)) == known, "记得的标识：存了再读一样")
+        expect(KnownPeripherals.forget(known, phoneID: phoneA).allSatisfy { $0.phoneID != phoneA }, "记得的标识：撤销的手机删掉")
     }
 }

@@ -21,7 +21,7 @@ selftest() {
 
 selftest RulesSelfTest Rules.swift
 selftest ScreenChangeCoalescerSelfTest ScreenChangeCoalescer.swift
-selftest PairingCryptoSelfTest CPace.swift PairingCrypto.swift PairingAuthority.swift LiftGate.swift PairingSelfTest.swift
+selftest PairingCryptoSelfTest CPace.swift PairingCrypto.swift PairingAuthority.swift LiftGate.swift ReconnectPolicy.swift PairingSelfTest.swift
 selftest SleepLogSelfTest SleepLog.swift IntervalSet.swift SleepLedger.swift SleepBlockers.swift ProcessTable.swift
 
 echo "== build.sh"

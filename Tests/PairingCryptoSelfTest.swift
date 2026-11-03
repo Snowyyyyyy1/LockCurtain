@@ -2,7 +2,7 @@
 //
 // 运行（verify.sh 里也有）：
 //   cp Tests/PairingCryptoSelfTest.swift /tmp/pc/main.swift
-//   xcrun swiftc -o /tmp/pc/t /tmp/pc/main.swift Sources/CPace.swift Sources/PairingCrypto.swift Sources/PairingAuthority.swift Sources/LiftGate.swift Sources/PairingSelfTest.swift
+//   xcrun swiftc -o /tmp/pc/t /tmp/pc/main.swift Sources/CPace.swift Sources/PairingCrypto.swift Sources/PairingAuthority.swift Sources/LiftGate.swift Sources/ReconnectPolicy.swift Sources/PairingSelfTest.swift
 //   /tmp/pc/t
 // 另外在登录钥匙串里用一个测试专用的 service 存一条、读回、删掉，验证 Mac 的钥匙串存取。
 
