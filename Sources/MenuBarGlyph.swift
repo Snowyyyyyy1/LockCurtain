@@ -7,7 +7,7 @@ import AppKit
 
 enum MenuBarGlyph {
     static let idle = make(locked: false, label: "LockCurtain")
-    static let locked = make(locked: true, label: "幕布显示中")
+    static let locked = make(locked: true, label: "幕布已盖上")
 
     private static func make(locked: Bool, label: String) -> NSImage {
         let img = NSImage(size: NSSize(width: 20, height: 20), flipped: true) { _ in

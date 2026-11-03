@@ -186,8 +186,8 @@ private struct GeneralPane: View {
             } header: {
                 Text("幕布图案")
             } footer: {
-                Text(art == .custom ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示幕布时生效。"
-                                    : "显示在幕布中间、提示文案上方。下次显示幕布时生效。")
+                Text(art == .custom ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次盖上幕布时生效。"
+                                    : "显示在幕布中间、提示文案上方。下次盖上幕布时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -200,7 +200,7 @@ private struct GeneralPane: View {
             } header: {
                 Text("幕布背景")
             } footer: {
-                Text("壁纸和模糊壁纸用显示幕布时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次显示幕布时生效。")
+                Text("壁纸和模糊壁纸用盖上幕布时抓到的当前壁纸；星空、远山、碳纤维是程序画的，不用抓屏。下次盖上幕布时生效。")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -210,7 +210,7 @@ private struct GeneralPane: View {
                 Text("幕布文字")
             } footer: {
                 HStack {
-                    Text("显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示幕布时生效。")
+                    Text("显示在图案下面，太长会自动换行。留空就不显示这一行。下次盖上幕布时生效。")
                         .foregroundStyle(.secondary)
                     if curtainTitle != Prefs.defaultCurtainTitle || curtainSubtitle != Prefs.defaultCurtainSubtitle {
                         Button("恢复默认") {
@@ -241,7 +241,7 @@ private struct GeneralPane: View {
                 Text("关于")
             } footer: {
                 if Updater.shared.isAvailable {
-                    Text("每天检查一次 GitHub 上的新版本，有新版本时提示，点了才安装。幕布显示时不提示、不重启。")
+                    Text("每天检查一次 GitHub 上的新版本，有新版本时提示，点了才安装。幕布盖着的时候不提示、不重启。")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -365,7 +365,7 @@ private struct AwayPane: View {
             } header: {
                 Text("离开模式")
             } footer: {
-                Text("幕布期间你的按键、点击、滚动、鼠标移动和触控板手势都会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。选「验证」时，按一下键盘或点一下，幕布下方出现解锁面板，像锁屏一样输密码或用触控 ID；密码由系统在本机核对，LockCurtain 只拿到通过与否，不保存。通过就直接撤幕布，连错 3 次改成先锁屏再撤；Esc 或 60 秒没操作只收起面板，幕布留着。设置在下次进入离开模式时生效。")
+                Text("幕布盖着的时候，你的按键、点击、滚动、鼠标移动和触控板手势都会被吞掉，不会传给下层的 app；agent 的合成输入照常穿透。选「验证」时，按一下键盘或点一下，幕布下方出现解锁面板，像锁屏一样输密码或用触控 ID；密码由系统在本机核对，LockCurtain 只拿到通过与否，不保存。通过就直接撤下幕布，连错 3 次改成先锁屏再撤；Esc 或 60 秒没操作只收起面板，幕布留着。设置在下次进入离开模式时生效。")
                     .foregroundStyle(.secondary)
             }
         }
@@ -381,7 +381,7 @@ private struct RemotePane: View {
         ("away", "进入离开模式（App 没运行时会先拉起）"),
         ("hide", "撤下幕布；离开模式下先锁屏再撤"),
         ("status", "查询状态，输出一行 JSON"),
-        ("preview", "显示预览幕布"),
+        ("preview", "预览幕布"),
         ("settings", "打开这个窗口"),
     ]
 
