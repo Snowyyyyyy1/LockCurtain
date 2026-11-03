@@ -43,7 +43,7 @@ final class AppModel {
 
         var value: String {
             switch self {
-            case .waiting: "等这台 Mac 来连…"
+            case .waiting: "等这台电脑来连…"
             case .stopped: "没连上"
             case .bluetoothOff: "蓝牙关了"
             }
@@ -54,9 +54,9 @@ final class AppModel {
 
         var footer: String {
             switch self {
-            case .waiting: "Mac 上开着 LockCurtain、人也在附近就行。"
-            case .stopped: "Mac 上开着 LockCurtain，两边蓝牙都开着，人也在附近。"
-            case .bluetoothOff: "打开 iPhone 的蓝牙，这台 Mac 才找得到它。"
+            case .waiting: "电脑上开着 LockCurtain、人也在附近就行。"
+            case .stopped: "电脑上开着 LockCurtain，两边蓝牙都开着，人也在附近。"
+            case .bluetoothOff: "打开 iPhone 的蓝牙，这台电脑才找得到它。"
             }
         }
     }
@@ -349,7 +349,7 @@ final class AppModel {
             return
         }
         let context = LAContext()
-        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "撤下这台 Mac 的幕布") { [weak self] ok, _ in
+        context.evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "撤下这台电脑的幕布") { [weak self] ok, _ in
             guard ok else { return }
             Task { @MainActor in self?.startLift() }
         }
@@ -509,7 +509,7 @@ final class AppModel {
         if link as? BLECurtainLink == nil { adopt(ble) }
         let result = await ble.pair(code: code)
         if result == .accepted {
-            completePairing(macName: ble.snapshot.macName ?? "这台 Mac")
+            completePairing(macName: ble.snapshot.macName ?? "这台电脑")
         }
         return result
     }

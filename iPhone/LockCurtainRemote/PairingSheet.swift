@@ -13,7 +13,7 @@ final class PairingSession {
         case success
     }
 
-    let macName = "Mac"
+    let macName = "这台电脑"
     private(set) var step: Step = .searching
     private(set) var isVerifying = false
     private(set) var errorMessage: String?
@@ -86,17 +86,17 @@ final class PairingSession {
             case .accepted:
                 self.step = .success
             case .notFound:
-                self.fail("这台 Mac 没连上来。Mac 上开着 LockCurtain，两边蓝牙都开着。", "再找一次")
+                self.fail("这台电脑没连上来。电脑上开着 LockCurtain，两边蓝牙都开着。", "再找一次")
             case .connectFailed:
-                self.fail("连上了，但没配成。把 Mac 上「配对手机」重新点开，拿新的 6 位。", "再试一次")
+                self.fail("连上了，但没配成。把电脑上「配对手机」重新点开，拿新的 6 位。", "再试一次")
             case .wrongCode:
-                self.fail("码不对，再看一眼 Mac 上那 6 位。", "重新输入")
+                self.fail("码不对，再看一眼电脑上那 6 位。", "重新输入")
             case .macRefused:
-                self.fail("Mac 没有接受这次配对。回 Mac 上点「换一个码」，再输一次。", "重新输入")
+                self.fail("电脑没有接受这次配对。回电脑上点「换一个码」，再输一次。", "重新输入")
             case .noResponse:
-                self.fail("这次作废了。回 Mac 上点「换一个码」。", "再试一次")
+                self.fail("这次作废了。回电脑上点「换一个码」。", "再试一次")
             case .disconnected:
-                self.fail("和这台 Mac 断开了。刚才那 6 位不能用了。", "再试一次")
+                self.fail("和这台电脑断开了。刚才那 6 位不能用了。", "再试一次")
             }
         }
     }
@@ -211,9 +211,9 @@ struct PairingSheet: View {
     private var searchingView: some View {
         VStack(spacing: 16) {
             ProgressView()
-            Text("等这台 Mac 来连")
+            Text("等这台电脑来连")
                 .font(.title2.bold())
-            Text("Mac 上点开「配对手机」，把 6 位输进来")
+            Text("电脑上点开「配对手机」，把 6 位输进来")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -225,7 +225,7 @@ struct PairingSheet: View {
         VStack(spacing: 16) {
             Text("输 6 位码")
                 .font(.title2.bold())
-            Text("Mac 上显示的那 6 个数字")
+            Text("电脑上显示的那 6 个数字")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

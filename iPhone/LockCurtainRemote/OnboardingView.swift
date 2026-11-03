@@ -13,11 +13,11 @@ struct OnboardingView: View {
                         .foregroundStyle(.tint)
                         .symbolRenderingMode(.hierarchical)
 
-                    Text("先和你的 Mac 连上")
+                    Text("先和你的电脑连上")
                         .font(.largeTitle.bold())
                         .multilineTextAlignment(.center)
 
-                    Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                    Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -39,7 +39,7 @@ struct OnboardingView: View {
         .frame(maxWidth: .infinity)
         .safeAreaInset(edge: .top, spacing: 0) {
             if model.showDemoExitNotice {
-                Text("演示已退出，这里还是没连上 Mac")
+                Text("演示已退出，这里还是没连上电脑")
                     .font(.subheadline)
                     .padding(.vertical, 10)
                     .padding(.horizontal, 16)
@@ -65,7 +65,7 @@ struct OnboardingView: View {
                     Button {
                         model.setDemoMode(true)
                     } label: {
-                        Text("手上没有 Mac？先看看演示")
+                        Text("手上没有电脑？先看看演示")
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 3)
                     }

@@ -46,7 +46,7 @@ struct SettingsView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: {
-                Text("以后要重新配对才能控制这台 Mac。")
+                Text("以后要重新配对才能控制这台电脑。")
             }
         }
         .sheet(isPresented: $showPairing) {
@@ -59,7 +59,7 @@ struct SettingsView: View {
     private var macSection: some View {
         Section {
             if model.demoMode || model.paired {
-                LabeledContent("已配对", value: model.macName ?? "Mac")
+                LabeledContent("已配对", value: model.macName ?? "这台电脑")
                 Button("撤销配对", role: .destructive) {
                     showUnpairConfirmation = true
                 }
@@ -69,11 +69,11 @@ struct SettingsView: View {
                 }
             }
         } header: {
-            Text("这台 Mac")
+            Text("这台电脑")
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 if !model.demoMode && !model.paired {
-                    Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                    Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
                 }
                 Text("断开以后要重新连，打开 LockCurtain 等十几秒；连上以后锁屏、切后台都不会断，不用一直开着。")
             }
@@ -92,7 +92,7 @@ struct SettingsView: View {
         } header: {
             Text("撤下")
         } footer: {
-            Text("手机解锁着、人走到这台 Mac 附近，幕布就撤下来。手机锁着的时候不撤。")
+            Text("手机解锁着、人走到这台电脑附近，幕布就撤下来。手机锁着的时候不撤。")
         }
     }
 
@@ -146,7 +146,7 @@ struct SettingsView: View {
         } header: {
             Text("演示")
         } footer: {
-            Text("不连 Mac，也能看到连上、盖上是什么样。")
+            Text("不连电脑，也能看到连上、盖上是什么样。")
         }
     }
 

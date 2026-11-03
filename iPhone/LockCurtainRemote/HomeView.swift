@@ -170,7 +170,7 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
         } label: {
-            Label("这台 Mac", systemImage: "laptopcomputer")
+            Label("这台电脑", systemImage: "laptopcomputer")
         }
     }
 
@@ -280,7 +280,7 @@ struct HomeView: View {
             if model.liftNotice == .alreadyUncovered {
                 Text("幕布已经是撤下的了。")
             } else if model.showLiftedNote {
-                Text("幕布撤下了。Mac 要是自己锁了屏，还得照常输密码。")
+                Text("幕布撤下了。电脑要是自己锁了屏，还得照常输密码。")
             }
         }
     }
@@ -310,7 +310,7 @@ struct HomeView: View {
         } else {
             switch model.connection {
             case .notPaired:
-                Text("在 Mac 上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
             case .bluetoothOff:
                 Text(AppModel.UnlinkedMacState.bluetoothOff.footer)
             case .notConnected, .connected:
@@ -372,7 +372,7 @@ struct HomeView: View {
                         .transition(.opacity)
                 } else {
                     if model.didTimeOut {
-                        Text("Mac 没有回应，状态没变。")
+                        Text("电脑没有回应，状态没变。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
@@ -384,7 +384,7 @@ struct HomeView: View {
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
                     } else if model.showLiftedNote {
-                        Text("幕布撤下了。Mac 要是自己锁了屏，还得照常输密码。")
+                        Text("幕布撤下了。电脑要是自己锁了屏，还得照常输密码。")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -439,7 +439,7 @@ struct HomeView: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .glassEffectID("action", in: glassNS)
-            .accessibilityHint("发给这台 Mac，盖上幕布")
+            .accessibilityHint("发给这台电脑，盖上幕布")
         }
     }
 
@@ -498,7 +498,7 @@ struct HomeView: View {
             .font(.body.weight(.semibold))
             .buttonStyle(.borderless)
             .frame(minHeight: 44)
-            .accessibilityHint("先验证面容，再撤下这台 Mac 的幕布")
+            .accessibilityHint("先验证面容，再撤下这台电脑的幕布")
         }
     }
 
@@ -531,14 +531,14 @@ struct HomeView: View {
             .buttonStyle(.glass)
             .controlSize(.large)
             .glassEffectID("action", in: glassNS)
-            .accessibilityHint("先验证面容，再撤下这台 Mac 的幕布")
+            .accessibilityHint("先验证面容，再撤下这台电脑的幕布")
         }
     }
 
     private func liftNoticeText(_ notice: AppModel.LiftNotice) -> String {
         switch notice {
-        case .timedOut: "Mac 没有回应，幕布还盖着。"
-        case .tooFar: "离这台 Mac 太远，走近再试。"
+        case .timedOut: "电脑没有回应，幕布还盖着。"
+        case .tooFar: "离这台电脑太远，走近再试。"
         case .refused: "这次没撤下来，再按一次。"
         case .alreadyUncovered: "幕布已经是撤下的了。"
         }
@@ -560,7 +560,7 @@ struct HomeView: View {
         .padding(.vertical, 8)
         .background(Color(.systemGroupedBackground), ignoresSafeAreaEdges: [])
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("演示，下面是模拟状态，没有连接任何 Mac")
+        .accessibilityLabel("演示，下面是模拟状态，没有连接任何电脑")
     }
 
     private var demoBannerContent: some View {
@@ -572,7 +572,7 @@ struct HomeView: View {
                 .background(.orange, in: .capsule)
                 .foregroundStyle(.black)
             // 大字时横幅一直钉在上面，只放短句，免得占掉小半屏；VoiceOver 读整句（见 demoBanner）
-            Text(isAXSize ? "模拟状态" : "下面是模拟状态，没有连接任何 Mac")
+            Text(isAXSize ? "模拟状态" : "下面是模拟状态，没有连接任何电脑")
                 .font(.footnote)
                 .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
@@ -600,7 +600,7 @@ struct HomeView: View {
                     set: { model.selectDemoScenario($0) }
                 )
             ) {
-                Text("已连上这台 Mac").tag(AppModel.DemoScenario.connected)
+                Text("已连上这台电脑").tag(AppModel.DemoScenario.connected)
                 Text("幕布已盖上").tag(AppModel.DemoScenario.closed)
                 Text("幕布撤下了").tag(AppModel.DemoScenario.lifted)
             }
@@ -619,7 +619,7 @@ struct GaveUpNotice: View {
     var body: some View {
         VStack(spacing: 10) {
             VStack(spacing: 4) {
-                Text("连不上这台 Mac。")
+                Text("连不上这台电脑。")
                     .font(prominent ? .subheadline.weight(.semibold) : .title2.bold())
                 Text("已经试了 5 次，先停在这儿。")
                     .font(prominent ? .subheadline : .body)
