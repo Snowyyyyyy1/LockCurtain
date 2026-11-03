@@ -134,7 +134,7 @@ final class AppModel {
         #endif
         isPreviewFixture = previewConnected
         #if DEBUG
-        // 截图用：-lcForceLinkState waiting|stopped|btoff —— 假装配过对、没连上
+        // 截图用：-lcForceLinkState waiting|stopped|btoff —— 假装配过对、没连上；unpaired —— 没配对的主屏（平时没配对只会看到引导页）
         let forcedLink = UserDefaults.standard.string(forKey: "lcForceLinkState")
             .flatMap { DebugForcedCurtainLink(argument: $0, macName: "Studio 的 MacBook Pro") }
         #else
@@ -142,15 +142,27 @@ final class AppModel {
         #endif
 
         if let forcedLink {
-            paired = true
+            let forcedPaired = forcedLink.snapshot.connection != .notPaired
+            paired = forcedPaired
             demoMode = false
-            macName = "Studio 的 MacBook Pro"
+            macName = forcedPaired ? "Studio 的 MacBook Pro" : nil
+            if !forcedPaired { isPreviewFixture = true }   // 不走引导页，直接看主屏
             link = forcedLink
         } else if previewConnected {
             paired = true
             demoMode = false
             macName = "Studio 的 MacBook Pro"
-            let link = DemoCurtainLink(phase: .open, auto: .off)
+            // 截图用：-lcPreviewState closing|closed|lifted —— 已连上时幕布停在「正在盖上…」/「已盖上」，或刚撤下
+            #if DEBUG
+            let previewPhase: CurtainPhase = switch UserDefaults.standard.string(forKey: "lcPreviewState") {
+            case "closing": .closing
+            case "closed", "lifted": .closed
+            default: .open
+            }
+            #else
+            let previewPhase: CurtainPhase = .open
+            #endif
+            let link = DemoCurtainLink(phase: previewPhase, auto: .off)
             self.link = link
             demoLink = link
         } else {
@@ -176,6 +188,10 @@ final class AppModel {
         if ProcessInfo.processInfo.arguments.contains("-lcDemoCovered") {
             setDemoMode(true)
             selectDemoScenario(.closed)
+        }
+        // 截图用：-lcPreviewConnected -lcPreviewState lifted —— 跳过面容，直接走一遍「现在撤下」，停在「幕布撤下了。…」
+        if previewConnected, UserDefaults.standard.string(forKey: "lcPreviewState") == "lifted" {
+            startLift()
         }
         #endif
     }

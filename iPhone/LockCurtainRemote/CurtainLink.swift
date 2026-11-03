@@ -122,6 +122,9 @@ final class DebugForcedCurtainLink: CurtainLink {
             snap.isAdvertising = false
         case "btoff":
             snap.connection = .bluetoothOff
+        case "unpaired":
+            snap.connection = .notPaired
+            snap.macName = nil
         default:
             return nil
         }
