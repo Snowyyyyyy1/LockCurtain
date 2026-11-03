@@ -636,8 +636,7 @@ struct HomeView: View {
 }
 
 /// 配对页：连续断了几次、正暂停着广播时显示（暂停到点会自己接着广播；点按钮马上接着来）。
-/// 主屏不再用它（design v2.10 A：按经过时间分段，见 AppModel.UnlinkedMacState）。
-/// 下面两行字是旧文案、已经不准了，等 copy 给配对页的新句（见交付说明）
+/// 主屏不再用它（design v2.10 A：按经过时间分段，见 AppModel.UnlinkedMacState）。字：copy v13.3 §8.6「配对页断开时」
 struct GaveUpNotice: View {
     /// 主屏底栏用玻璃大按钮；配对页里用普通的 bordered 按钮
     var prominent = false
@@ -646,9 +645,9 @@ struct GaveUpNotice: View {
     var body: some View {
         VStack(spacing: 10) {
             VStack(spacing: 4) {
-                Text("连不上这台电脑。")
+                Text("和这台电脑断开了。")
                     .font(prominent ? .subheadline.weight(.semibold) : .title2.bold())
-                Text("已经试了 5 次，先停在这儿。")
+                Text("我隔一会儿就再试一次，最长隔 5 分钟一次。接上以后，照屏幕上显示的 6 位输就行。")
                     .font(prominent ? .subheadline : .body)
                     .foregroundStyle(.secondary)
             }
@@ -657,22 +656,17 @@ struct GaveUpNotice: View {
 
             if prominent {
                 Button(action: retry) {
-                    Text("再试一次")
+                    Text("现在再试一次")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 3)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.glass)
                 .controlSize(.large)
             } else {
-                Button("再试一次", action: retry)
+                Button("现在再试一次", action: retry)
                     .buttonStyle(.bordered)
                     .padding(.top, 6)
             }
-
-            Text("在你回来之前，我不会自己在后台重连。")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
         }
     }
 }

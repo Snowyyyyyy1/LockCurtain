@@ -96,7 +96,7 @@ final class PairingSession {
             case .noResponse:
                 self.fail("这次作废了。回电脑上点「换一个码」。", "再试一次")
             case .disconnected:
-                self.fail("和这台电脑断开了。刚才那 6 位不能用了。", "再试一次")
+                self.fail("和这台电脑断开了。我隔一会儿就再试一次，最长隔 5 分钟一次。接上以后，照屏幕上显示的 6 位输就行。", "现在再试一次")
             }
         }
     }
