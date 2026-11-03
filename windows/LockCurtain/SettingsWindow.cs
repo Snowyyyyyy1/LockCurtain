@@ -150,9 +150,9 @@ internal sealed class SettingsWindow : Form
             else SystemSounds.Beep.Play();
         }
         bool custom() => Settings.Current.CurtainArt == CurtainArt.Custom;
-        v.Section("遮罩图案", () => custom()
-                ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示遮罩时生效。"
-                : "显示在遮罩中间、提示文案上方。下次显示遮罩时生效。")
+        v.Section("幕布图案", () => custom()
+                ? "没选图片时用账户头像。选的图会缩小后存进 LockCurtain 的设置，原图删掉也不影响。下次显示幕布时生效。"
+                : "显示在幕布中间、提示文案上方。下次显示幕布时生效。")
             .Tiles(tiles)
             .Only(() => custom() && Settings.Current.CurtainImage == null, g => g
                 .Controls("图片", "账户头像", v.MakeButton("选择图片…", PickImage)))
@@ -166,12 +166,12 @@ internal sealed class SettingsWindow : Form
                 }));
         var backgroundTiles = Enum.GetValues<CurtainBackground>()
             .Select(b => new BackgroundTile(b, theme) { Checked = b == Settings.Current.CurtainBackground }).ToList();
-        v.Section("遮罩背景", () => "壁纸和模糊壁纸用当前的桌面壁纸；星空、远山、碳纤维是程序画的。下次显示遮罩时生效。")
+        v.Section("幕布背景", () => "壁纸和模糊壁纸用当前的桌面壁纸；星空、远山、碳纤维是程序画的。下次显示幕布时生效。")
             .Tiles(backgroundTiles);
         _ = LoadThumbnailsAsync(backgroundTiles);
         var titleBox = CurtainTextBox(v, "标题", Settings.Current.CurtainTitle, text => Settings.Update(s => s.CurtainTitle = text));
         var subtitleBox = CurtainTextBox(v, "提示", Settings.Current.CurtainSubtitle, text => Settings.Update(s => s.CurtainSubtitle = text));
-        v.Section("遮罩文字", () => "显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示遮罩时生效。")
+        v.Section("幕布文字", () => "显示在图案下面，太长会自动换行。留空就不显示这一行。下次显示幕布时生效。")
             .Controls("标题", null, titleBox)
             .Controls("提示", null, subtitleBox)
             .Only(() => Settings.Current.CurtainTitle != Settings.DefaultCurtainTitle
@@ -230,11 +230,11 @@ internal sealed class SettingsWindow : Form
     void BuildAway(PageView v)
     {
         v.Section("防休眠", () => "关掉「屏幕常亮」后只阻止系统休眠，屏幕可以熄灭；熄屏后要不要重新登录，看系统的登录选项和屏幕保护程序设置。"
-                               + "亮度只对笔记本内置屏有效，撤掉遮罩时恢复。设置在下次进入离开模式时生效。")
+                               + "亮度只对笔记本内置屏有效，撤掉幕布时恢复。设置在下次进入离开模式时生效。")
             .Toggle("屏幕常亮", () => Settings.Current.AwayKeepDisplayOn, on => Settings.Update(s => s.AwayKeepDisplayOn = on))
             .Toggle("亮度调到最低", () => Settings.Current.AwayDimBrightness, on => Settings.Update(s => s.AwayDimBrightness = on));
-        v.Section("离开模式", () => "遮罩期间你的按键和点击会被吞掉，不会传给下层的程序；agent 的合成输入照常穿透。")
-            .Value("回来时", "碰一下键盘或鼠标：先锁屏，再撤掉遮罩")
+        v.Section("离开模式", () => "幕布期间你的按键和点击会被吞掉，不会传给下层的程序；agent 的合成输入照常穿透。")
+            .Value("回来时", "碰一下键盘或鼠标：先锁屏，再撤掉幕布")
             .Button("立即进入离开模式", enterAway);
     }
 
@@ -247,9 +247,9 @@ internal sealed class SettingsWindow : Form
         foreach (var (cmd, what) in new[]
         {
             ("away", "进入离开模式（App 没运行时会先拉起）"),
-            ("hide", "撤掉遮罩；离开模式下先锁屏再撤"),
+            ("hide", "撤掉幕布；离开模式下先锁屏再撤"),
             ("status", "查询状态，输出一行 JSON"),
-            ("preview", "显示预览遮罩"),
+            ("preview", "显示预览幕布"),
             ("settings", "打开这个窗口"),
         })
             section.Command($"--send {cmd}", what);

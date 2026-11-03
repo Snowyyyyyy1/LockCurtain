@@ -15,7 +15,7 @@ ShowInstDetails show
 
 !define MUI_ICON "LockCurtain/LockCurtain.ico"
 !define MUI_FINISHPAGE_TITLE "LockCurtain 已安装"
-!define MUI_FINISHPAGE_TEXT "已装到 C:\Program Files\LockCurtain，并在登录时以最高权限自动启动。"
+!define MUI_FINISHPAGE_TEXT "已装到 C:\Program Files\LockCurtain。以后每次登录 Windows 都会自动启动。"
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "SimpChinese"
@@ -50,7 +50,9 @@ Section "Install"
   SetOutPath "$TEMP"
   RMDir /r "$TEMP\LockCurtainSetup"
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "安装失败（PowerShell 退出码 $0）。请把安装窗口里的红色错误截图发来。"
+    ; 退出码只写进细节日志，不给人看；NSIS 的 MessageBox 不能改标题栏，直接调 MessageBoxW（0x10 = MB_ICONERROR）
+    DetailPrint "install.ps1 退出码 $0"
+    System::Call 'user32::MessageBoxW(p $HWNDPARENT, w "点「显示细节」，把里面红色的那几行截图，发到 GitHub 上的 Issues。", w "安装没成功", i 0x10) i'
     Abort
   ${EndIf}
 SectionEnd

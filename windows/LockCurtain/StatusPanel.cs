@@ -171,7 +171,7 @@ internal sealed class StatusPanel : Form
     void Build(PageView v, List<BlockerRow> rows)
     {
         var away = v.MakeButton("进入离开模式", () => Run(enterAway), prominent: true);
-        var look = v.MakeButton("预览遮罩", () => Run(preview));
+        var look = v.MakeButton("预览幕布", () => Run(preview));
         away.Enabled = look.Enabled = idle;
         var gear = new IconButton("\uE713", "设置…") { Font = v.BodyFont };   // Segoe Fluent Icons 的齿轮
         gear.Click += (_, _) => Run(openSettings);
@@ -198,7 +198,7 @@ internal sealed class StatusPanel : Form
         {
             Button? start = null;
             start = v.MakeButton("开始", () => ShowKeepAwakeMenu(start!));
-            card.Controls("保持唤醒", "不盖遮罩，只让电脑不睡；屏幕照样会熄灭", start);
+            card.Controls("保持唤醒", "不盖幕布，只让电脑不睡；屏幕照样会熄灭", start);
         }
 
         foreach (var r in rows)

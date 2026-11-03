@@ -238,7 +238,7 @@ internal sealed class OverlayController
             // 锁屏界面在安全桌面上，遮罩盖不上去；现在盖上，解锁回来的人一碰又锁屏
             case "away" or "preview" when Session.IsLocked():
                 return new() { ["ok"] = false, ["running"] = true, ["locked"] = true,
-                               ["error"] = "会话已锁屏，遮罩盖不到锁屏界面上；解锁后再发" };
+                               ["error"] = "会话已锁屏，幕布盖不到锁屏界面上；解锁后再发" };
             case "away": Show(CurtainMode.Away); break;
             case "preview": Show(CurtainMode.Preview); break;
             case "hide": await SafeHide(); break;

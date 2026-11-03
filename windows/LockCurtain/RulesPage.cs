@@ -18,7 +18,7 @@ internal static class RulesPage
     public static void Build(PageView v, RuleStore store, IWin32Window owner)
     {
         var list = v.Section("自动进入离开模式", () =>
-            "一条规则里开着的条件全部满足时，进入离开模式，并且只在「刚满足」的那一刻触发一次：你回来撤掉遮罩后，"
+            "一条规则里开着的条件全部满足时，进入离开模式，并且只在「刚满足」的那一刻触发一次：你回来撤掉幕布后，"
             + "要等条件先不成立、再次成立，才会再触发。锁屏期间不触发。");
         if (store.Rules.Count == 0) list.Text("还没有规则。");
         foreach (var rule in store.Rules)

@@ -132,11 +132,11 @@ internal sealed class PairingForm : Form
                 break;
             case PhonePhase.BluetoothOff:
                 Show(headline, "蓝牙没开");
-                Show(detail, "配对要用蓝牙。在 Windows 设置 → 蓝牙和设备 里打开蓝牙，这里会接着显示配对码。");
+                Show(detail, "配对要用蓝牙。到 Windows 设置里的「蓝牙和其他设备」打开蓝牙，回来看，配对码就在这儿。");
                 break;
             case PhonePhase.Unsupported:
                 Show(headline, "这台电脑的蓝牙用不了");
-                Show(detail, "配对手机要用支持低功耗蓝牙的蓝牙适配器。");
+                Show(detail, "配对手机要支持低功耗蓝牙的蓝牙适配器（蓝牙 4.0 以上），这台电脑上的不行。");
                 break;
             case PhonePhase.Revoked:
                 Show(headline, "已经撤销了。");

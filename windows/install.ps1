@@ -95,5 +95,5 @@ $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) 
 Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 Start-ScheduledTask -TaskName $task
 
-"已安装到 $exe，$($me.Name) 登录时以最高权限启动，现在已经在运行。"
+"已安装到 $ctl；已设为登录时启动；现在正在运行。"
 "给 agent 用的命令：& `"$ctl`" away"
