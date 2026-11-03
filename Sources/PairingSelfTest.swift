@@ -938,5 +938,41 @@ enum ReconnectTests {
         expect(known.filter { $0.phoneID == phoneA }.map(\.identifier) == [i3, i2], "记得的标识：再认出来挪到最新")
         expect(KnownPeripherals.parse(KnownPeripherals.encode(known)) == known, "记得的标识：存了再读一样")
         expect(KnownPeripherals.forget(known, phoneID: phoneA).allSatisfy { $0.phoneID != phoneA }, "记得的标识：撤销的手机删掉")
+
+        // 扫到就连：退避中同一个标识每 30 秒最多连一次；不在退避里照常马上连
+        var limiter = DiscoveryConnectLimiter<UUID>()
+        let p = UUID(), q = UUID()
+        expect((0..<20).allSatisfy { limiter.allow(p, holding: false, at: t0.addingTimeInterval(Double($0) * 0.1)) },
+               "扫到就连：不在退避里，每次扫到都马上连")
+        expect(limiter.allow(p, holding: true, at: t0), "扫到就连：退避开始后第一次扫到马上连")
+        // 每 0.1 秒报一次广播、连了就早断：60 秒里只连得上 2 次
+        var connects = 1
+        for k in 1..<600 where limiter.allow(p, holding: true, at: t0.addingTimeInterval(Double(k) * 0.1)) { connects += 1 }
+        expect(connects == 2, "扫到就连：退避中 60 秒里同一个标识最多连 2 次（不打转），实际 \(connects)")
+        expect(limiter.allow(q, holding: true, at: t0.addingTimeInterval(1)), "扫到就连：别的标识不受影响")
+        expect(!limiter.allow(p, holding: true, at: t0.addingTimeInterval(59)) && limiter.remaining(p, at: t0.addingTimeInterval(59)) > 0,
+               "扫到就连：新的退避开始也不放开（不然每次早断都能马上再连）")
+        limiter.succeeded(p)
+        expect(limiter.allow(p, holding: true, at: t0.addingTimeInterval(59.5)), "扫到就连：订阅 / 认出身份以后清掉")
+
+        // 挂起的连接：60 秒还没连上就重挂；扫到它在广播却还在连 10 秒以上也重挂
+        expect(!PendingConnectPolicy.isStale(pendingSince: t0, discovered: false, at: t0.addingTimeInterval(59)),
+               "挂起的连接：不到 60 秒不动")
+        expect(PendingConnectPolicy.isStale(pendingSince: t0, discovered: false, at: t0.addingTimeInterval(61)),
+               "挂起的连接：超过 60 秒取消重挂")
+        expect(!PendingConnectPolicy.isStale(pendingSince: t0, discovered: true, at: t0.addingTimeInterval(9))
+               && PendingConnectPolicy.isStale(pendingSince: t0, discovered: true, at: t0.addingTimeInterval(11)),
+               "挂起的连接：扫到在广播、卡在连超过 10 秒就重挂")
+
+        // 日志去重：没变的每分钟最多一行，变了马上写
+        var throttle = LogThrottle()
+        var written = 0
+        for k in 0..<60 where throttle.shouldLog("rssi", value: "-60", at: t0.addingTimeInterval(Double(k) * 2), every: 60) { written += 1 }
+        expect(written == 2, "日志：每 2 秒一样的 RSSI，2 分钟只写 2 行，实际 \(written)")
+        expect(throttle.shouldLog("rssi", value: "-61", at: t0.addingTimeInterval(121), every: 60), "日志：值变了马上写")
+        expect(throttle.changed("health", value: "a") && !throttle.changed("health", value: "a") && throttle.changed("health", value: "b"),
+               "日志：健康检查只在状态变了时写")
+        expect(!LogRotation.needsRotation(size: 2 * 1024 * 1024 - 1) && LogRotation.needsRotation(size: 2 * 1024 * 1024),
+               "日志：满 2 MB 轮转")
     }
 }

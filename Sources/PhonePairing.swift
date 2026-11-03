@@ -23,13 +23,18 @@
 //     只给这个标识退避一下。
 //   * 订阅上了 30 秒还不用签名命令表明身份：断开，这个标识暂时不理（30 s → … → 5 min），到点自动放出来。
 //   * 配过、蓝牙开着、没连上时扫描一直开着（允许重复上报）：退避只拉开挂起式连接的失败重试，
-//     一扫到手机的服务（手机 App 刚重新打开 / 手机重启后打开 App）就马上连、退避清零。App 一启动就扫、就连，不等。
+//     一扫到手机的服务（手机 App 刚重新打开 / 手机重启后打开 App）就马上连。App 一启动就扫、就连，不等。
+//     退避中扫到：第一次马上连，之后同一个标识每 30 秒最多连一次（每个广播包都会报一次，连上就断时不能打转）；
+//     早断计数只在订阅成功时清零（唤醒 / 蓝牙重新打开也清），扫到不清。
+//   * 挂起的 connect() 系统不会超时：挂了 60 秒还没连上、或扫到它在广播却还卡在连 10 秒以上，取消重挂；
+//     唤醒 / 蓝牙重新打开时挂着的全部取消重挂。
 //   * 健康检查：每 30 秒，配过、蓝牙开着、没有认过身份的手机连着时，把记得的标识（退避中的除外）重新挂上连接、
 //     确保在扫、放出到点的标识。系统唤醒（NSWorkspace.didWake / screensDidWake）也会重新挂。
 //   * 记得的标识按手机记（每台最近 2 个）；一台手机认过身份，它别的没认身份的连接悄悄断掉（不拉黑）。
 //   * 服务变了（didModifyServices）、发件箱退订、连续 3 次写失败：主动断开，交给正常重连。
 //
-// 日志：/tmp/lockcurtain-ble.log，每步一行。不写码、不写钥匙。
+// 日志：/tmp/lockcurtain-ble.log，每步一行；反复出现的（健康检查 / 退避 / RSSI / 问询）只在状态变了时写、或每分钟最多一行。
+// 满 2 MB 轮转成 .log.1（只留一个）。不写码、不写钥匙。
 // CBCentralManager 的回调都投递到 main 队列，所以这里的 @Published 永远在主线程上改。
 
 import AppKit
@@ -90,6 +95,11 @@ final class PhonePairing: NSObject, ObservableObject {
     private var earlyDropResume: DispatchWorkItem?
     /// 认得的标识各自的退避（手机 App 没在跑）
     private var identifierBackoff: [UUID: ReconnectBackoff] = [:]
+    /// 退避中扫到手机：第一次马上连，之后同一个标识每 30 秒最多连一次（订阅 / 认出身份才清）
+    private var discoveryLimiter = DiscoveryConnectLimiter<UUID>()
+    /// 健康检查 / 退避 / RSSI / 问询这些反复出现的日志：只在状态变了时写，或者每分钟最多一行
+    private var logThrottle = LogThrottle()
+    private static let repeatLogEvery: TimeInterval = 60
     private var rssiTimer: Timer?
     private var healthTimer: Timer?
     /// 这次扫描里已经写过日志的标识（允许重复上报，不每包都写一行）
@@ -122,6 +132,10 @@ final class PhonePairing: NSObject, ObservableObject {
         var serviceMissing = false
         /// 我们自己悄悄断的（重复连接 / 服务变了…）：断开时不算早断
         var quietCancel = false
+        /// connect() 发出去、还没连上的时刻（系统不会让它超时，我们自己看）
+        var pendingSince: Date?
+        /// 卡住的挂起连接取消后马上重挂：被取消的那次如果再报一次断开 / 连不上，不理它（连上或用掉一次就清）
+        var ignoreStaleDisconnect = false
         init(_ peripheral: CBPeripheral) { self.peripheral = peripheral }
     }
     private var peers: [UUID: Peer] = [:]
@@ -258,7 +272,12 @@ final class PhonePairing: NSObject, ObservableObject {
         guard let central, central.state == .poweredOn, shouldRun else { return }
         if fresh {
             identifierBackoff.removeAll()
+            discoveryLimiter.removeAll()
             resetEarlyDrops(reason: "fresh resume")
+            // 唤醒 / 蓝牙重新打开：之前挂着的连接多半已经卡死了，全都取消重挂
+            for peer in peers.values where peer.connectedAt == nil && peer.pendingSince != nil {
+                reissuePending(peer, why: "fresh resume")
+            }
         }
         if holdingAfterEarlyDrops {
             Self.log("backoff: early-drop hold, \(Int(earlyDrops.remaining(at: Date())))s left; scanning only, no pending reconnects yet")
@@ -290,7 +309,11 @@ final class PhonePairing: NSObject, ObservableObject {
             }
             connect(peripheral, reason: reason)
         }
-        if !skipped.isEmpty { Self.log("backoff: not re-pending \(skipped.joined(separator: ", "))") }
+        // 剩几秒每次都不一样：按「跳过了哪些」去重，变了才写
+        let skippedKey = skipped.map { $0.components(separatedBy: " (").first ?? $0 }.joined(separator: ",")
+        if logThrottle.changed("pendKnown.skipped", value: skippedKey), !skipped.isEmpty {
+            Self.log("backoff: not re-pending \(skipped.joined(separator: ", "))")
+        }
     }
 
     private func startScan() {
@@ -312,7 +335,40 @@ final class PhonePairing: NSObject, ObservableObject {
         peripheral.delegate = self
         guard peripheral.state == .disconnected else { return }
         Self.log("connect requested \(peripheral.identifier.uuidString) (\(reason))")
+        peer.pendingSince = Date()
         central.connect(peripheral, options: nil)
+    }
+
+    /// 挂起的连接卡住了：取消、马上重挂（换一个新的 Peer；被取消的那次再报断开就不理）
+    private func reissuePending(_ peer: Peer, why: String) {
+        guard let central else { return }
+        let peripheral = peer.peripheral
+        let id = peripheral.identifier
+        let age = peer.pendingSince.map { Int(Date().timeIntervalSince($0)) } ?? 0
+        // 手机不在附近时每分钟都会重挂一次：同样的原因每 10 分钟最多写一行
+        if logThrottle.shouldLog("reissue.\(id)", value: why, at: Date(), every: Self.repeatLogEvery * 10) {
+            Self.log("re-issuing pending connect \(id.uuidString) (pending \(age)s): \(why)")
+        }
+        central.cancelPeripheralConnection(peripheral)
+        let fresh = Peer(peripheral)
+        fresh.ignoreStaleDisconnect = true
+        fresh.pendingSince = Date()
+        peers[id] = fresh
+        peripheral.delegate = self
+        central.connect(peripheral, options: nil)
+        // 标记一直留到连上或者用掉为止（系统取消挂起的连接时不一定回调）；
+        // 万一吃掉的是新这次的失败，ignoreStaleCallback 看到没在连会再挂一次，不会漏
+    }
+
+    /// 挂着太久的连接（健康检查 / 扫到它在广播时看）
+    private func reissueStalePending(onlyFor id: UUID? = nil, discovered: Bool) {
+        let now = Date()
+        for peer in Array(peers.values) where peer.connectedAt == nil {
+            guard let since = peer.pendingSince else { continue }
+            if let id, peer.peripheral.identifier != id { continue }
+            guard PendingConnectPolicy.isStale(pendingSince: since, discovered: discovered, at: now) else { continue }
+            reissuePending(peer, why: discovered ? "advertising, but connect still pending" : "connect pending too long")
+        }
     }
 
     private func knownEntries() -> [KnownPeripherals.Entry] {
@@ -368,15 +424,25 @@ final class PhonePairing: NSObject, ObservableObject {
         if !released.isEmpty {
             Self.log("health: ignore expired for \(released.map(\.uuidString).joined(separator: ", "))")
         }
+        if let central, central.state == .poweredOn { reissueStalePending(discovered: false) }
         guard let central, central.state == .poweredOn, wantsBluetooth, isPaired, !stoppedAfterEarlyDrops,
-              !peers.values.contains(where: { $0.phoneID != nil }) else { return }
+              !peers.values.contains(where: { $0.phoneID != nil }) else {
+            _ = logThrottle.changed("health", value: "idle")
+            return
+        }
+        // 每 30 秒都跑，但日志只在状态变了时写一行
         if holdingAfterEarlyDrops {
-            Self.log("health: early-drop hold, \(Int(earlyDrops.remaining(at: now)))s left; scanning only")
+            if logThrottle.changed("health", value: "hold") {
+                Self.log("health: early-drop hold, \(Int(earlyDrops.remaining(at: now)))s left; scanning only")
+            }
             startScan()
             return
         }
         if !released.isEmpty { seenThisScan.subtract(released) }
-        Self.log("health: paired, no identified phone; re-pending known identifiers, scanner \(central.isScanning ? "on" : "restarting")")
+        let scanner = central.isScanning ? "on" : "restarting"
+        if logThrottle.changed("health", value: "repend.\(scanner)") {
+            Self.log("health: paired, no identified phone; re-pending known identifiers, scanner \(scanner)")
+        }
         pendKnown(reason: "pending reconnect to known phone (health check)", bypassIgnore: false)
         startScan()
     }
@@ -500,7 +566,9 @@ final class PhonePairing: NSObject, ObservableObject {
         guard curtainClosed, let id = peer.phoneID, peer.subscribed, peer.inbox != nil else { return }
         // 上一条还没写完（手机没回执）就不再堆
         guard peer.writeQueue.isEmpty, !peer.writing else {
-            Self.log("lift: poll skipped for \(id.uuidString): previous write still pending")
+            if logThrottle.shouldLog("poll.\(id)", value: "skipped", at: Date(), every: Self.repeatLogEvery) {
+                Self.log("lift: poll skipped for \(id.uuidString): previous write still pending")
+            }
             return
         }
         let nonce = PairingCrypto.makeNonce()
@@ -508,7 +576,9 @@ final class PhonePairing: NSObject, ObservableObject {
         var gate = gate(for: id)
         gate.issue(nonce, at: Date())
         gates[id] = gate
-        Self.log("lift: poll sent to \(id.uuidString) nonce \(Self.short(nonce))")
+        if logThrottle.shouldLog("poll.\(id)", value: "sent", at: Date(), every: Self.repeatLogEvery) {
+            Self.log("lift: poll sent to \(id.uuidString) nonce \(Self.short(nonce)) (logged at most once a minute)")
+        }
         send(message, to: peer)
     }
 
@@ -534,7 +604,10 @@ final class PhonePairing: NSObject, ObservableObject {
             case .locked: word = "locked"
             case .off: word = "off"
             }
-            Self.log("lift: presence from \(id.uuidString): \(word), nonce \(Self.short(answer.nonce)), counter \(answer.counter), \(rssiText)")
+            // 每 2 秒一条：手机的状态变了才写，没变每分钟最多一行
+            if logThrottle.shouldLog("presence.\(id)", value: word, at: now, every: Self.repeatLogEvery) {
+                Self.log("lift: presence from \(id.uuidString): \(word), nonce \(Self.short(answer.nonce)), counter \(answer.counter), \(rssiText)")
+            }
             decision = gate.presence(status, nonce: answer.nonce, at: now)
             if !wasArmed && gate.edgeArmed {
                 Self.log("lift: edge armed for \(id.uuidString) (locked seen after cover)")
@@ -553,7 +626,10 @@ final class PhonePairing: NSObject, ObservableObject {
             if let reply = authority.liftResultMessage(.lifted, counter: answer.counter, for: id) { send(reply, to: peer) }
             onLift?()
         case .refuse(let why):
-            Self.log("lift: \(label): refused, \(Self.describe(why))")
+            let reason = Self.describe(why)
+            if isLiftNow || logThrottle.shouldLog("refuse.\(id)", value: reason, at: now, every: Self.repeatLogEvery) {
+                Self.log("lift: \(label): refused, \(reason)")
+            }
             if isLiftNow {
                 let status = LiftGate.resultStatus(for: why)
                 if let reply = authority.liftResultMessage(status, counter: answer.counter, for: id) { send(reply, to: peer) }
@@ -612,6 +688,7 @@ final class PhonePairing: NSObject, ObservableObject {
         let id = peer.peripheral.identifier
         ignored.forgive(id)
         identifierBackoff[id] = nil
+        discoveryLimiter.succeeded(id)
         let known = knownEntries()
         for other in peers.values where other !== peer && other.phoneID == nil && !other.quietCancel {
             guard KnownPeripherals.phoneID(of: other.peripheral.identifier, in: known) == phoneID else { continue }
@@ -651,17 +728,7 @@ final class PhonePairing: NSObject, ObservableObject {
 
     /// 蓝牙这条链路上的每个事件都写一行，卡住时不用猜是物理连接、GATT，还是消息没过来
     static func log(_ text: String) {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
-        let line = "[\(formatter.string(from: Date()))] \(text)\n"
-        let path = "/tmp/lockcurtain-ble.log"
-        if let handle = FileHandle(forWritingAtPath: path) {
-            handle.seekToEndOfFile()
-            handle.write(Data(line.utf8))
-            try? handle.close()
-        } else {
-            try? line.write(toFile: path, atomically: true, encoding: .utf8)
-        }
+        BLELogFile.shared.write(text)
         NSLog("LockCurtain BLE: %@", text)
     }
 }
@@ -696,23 +763,31 @@ extension PhonePairing: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let id = peripheral.identifier
-        // 允许重复上报：已经在连 / 连着的不再管，也不每包写一行
-        guard peers[id] == nil else { return }
+        // 允许重复上报：已经连着的不再管；还挂着没连上的，它都在广播了还卡着就重挂
+        if peers[id] != nil {
+            if shouldRun { reissueStalePending(onlyFor: id, discovered: true) }
+            return
+        }
         let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name ?? "(no name)"
         let firstThisScan = seenThisScan.insert(id).inserted
         guard shouldRun else { return }
-        if ignored.contains(id, at: Date()) {
+        let now = Date()
+        if ignored.contains(id, at: now) {
             if firstThisScan { Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI) (ignored for now)") }
             return
         }
-        Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI)")
-        // 手机在广播我们的服务（App 在跑）：这个标识和早断的退避都清零，马上连
-        if identifierBackoff.removeValue(forKey: id) != nil {
-            Self.log("backoff: \(id.uuidString) advertising again; identifier backoff reset")
+        // 手机在广播我们的服务（App 在跑）：马上连。退避中（早断 / 这个标识没服务）也是第一次扫到马上连，
+        // 之后同一个标识每 30 秒最多一次——每个广播包都报一次，连上就断的话不能每包都连。
+        // 早断计数只在订阅 / 认出身份成功时才清零
+        let holding = holdingAfterEarlyDrops || (identifierBackoff[id]?.holding(at: now) ?? false)
+        guard discoveryLimiter.allow(id, holding: holding, at: now) else {
+            if logThrottle.shouldLog("discover.hold.\(id)", value: "held", at: now, every: Self.repeatLogEvery) {
+                Self.log("backoff: \(id.uuidString) discovered during backoff; next connect in \(Int(discoveryLimiter.remaining(id, at: now)))s")
+            }
+            return
         }
-        // （只在配过对时：没配过时早断 5 次的硬停照旧）
-        if isPaired, earlyDrops.drops > 0 { resetEarlyDrops(reason: "phone discovered by scan") }
-        connect(peripheral, reason: "discovered by scan")
+        Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI)\(holding ? " (during backoff: at most one connect per \(Int(DiscoveryConnectLimiter<UUID>.interval))s)" : "")")
+        connect(peripheral, reason: holding ? "discovered by scan during backoff" : "discovered by scan")
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -720,6 +795,8 @@ extension PhonePairing: CBCentralManagerDelegate {
         let peer = peers[peripheral.identifier] ?? Peer(peripheral)
         peers[peripheral.identifier] = peer
         peer.connectedAt = Date()
+        peer.pendingSince = nil
+        peer.ignoreStaleDisconnect = false
         peripheral.delegate = self
         // 同一台手机已经在别的标识上认过身份：这条是重复的，悄悄断掉（不拉黑）
         if let phone = KnownPeripherals.phoneID(of: peripheral.identifier, in: knownEntries()),
@@ -733,12 +810,26 @@ extension PhonePairing: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        if ignoreStaleCallback(for: peripheral, what: "connect failure") { return }
         Self.log("failed to connect \(peripheral.identifier.uuidString): \(error?.localizedDescription ?? "no error")")
         peers[peripheral.identifier] = nil
         startScan()
     }
 
+    /// 重挂的那次之前被取消的连接又报了一次：不理；要是重挂被它吃掉了（又成了没在连），再挂一次
+    private func ignoreStaleCallback(for peripheral: CBPeripheral, what: String) -> Bool {
+        guard let peer = peers[peripheral.identifier], peer.ignoreStaleDisconnect, peer.connectedAt == nil else { return false }
+        peer.ignoreStaleDisconnect = false
+        Self.log("ignoring \(what) for \(peripheral.identifier.uuidString) from the cancelled pending connect")
+        if peripheral.state == .disconnected, let central {
+            peer.pendingSince = Date()
+            central.connect(peripheral, options: nil)
+        }
+        return true
+    }
+
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        if ignoreStaleCallback(for: peripheral, what: "disconnect") { return }
         let id = peripheral.identifier
         let peer = peers[id]
         let wasReady = peer?.subscribed ?? false
@@ -835,6 +926,7 @@ extension PhonePairing: CBPeripheralDelegate {
         Self.log("\(characteristic.isNotifying ? "subscribed" : "unsubscribed") outbox on \(peripheral.identifier.uuidString)")
         if characteristic.isNotifying {
             resetEarlyDrops(reason: "subscribed")
+            discoveryLimiter.succeeded(peripheral.identifier)
             // 计时从订阅上开始（不是从连上开始）：手机后台时表明身份要好几秒
             if !wasSubscribed, !windowOpen { scheduleIdentifyCheck(peer) }
         } else if peripheral.state == .connected {
@@ -876,15 +968,68 @@ extension PhonePairing: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+        let rid = peripheral.identifier.uuidString
         if let error {
-            Self.log("rssi \(peripheral.identifier.uuidString) read failed: \(error.localizedDescription)")
+            if logThrottle.shouldLog("rssi.\(rid)", value: "failed", at: Date(), every: Self.repeatLogEvery) {
+                Self.log("rssi \(rid) read failed: \(error.localizedDescription)")
+            }
         } else {
-            Self.log("rssi \(peripheral.identifier.uuidString) \(RSSI)")
+            // 每 2 秒读一次：每分钟最多写一行
+            if logThrottle.shouldLog("rssi.\(rid)", value: "ok", at: Date(), every: Self.repeatLogEvery) {
+                Self.log("rssi \(rid) \(RSSI) (logged at most once a minute)")
+            }
             if let id = peers[peripheral.identifier]?.phoneID {
                 var gate = gate(for: id)
                 gate.recordRSSI(RSSI.intValue, at: Date())
                 gates[id] = gate
             }
         }
+    }
+}
+
+/// /tmp/lockcurtain-ble.log：一个 DateFormatter、一个一直开着的 FileHandle；满 2 MB 改名成 .1（只留一个）重新开
+final class BLELogFile: @unchecked Sendable {
+    static let shared = BLELogFile(path: "/tmp/lockcurtain-ble.log")
+
+    private let path: String
+    private let lock = NSLock()
+    private let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
+        return f
+    }()
+    private var handle: FileHandle?
+    private var size: UInt64 = 0
+
+    init(path: String) { self.path = path }
+
+    func write(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let line = Data("[\(formatter.string(from: Date()))] \(text)\n".utf8)
+        // 有人把日志删了（想从头看）：重新开一个，别往删掉的文件里写
+        if handle == nil || !FileManager.default.fileExists(atPath: path) {
+            try? handle?.close()
+            open()
+        }
+        if LogRotation.needsRotation(size: size) {
+            try? handle?.close()
+            handle = nil
+            let old = path + ".1"
+            try? FileManager.default.removeItem(atPath: old)
+            try? FileManager.default.moveItem(atPath: path, toPath: old)
+            open()
+        }
+        guard let handle else { return }
+        handle.write(line)
+        size += UInt64(line.count)
+    }
+
+    private func open() {
+        if !FileManager.default.fileExists(atPath: path) {
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        handle = FileHandle(forWritingAtPath: path)
+        size = (try? handle?.seekToEnd()) ?? 0
     }
 }

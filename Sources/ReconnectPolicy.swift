@@ -2,7 +2,8 @@
 //
 // 不变式（三端一样）：配过对 + 蓝牙开着 + 没连上 ⇒ 总有东西在一直重试，只是间隔翻倍、最长 5 分钟；
 // 配过对时没有任何「永久停手」。只有「没配过、开着配对窗口」时，连续早断 5 次还是硬停（等重新打开窗口）。
-// 退避只拉开「失败的连接尝试」之间的间隔：电脑这边扫描一直开着，一扫到手机（比如手机 App 刚重新打开）就马上连、退避清零。
+// 退避只拉开「失败的连接尝试」之间的间隔：电脑这边扫描一直开着，一扫到手机（比如手机 App 刚重新打开）就马上连；
+// 退避中扫到也是第一次马上连，之后同一个标识每 30 秒最多一次（DiscoveryConnectLimiter）。手机那边从不停广播。
 //
 //   * ReconnectBackoff：第 k 次退避等 base·2^k，封顶 cap
 //   * EarlyDropPolicy：连上了却在订阅好之前就断（早断）。没配过：第 5 次硬停；配过：从第 5 次起退避
@@ -219,4 +220,72 @@ enum KnownPeripherals {
     static func phoneID(of identifier: UUID, in entries: [Entry]) -> UUID? {
         entries.first { $0.identifier == identifier }?.phoneID
     }
+}
+
+/// 扫描允许重复上报：同一台手机每个广播包都会报一次。退避中（早断退避 / 这个标识的退避）扫到它：
+/// 第一次马上连（手机 App 刚打开就是这样），之后同一个标识每 interval 最多连一次，免得「连上就断、断了马上又连」打转。
+/// 只有订阅 / 认出身份成功才清掉（新的退避开始不清，不然每次早断都能马上再连）。
+struct DiscoveryConnectLimiter<Key: Hashable> {
+    static var interval: TimeInterval { 30 }
+    private var lastConnect: [Key: Date] = [:]
+
+    init() {}
+
+    /// 扫到了 key：现在能不能连。holding = 正在退避里
+    mutating func allow(_ key: Key, holding: Bool, at now: Date) -> Bool {
+        guard holding else { return true }
+        if let last = lastConnect[key], now.timeIntervalSince(last) < Self.interval { return false }
+        lastConnect[key] = now
+        return true
+    }
+
+    func remaining(_ key: Key, at now: Date) -> TimeInterval {
+        guard let last = lastConnect[key] else { return 0 }
+        return max(0, Self.interval - now.timeIntervalSince(last))
+    }
+
+    /// 订阅 / 认出身份成功
+    mutating func succeeded(_ key: Key) { lastConnect[key] = nil }
+    mutating func removeAll() { lastConnect.removeAll() }
+}
+
+/// 挂起的 connect() 系统不会让它超时：卡住了（蓝牙栈的毛病）就一直卡着，而 pendKnown / 健康检查 / 扫描都跳过已经在连的标识。
+/// 挂了太久，或者扫到它正在广播、却还卡在「在连」：取消、重新连。
+enum PendingConnectPolicy {
+    /// 挂起这么久还没连上：重挂一次
+    static let maxPending: TimeInterval = 60
+    /// 扫到它在广播（就在附近、App 在跑），却还在连超过这么久：重挂
+    static let maxPendingWhileAdvertising: TimeInterval = 10
+
+    static func isStale(pendingSince: Date, discovered: Bool, at now: Date) -> Bool {
+        let age = now.timeIntervalSince(pendingSince)
+        return age > (discovered ? maxPendingWhileAdvertising : maxPending)
+    }
+}
+
+/// 日志去重：同一个 key 的内容没变就每 every 秒最多写一次；变了马上写
+struct LogThrottle {
+    private var last: [String: (value: String, at: Date)] = [:]
+
+    init() {}
+
+    mutating func shouldLog(_ key: String, value: String, at now: Date, every: TimeInterval) -> Bool {
+        if let prev = last[key], prev.value == value, now.timeIntervalSince(prev.at) < every { return false }
+        last[key] = (value, now)
+        return true
+    }
+
+    /// 只在内容变了时写（不按时间补写）
+    mutating func changed(_ key: String, value: String) -> Bool {
+        if let prev = last[key], prev.value == value { return false }
+        last[key] = (value, Date())
+        return true
+    }
+}
+
+/// 日志文件太大就轮转：超过 maxBytes 改名成 .1（覆盖旧的 .1），重新开一个
+enum LogRotation {
+    static let maxBytes: UInt64 = 2 * 1024 * 1024
+
+    static func needsRotation(size: UInt64) -> Bool { size >= maxBytes }
 }
