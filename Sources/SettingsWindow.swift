@@ -221,7 +221,7 @@ private struct GeneralPane: View {
                 }
             }
             Section {
-                Toggle("锁屏时显示幕布", isOn: $curtainOnLock)
+                Toggle("锁屏时也盖上幕布", isOn: $curtainOnLock)
             } header: {
                 Text("锁屏")
             } footer: {
