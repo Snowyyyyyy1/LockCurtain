@@ -21,7 +21,12 @@
 //     写一行 "stopped after 5 early drops"，等配对窗口重新打开；配过手机时从第 5 次起只是退避
 //     （30 s → 60 s → … → 5 min），到点自己接着连。认得的外设报「service not found」（手机 App 没在跑）不算早断，
 //     只给这个标识退避一下。
-//   * 订阅上了 30 秒还不用签名命令表明身份：断开，这个标识暂时不理（30 s → … → 5 min），到点自动放出来。
+//   * 订阅上了还不用签名命令表明身份（手机 App 没在跑时系统替它留着服务，连得上、订得上，只是没人回话）：
+//     认得的、配过对的手机 8 s 就断开，只静默 3 s → 5 s（封顶，不翻倍）再连，App 一打开几秒内就连上并认出身份；
+//     不认得的外设 30 s 才断，并暂时不理（30 s → … → 5 min，翻倍），到点自动放出来。见 ReconnectPolicy.swift 的 NoIdentifyPolicy。
+//     连上的手机里 App 重新启动（服务重建，didModifyServices）：马上断开、马上重连，不等扫描。
+//   * 认得的手机报「service not found」（App 在启动中 / 没开）：这个标识 3 s → 6 s → 12 s → … → 5 min 退避，扫到时的连接间隔跟着
+//     退避走（3/6/12 s，最长 15 s）；手机重新发布服务时清零。
 //   * 配过、蓝牙开着、没连上时扫描一直开着（允许重复上报）：退避只拉开挂起式连接的失败重试，
 //     一扫到手机的服务（手机 App 刚重新打开 / 手机重启后打开 App）就马上连。App 一启动就扫、就连，不等。
 //     退避中扫到：第一次马上连，之后同一个标识每 30 秒最多连一次（每个广播包都会报一次，连上就断时不能打转）；
@@ -119,17 +124,18 @@ final class PhonePairing: NSObject, ObservableObject {
     private static let legacyPairedKey = "phonePairing.pairedCentrals"
     /// 配过的手机的外设标识（不是秘密，只用来挂起式重连）。格式见 KnownPeripherals（ReconnectPolicy.swift）
     private static let knownPeripheralsKey = "phonePairing.knownPeripherals"
-    /// 窗口关着时，订阅上发件箱的手机这么久还没用签名命令表明身份，就断开、这个标识暂时不理（限时，见 TimedIgnoreList）
-    private static let identifyTimeout: TimeInterval = 30
+    /// 窗口关着时，订阅上发件箱的手机这么久还没用签名命令表明身份，就断开、这个标识暂时不理（限时，见 TimedIgnoreList）。
+    /// 认得 + 配过对的手机用短的（NoIdentifyPolicy.knownIdentifyTimeout）；这里是别的外设
+    private static let identifyTimeout: TimeInterval = NoIdentifyPolicy.otherIdentifyTimeout
     /// 连上了这么久还没订阅上发件箱（查服务 / 特征卡住了）：断开，交给正常重连
     private static let setupTimeout: TimeInterval = 30
     /// 健康检查的间隔
     private static let healthInterval: TimeInterval = 30
     /// 连续写失败这么多次：当链路死了，断开重连
     private static let maxWriteErrors = 3
-    /// 认得的标识上没找到服务（手机 App 没在跑）：这个标识的退避
-    private static let missingServiceBase: TimeInterval = 30
-    private static let missingServiceCap: TimeInterval = 300
+    /// 认得的标识上没找到服务（手机 App 没在跑 / 在启动中）：这个标识的退避（3 s 起翻倍，封顶 5 分钟）
+    private static let missingServiceBase = NoIdentifyPolicy.missingServiceBase
+    private static let missingServiceCap = NoIdentifyPolicy.missingServiceCap
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var code = ""
@@ -180,6 +186,8 @@ final class PhonePairing: NSObject, ObservableObject {
     private var earlyDropResume: DispatchWorkItem?
     /// 认得的标识各自的退避（手机 App 没在跑）
     private var identifierBackoff: [UUID: ReconnectBackoff] = [:]
+    /// 这个标识这一轮「没有服务」退避的时长（扫到时的连接间隔跟着它走）
+    private var lastMissingDelay: [UUID: TimeInterval] = [:]
     /// 退避中扫到手机：第一次马上连，之后同一个标识每 30 秒最多连一次（订阅 / 认出身份才清）
     private var discoveryLimiter = DiscoveryConnectLimiter<UUID>()
     /// 健康检查 / 退避 / RSSI / 问询这些反复出现的日志：只在状态变了时写，或者每分钟最多一行
@@ -207,6 +215,10 @@ final class PhonePairing: NSObject, ObservableObject {
         /// 验过签名命令之后才知道它是哪台手机
         var phoneID: UUID?
         var connectedAt: Date?
+        /// 这次连接是怎么来的、什么时候来的（日志：discovered→connected→identified 用）
+        var discoveredAt: Date?
+        var connectRequestedAt: Date?
+        var subscribedAt: Date?
         /// 待写的块，一块写完（有回执）再写下一块
         var writeQueue: [Data] = []
         var writing = false
@@ -228,6 +240,12 @@ final class PhonePairing: NSObject, ObservableObject {
     private(set) var handlingAwake = false
     /// 暂时不理的外设（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
     private var ignored = TimedIgnoreList<UUID>()
+    /// 认得的手机说不出身份后的短静默（3 s → 5 s 封顶）；到点自动放出来。不认得的外设走上面那份长的
+    private var knownHold: TimedIgnoreList<UUID> = NoIdentifyPolicy.makeKnownHoldList()
+
+    private func isIgnored(_ id: UUID, at now: Date) -> Bool {
+        ignored.contains(id, at: now) || knownHold.contains(id, at: now)
+    }
 
     /// store / defaults / networkPort / networkLoopbackOnly 只有自测会换（内存钥匙、独立的 UserDefaults、本机随机端口）
     init(store: PairingRecordStore = KeychainPairingStore(), defaults: UserDefaults = .standard,
@@ -316,6 +334,7 @@ final class PhonePairing: NSObject, ObservableObject {
         phase = .waiting
         codeInvalidated = false
         ignored.removeAll()
+        knownHold.removeAll()
         identifierBackoff.removeAll()
         if stoppedAfterEarlyDrops {
             Self.log("pairing window reopened: resuming after early-drop stop")
@@ -453,6 +472,7 @@ final class PhonePairing: NSObject, ObservableObject {
         if fresh {
             identifierBackoff.removeAll()
             discoveryLimiter.removeAll()
+            knownHold.removeAll()
             resetEarlyDrops(reason: "fresh resume")
             // 唤醒 / 蓝牙重新打开：之前挂着的连接多半已经卡死了，全都取消重挂
             for peer in peers.values where peer.connectedAt == nil && peer.pendingSince != nil {
@@ -483,7 +503,7 @@ final class PhonePairing: NSObject, ObservableObject {
                 skipped.append("\(id.uuidString) (no service, \(Int(backoff.remaining(at: now)))s left)")
                 continue
             }
-            if !bypassIgnore, ignored.contains(id, at: now) {
+            if !bypassIgnore, isIgnored(id, at: now) {
                 skipped.append("\(id.uuidString) (ignored)")
                 continue
             }
@@ -508,7 +528,7 @@ final class PhonePairing: NSObject, ObservableObject {
         Self.log("scan start (window \(windowOpen ? "open" : "closed"), paired \(isPaired))")
     }
 
-    private func connect(_ peripheral: CBPeripheral, reason: String) {
+    private func connect(_ peripheral: CBPeripheral, reason: String, discoveredAt: Date? = nil) {
         guard let central else { return }
         let peer = peers[peripheral.identifier] ?? Peer(peripheral)
         peers[peripheral.identifier] = peer
@@ -516,6 +536,8 @@ final class PhonePairing: NSObject, ObservableObject {
         guard peripheral.state == .disconnected else { return }
         Self.log("connect requested \(peripheral.identifier.uuidString) (\(reason))")
         peer.pendingSince = Date()
+        peer.connectRequestedAt = peer.pendingSince
+        peer.discoveredAt = discoveredAt
         central.connect(peripheral, options: nil)
     }
 
@@ -533,6 +555,7 @@ final class PhonePairing: NSObject, ObservableObject {
         let fresh = Peer(peripheral)
         fresh.ignoreStaleDisconnect = true
         fresh.pendingSince = Date()
+        fresh.connectRequestedAt = fresh.pendingSince
         peers[id] = fresh
         peripheral.delegate = self
         central.connect(peripheral, options: nil)
@@ -606,7 +629,7 @@ final class PhonePairing: NSObject, ObservableObject {
             let last = meta[id.uuidString]?["lastSeen"] as? Date ?? .distantPast
             if now.timeIntervalSince(last) >= 55 { touchLastSeen(id) }
         }
-        let released = ignored.expire(at: now)
+        let released = ignored.expire(at: now) + knownHold.expire(at: now)
         if !released.isEmpty {
             Self.log("health: ignore expired for \(released.map(\.uuidString).joined(separator: ", "))")
         }
@@ -990,8 +1013,10 @@ final class PhonePairing: NSObject, ObservableObject {
     private func identified(_ peer: Peer, as phoneID: UUID) {
         let id = peer.peripheral.identifier
         ignored.forgive(id)
+        knownHold.forgive(id)
         identifierBackoff[id] = nil
         discoveryLimiter.succeeded(id)
+        logConnectTiming(peer)
         let known = knownEntries()
         for other in peers.values where other !== peer && other.phoneID == nil && !other.quietCancel {
             guard KnownPeripherals.phoneID(of: other.peripheral.identifier, in: known) == phoneID else { continue }
@@ -1010,22 +1035,54 @@ final class PhonePairing: NSObject, ObservableObject {
         }
     }
 
-    /// 窗口关着时订阅上了却说不出身份：等 identifyTimeout，还不说就断开、这个标识暂时不理（限时、翻倍，最多 5 分钟）。
+    /// 第一次认出身份：写一行从扫到 / 发起连接 → 连上 → 订阅 → 认出身份各花了多少毫秒（量「手机 App 打开到连上」用）
+    private func logConnectTiming(_ peer: Peer) {
+        let now = Date()
+        func ms(_ from: Date?, _ to: Date?) -> String {
+            guard let from, let to else { return "?" }
+            return String(Int((to.timeIntervalSince(from) * 1000).rounded()))
+        }
+        let start = peer.discoveredAt ?? peer.connectRequestedAt
+        let via = peer.discoveredAt != nil ? "scan" : "pending"
+        Self.log("phone connect: discovered→connected→identified \(ms(start, peer.connectedAt)) ms → \(ms(peer.connectedAt, now)) ms "
+                 + "(subscribed at +\(ms(peer.connectedAt, peer.subscribedAt)) ms; total \(ms(start, now)) ms; via \(via)) on \(peer.peripheral.identifier.uuidString)")
+    }
+
+    /// 窗口关着时订阅上了却说不出身份：认得 + 配过对的手机等 8 s，还不说就断开、静默 3 s → 5 s（封顶）再连；
+    /// 别的外设等 30 s，断开、暂时不理（30 s → … → 5 min 翻倍；没配过也不认得的本次运行不再理）。
     /// 计时绑在这一次连接上：同一个标识断了又连上，老的计时不会算到新连接头上。
     private func scheduleIdentifyCheck(_ peer: Peer) {
         let id = peer.peripheral.identifier
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.identifyTimeout) { [weak self, weak peer] in
+        let kind = NoIdentifyPolicy.kind(paired: isPaired, known: knownEntries().contains { $0.identifier == id })
+        let timeout = NoIdentifyPolicy.identifyTimeout(kind)
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self, weak peer] in
             guard let self, let peer, self.peers[id] === peer, peer.phoneID == nil, !self.windowOpen,
                   peer.peripheral.state == .connected else { return }
-            // 配过对、或者是认得的标识：只是限时不理；都不是才本次运行不再理
-            let known = self.knownEntries().contains { $0.identifier == id }
-            let permanent = !self.isPaired && !known
-            if let d = self.ignored.ignore(id, at: Date(), permanent: permanent) {
-                Self.log("peripheral \(id.uuidString) did not identify within \(Int(Self.identifyTimeout))s of subscribing; ignoring it for \(Int(d))s")
-            } else {
-                Self.log("peripheral \(id.uuidString) did not identify within \(Int(Self.identifyTimeout))s of subscribing; ignoring it this session")
+            let now = Date()
+            let t = Int(timeout)
+            switch kind {
+            case .knownPaired:
+                let d = self.knownHold.ignore(id, at: now) ?? 0
+                Self.log("hold: known paired peripheral \(id.uuidString) did not identify within \(t)s of subscribing; short hold \(Int(d))s (max \(Int(NoIdentifyPolicy.knownHoldCap))s), then reconnecting")
+                self.scheduleHoldResume(id, after: d)
+            case .timed, .permanent:
+                if let d = self.ignored.ignore(id, at: now, permanent: kind == .permanent) {
+                    Self.log("ignore: peripheral \(id.uuidString) did not identify within \(t)s of subscribing; ignoring it for \(Int(d))s")
+                } else {
+                    Self.log("ignore: peripheral \(id.uuidString) did not identify within \(t)s of subscribing; ignoring it this session")
+                }
             }
             self.central?.cancelPeripheralConnection(peer.peripheral)
+        }
+    }
+
+    /// 短静默到点：接着连这个标识（不等 30 秒一次的健康检查；扫到它也会连，这里是兜底，保证一直有东西在重试）
+    private func scheduleHoldResume(_ id: UUID, after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay + 0.1) { [weak self] in
+            guard let self, self.shouldRun, self.peers[id] == nil, !self.isIgnored(id, at: Date()),
+                  !self.holdingAfterEarlyDrops, self.identifierBackoff[id].map({ !$0.holding(at: Date()) }) ?? true,
+                  !self.peers.values.contains(where: { $0.phoneID != nil }) else { return }
+            self.pendKnown(reason: "pending reconnect after short hold", bypassIgnore: false)
         }
     }
 
@@ -1086,22 +1143,28 @@ extension PhonePairing: CBCentralManagerDelegate {
         let firstThisScan = seenThisScan.insert(id).inserted
         guard shouldRun else { return }
         let now = Date()
-        if ignored.contains(id, at: now) {
+        if isIgnored(id, at: now) {
+            // 认得的手机的短静默至多 5 s；不认得的才是长的。每个广播包都报一次，只写第一次
             if firstThisScan { Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI) (ignored for now)") }
             return
         }
         // 手机在广播我们的服务（App 在跑）：马上连。退避中（早断 / 这个标识没服务）也是第一次扫到马上连，
         // 之后同一个标识每 30 秒最多一次——每个广播包都报一次，连上就断的话不能每包都连。
         // 早断计数只在订阅 / 认出身份成功时才清零
-        let holding = holdingAfterEarlyDrops || (identifierBackoff[id]?.holding(at: now) ?? false)
-        guard discoveryLimiter.allow(id, holding: holding, at: now) else {
+        let missing = identifierBackoff[id]?.holding(at: now) ?? false
+        let holding = holdingAfterEarlyDrops || missing
+        // 认得的手机「没有服务」的退避：扫到时的连接间隔跟着退避走（3/6/12 s，最长 15 s）；别的退避照旧 30 s
+        let interval = missing && !holdingAfterEarlyDrops
+            ? NoIdentifyPolicy.missingServiceDiscoverInterval(backoff: lastMissingDelay[id] ?? DiscoveryConnectLimiter<UUID>.interval)
+            : DiscoveryConnectLimiter<UUID>.interval
+        guard discoveryLimiter.allow(id, holding: holding, interval: interval, at: now) else {
             if logThrottle.shouldLog("discover.hold.\(id)", value: "held", at: now, every: Self.repeatLogEvery) {
-                Self.log("backoff: \(id.uuidString) discovered during backoff; next connect in \(Int(discoveryLimiter.remaining(id, at: now)))s")
+                Self.log("backoff: \(id.uuidString) discovered during backoff; next connect in \(Int(discoveryLimiter.remaining(id, interval: interval, at: now).rounded(.up)))s")
             }
             return
         }
-        Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI)\(holding ? " (during backoff: at most one connect per \(Int(DiscoveryConnectLimiter<UUID>.interval))s)" : "")")
-        connect(peripheral, reason: holding ? "discovered by scan during backoff" : "discovered by scan")
+        Self.log("discovered \(id.uuidString) name=\(name) rssi=\(RSSI)\(holding ? " (during backoff: at most one connect per \(Int(interval))s)" : "")")
+        connect(peripheral, reason: holding ? "discovered by scan during backoff" : "discovered by scan", discoveredAt: now)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -1169,14 +1232,18 @@ extension PhonePairing: CBCentralManagerDelegate {
             var backoff = identifierBackoff[id] ?? ReconnectBackoff(base: Self.missingServiceBase, cap: Self.missingServiceCap)
             let d = backoff.fail(at: now)
             identifierBackoff[id] = backoff
-            Self.log("backoff: \(id.uuidString) has no LockCurtain service (phone app not running); not an early drop, re-pending in \(Int(d))s")
+            lastMissingDelay[id] = d
+            // 刚试过：扫到它也要等够这一档的间隔再连（不然 0.3 s 后扫到又连一次，台阶一下子爬上去）
+            discoveryLimiter.noteAttempt(id, at: now)
+            Self.log("backoff: \(id.uuidString) has no LockCurtain service (phone app not running or still starting); not an early drop, re-pending in \(Int(d))s "
+                     + "(step \(backoff.step), staircase \(Int(Self.missingServiceBase))s doubling to \(Int(Self.missingServiceCap))s; scan-connect every \(Int(NoIdentifyPolicy.missingServiceDiscoverInterval(backoff: d)))s)")
             DispatchQueue.main.asyncAfter(deadline: .now() + d + 0.1) { [weak self] in
                 guard let self, self.shouldRun, self.peers[id] == nil,
                       self.identifierBackoff[id].map({ !$0.holding(at: Date()) }) ?? false else { return }
                 if self.peers.values.contains(where: { $0.phoneID != nil }) { return }
                 self.pendKnown(reason: "pending reconnect after missing service backoff", bypassIgnore: false)
             }
-        } else if !wasReady && shouldRun && !ignored.contains(id, at: now) {
+        } else if !wasReady && shouldRun && !isIgnored(id, at: now) {
             switch earlyDrops.noteDrop(paired: isPaired, at: now) {
             case .keepGoing:
                 Self.log("early drop \(earlyDrops.drops)/\(EarlyDropPolicy.maxEarlyDrops)")
@@ -1192,12 +1259,15 @@ extension PhonePairing: CBCentralManagerDelegate {
                 return
             }
         }
-        guard shouldRun, !ignored.contains(id, at: now) else { startScan(); return }
-        if wasIdentified && isPaired {
+        guard shouldRun, !isIgnored(id, at: now) else { startScan(); return }
+        // 认得的手机、我们自己悄悄断的（服务重建 / 退订…，多半是手机 App 刚重新启动）：马上重连，不等扫描
+        // （同一台手机已经在别的标识上认过身份时，这条是重复的，不再连回来）
+        let quietRestart = quiet && known && isPaired && !peers.values.contains { $0.phoneID != nil }
+        if (wasIdentified || quietRestart) && isPaired {
             if holdingAfterEarlyDrops {
                 Self.log("backoff: early-drop hold; not re-pending \(id.uuidString) yet")
             } else {
-                connect(peripheral, reason: "pending reconnect after drop")
+                connect(peripheral, reason: quietRestart && !wasIdentified ? "pending reconnect after quiet cancel (known phone)" : "pending reconnect after drop")
             }
         }
         startScan()
@@ -1240,6 +1310,7 @@ extension PhonePairing: CBPeripheralDelegate {
         }
         let wasSubscribed = peer.subscribed
         peer.subscribed = characteristic.isNotifying
+        if characteristic.isNotifying, !wasSubscribed { peer.subscribedAt = Date() }
         Self.log("\(characteristic.isNotifying ? "subscribed" : "unsubscribed") outbox on \(peripheral.identifier.uuidString)")
         if characteristic.isNotifying {
             resetEarlyDrops(reason: "subscribed")
@@ -1255,7 +1326,14 @@ extension PhonePairing: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
         guard invalidatedServices.contains(where: { $0.uuid == Self.serviceUUID }),
               let peer = peers[peripheral.identifier] else { return }
-        // 手机的服务重建了（App 重启而连接没断）：旧的特征都作废了，断开交给正常重连
+        // 手机的服务重建了（App 重启而连接没断）：旧的特征都作废了，断开交给正常重连。
+        // 这是「App 刚启动」的信号：这个标识的「没有服务」退避 / 短静默都清掉，马上重连（断开回调里连）
+        let id = peripheral.identifier
+        identifierBackoff[id] = nil
+        lastMissingDelay[id] = nil
+        knownHold.forgive(id)
+        discoveryLimiter.succeeded(id)
+        Self.log("service republished on \(id.uuidString) (phone app restarting?): clearing its backoff, reconnecting at once")
         cancelQuietly(peer, why: "LockCurtain service invalidated (didModifyServices)")
     }
 

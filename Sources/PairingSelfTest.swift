@@ -990,6 +990,49 @@ enum ReconnectTests {
         limiter.succeeded(p)
         expect(limiter.allow(p, holding: true, at: t0.addingTimeInterval(59.5)), "扫到就连：订阅 / 认出身份以后清掉")
 
+        // 认得的、配过对的手机说不出身份（手机 App 没在跑，系统替它留着服务）：只做短周期，不长拉黑
+        let kp = NoIdentifyPolicy.kind(paired: true, known: true)
+        expect(kp == .knownPaired && NoIdentifyPolicy.identifyTimeout(kp) == 8, "说不出身份（认得 + 配过对）：8 秒就断，不是 30 秒")
+        var hold: TimedIgnoreList<UUID> = NoIdentifyPolicy.makeKnownHoldList()
+        let phoneId = UUID()
+        var holds: [TimeInterval] = []
+        for _ in 0..<50 { holds.append(hold.ignore(phoneId, at: t0, permanent: false) ?? -1) }
+        expect(holds.prefix(3) == [3, 5, 5] && holds.allSatisfy { $0 >= 3 && $0 <= NoIdentifyPolicy.knownHoldCap },
+               "说不出身份（认得 + 配过对）：静默 3 s → 5 s，封顶 5 s，反复 50 次也不再翻倍，实际 \(holds.prefix(5))")
+        expect(NoIdentifyPolicy.knownHoldCap <= 5 && !hold.contains(phoneId, at: t0.addingTimeInterval(5))
+               && hold.contains(phoneId, at: t0.addingTimeInterval(4.9)), "说不出身份（认得 + 配过对）：静默 ≤ 5 s，到点放出来（永远是限时的）")
+        hold.forgive(phoneId)
+        expect(hold.ignore(phoneId, at: t0) == 3, "说不出身份（认得 + 配过对）：认出身份后从头算")
+        // 完整一轮：最长的空窗 = 8 s 连着 + 5 s 静默 + 重连，几秒的量级（旧：30 s + 30 s…300 s）
+        expect(NoIdentifyPolicy.knownIdentifyTimeout + NoIdentifyPolicy.knownHoldCap <= 15, "说不出身份（认得 + 配过对）：一轮 ≤ 15 s")
+        // 不认得的外设：照旧长拉黑
+        let ko = NoIdentifyPolicy.kind(paired: true, known: false)
+        expect(ko == .timed && NoIdentifyPolicy.identifyTimeout(ko) == 30, "说不出身份（不认得的外设）：照旧 30 秒")
+        var longIgnore = TimedIgnoreList<UUID>()
+        let stranger2 = UUID()
+        var longSeq: [TimeInterval?] = []
+        for _ in 0..<6 { longSeq.append(longIgnore.ignore(stranger2, at: t0)) }
+        expect(longSeq == [30, 60, 120, 240, 300, 300], "说不出身份（不认得的外设）：照旧 30 → 60 → … → 300 秒翻倍拉黑")
+        expect(NoIdentifyPolicy.kind(paired: false, known: false) == .permanent
+               && NoIdentifyPolicy.kind(paired: false, known: true) == .timed, "说不出身份：没配过也不认得才本次运行不再理，认得的永远限时")
+
+        // 认得的手机「没有服务」：3 s 起的台阶，封顶 5 分钟；扫到时的连接间隔跟着走，最长 15 s
+        var missing = ReconnectBackoff(base: NoIdentifyPolicy.missingServiceBase, cap: NoIdentifyPolicy.missingServiceCap)
+        let steps = (0..<10).map { _ in missing.fail(at: t0) }
+        expect(steps == [3, 6, 12, 24, 48, 96, 192, 300, 300, 300], "没有服务（认得的手机）：3/6/12/24/48/96/192 秒，封顶 5 分钟，实际 \(steps)")
+        expect(steps.first! <= 3 && steps.max()! <= reconnectBackoffCap, "没有服务（认得的手机）：第一次 ≤ 3 秒，永远 ≤ 5 分钟（配过对没有永久停手）")
+        expect(steps.map { NoIdentifyPolicy.missingServiceDiscoverInterval(backoff: $0) } == [3, 6, 12, 15, 15, 15, 15, 15, 15, 15],
+               "没有服务（认得的手机）：扫到时的连接间隔 3/6/12 s，封顶 15 s")
+        var missLimiter = DiscoveryConnectLimiter<UUID>()
+        let mid = UUID()
+        missLimiter.noteAttempt(mid, at: t0)
+        expect(!missLimiter.allow(mid, holding: true, interval: 3, at: t0.addingTimeInterval(0.3))
+               && missLimiter.allow(mid, holding: true, interval: 3, at: t0.addingTimeInterval(3.1)),
+               "没有服务：刚试过 0.3 s 后扫到不连，3 s 后扫到才连（台阶不会被连续扫到一下顶上去）")
+        expect(!missLimiter.allow(mid, holding: true, interval: 3, at: t0.addingTimeInterval(4))
+               && missLimiter.allow(mid, holding: false, interval: 3, at: t0.addingTimeInterval(4)),
+               "没有服务：退避到点（不在退避里）照常马上连")
+
         // 挂起的连接：60 秒还没连上就重挂；扫到它在广播却还在连 10 秒以上也重挂
         expect(!PendingConnectPolicy.isStale(pendingSince: t0, discovered: false, at: t0.addingTimeInterval(59)),
                "挂起的连接：不到 60 秒不动")
