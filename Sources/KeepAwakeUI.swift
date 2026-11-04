@@ -86,6 +86,79 @@ struct KeepAwakeMenuItems: View {
     }
 }
 
+/// 带边框的下拉按钮：画成和旁边「停止」一样的 .bordered 按钮（同高同样式），点开弹出和 KeepAwakeMenuItems 一样的菜单。
+/// SwiftUI 的 Menu / NSPopUpButton 在设置页的分组表单里都会被画成「文字 + 小圆圈」，没有边框，所以这里用按钮 + NSMenu
+struct KeepAwakePullDown: View {
+    let title: String
+    @ObservedObject var keepAwake: KeepAwake
+    let pickTime: () -> Void
+    @State private var menuOwner: PullDownMenu?
+
+    var body: some View {
+        Button {
+            let owner = PullDownMenu(keepAwake: keepAwake, pickTime: pickTime)
+            menuOwner = owner   // NSMenuItem 的 target 不持有，菜单弹着的时候要有人拿着
+            owner.menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        } label: {
+            HStack(spacing: 4) {
+                Text(title)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+        }
+        .buttonStyle(.bordered)
+    }
+}
+
+/// 弹出的 NSMenu：一直 / 1 小时 / 2 小时 / 5 小时 / 到指定时间… / ─ / 某个 app 开着时 ▸
+@MainActor final class PullDownMenu: NSObject {
+    let menu = NSMenu()
+    private let keepAwake: KeepAwake
+    private let pickTime: () -> Void
+
+    init(keepAwake: KeepAwake, pickTime: @escaping () -> Void) {
+        self.keepAwake = keepAwake
+        self.pickTime = pickTime
+        super.init()
+        menu.autoenablesItems = false
+        add("一直", to: menu) { $0.start(.forever) }
+        for h in [1, 2, 5] {
+            add("\(h) 小时", to: menu) { $0.start(.date(Date().addingTimeInterval(Double(h) * 3600))) }
+        }
+        add("到指定时间…", to: menu) { [pickTime] _ in pickTime() }
+        menu.addItem(.separator())
+        let appsItem = NSMenuItem(title: "某个 app 开着时", action: nil, keyEquivalent: "")
+        let apps = NSMenu()
+        apps.autoenablesItems = false
+        let list = KeepAwakeText.runningApps()
+        if list.isEmpty {
+            let none = NSMenuItem(title: "现在没有", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            apps.addItem(none)
+        }
+        for app in list {
+            let name = app.localizedName ?? "pid \(app.processIdentifier)"
+            let pid = app.processIdentifier
+            add(name, to: apps) { $0.start(.appQuits(pid, name: name)) }
+        }
+        appsItem.submenu = apps
+        menu.addItem(appsItem)
+    }
+
+    private final class Action: NSObject {
+        let run: @MainActor (KeepAwake) -> Void
+        init(_ run: @escaping @MainActor (KeepAwake) -> Void) { self.run = run }
+    }
+
+    private func add(_ title: String, to menu: NSMenu, _ run: @escaping @MainActor (KeepAwake) -> Void) {
+        let item = NSMenuItem(title: title, action: #selector(fire(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = Action(run)
+        menu.addItem(item)
+    }
+
+    @objc private func fire(_ item: NSMenuItem) { (item.representedObject as? Action)?.run(keepAwake) }
+}
+
 /// 「到指定时间…」选钟点那一行
 struct KeepAwakeTimePicker: View {
     @ObservedObject var keepAwake: KeepAwake

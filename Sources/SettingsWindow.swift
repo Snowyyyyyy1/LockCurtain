@@ -698,10 +698,10 @@ private struct KeepAwakePane: View {
                             Spacer()
                             // 带边框的下拉按钮，和「停止」一样高、一样的样子，中间 8pt
                             HStack(spacing: 8) {
-                                Menu("改时长") { items }
-                                    .menuStyle(.button)
-                                    .buttonStyle(.bordered)
-                                    .fixedSize()
+                                KeepAwakePullDown(title: "改时长", keepAwake: keepAwake) {
+                                    endTime = KeepAwakeText.defaultEndTime()
+                                    nav.pickTime = true
+                                }
                                 Button("停止") { keepAwake.stop() }
                                     .buttonStyle(.bordered)
                             }
