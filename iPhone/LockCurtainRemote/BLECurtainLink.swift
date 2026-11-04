@@ -37,8 +37,9 @@
 //
 // 走网络（Sources/PhoneNetClient.swift，TCP）：手机填了电脑的地址、蓝牙又没通时的第二条路。只能盖上、开关保持唤醒、看状态；
 // 现在撤下 / Presence 回答 / 配对 / 撤销配对都只走蓝牙（电脑那边也会拒）。
-//   * 顺序：打开 App / 蓝牙掉了以后先等 NetworkLinkPlan.bleGrace（5 秒）让电脑来连；蓝牙没通、存了地址、配着对、在前台，才开网络；
-//     蓝牙通了就让位（路径切回蓝牙、关掉 TCP）；进后台就关（iOS 会挂起 TCP）。没存地址永远不走网络。
+//   * 顺序：这次启动里还没连上过（冷启动）：不等，蓝牙和网络一起赛，谁先通谁说了算（NetworkLinkPlan.grace = 0）；
+//     连上过以后（蓝牙掉了 / 回前台）先等 NetworkLinkPlan.bleGrace（5 秒）让电脑来连。蓝牙没通、存了地址、配着对、在前台，才开网络；
+//     蓝牙通了就让位（路径切回蓝牙、关掉 TCP；网络上还有等着收据的命令就让它们先了结）；进后台就关（iOS 会挂起 TCP）。没存地址永远不走网络。
 //   * 网络来的消息（PhoneNetClient 已经验过签名、新鲜度、对得上等着的命令）和蓝牙走同一套处理：applyState / applyKeepAwake / handleAckFromComputer。
 //   * 网络上的命令计数仍然来自钥匙串（reserveNextCounter），一次只走一条路。
 //
@@ -218,6 +219,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
     /// 蓝牙从什么时候开始「没通」（算那 5 秒）；蓝牙通了 / 后台 / 没配对时清掉
     private var bleWaitSince: Date?
     private var netEvalTask: Task<Void, Never>?
+    /// 这次启动里连上过没有（蓝牙或网络，任何一次「已连上」）：没连上过的冷启动不等 bleGrace
+    private var connectedSinceLaunch = false
     /// 走网络发出去、还在等收据的命令计数（网络停了只了结这些，不碰蓝牙的）
     private var networkAckCounters: Set<UInt64> = []
     private var sentNameThisNetLink = false
@@ -245,6 +248,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
     // MARK: - CurtainLink
 
     func activate() {
+        LinkTiming.mark(.activate)
         quietOnly = false
         startLink(showPowerAlert: true)
         evaluateNetwork()
@@ -613,6 +617,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         stagedRecord = nil
         ready = false
         sentNameThisLink = false
+        // 旧电脑的「上次」作废
+        LastKnownStore.standard.clear()
         publish {
             $0.phase = .open
             $0.keepAwake = nil
@@ -762,6 +768,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         confirmTask?.cancel()
         confirmTask = nil
         if !wasReady { Self.linkLog.info("link ready") }
+        LinkTiming.mark(.linkReady)
+        connectedSinceLaunch = true
         resetBackoff("ready")
         publish { $0.connection = .connected }
         if !wasReady { sendName() }
@@ -800,6 +808,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         finishLift(.unavailable)
         awaitingLiftOpen = false
         stopNetwork()
+        // 上次的样子是那台电脑的：不配对了就不留
+        LastKnownStore.standard.clear()
         publish {
             $0.connection = .notPaired
             $0.macName = nil
@@ -955,7 +965,10 @@ final class BLECurtainLink: NSObject, CurtainLink {
               state.seq > lastStateSeq else { return }
         if path == .bluetooth { noteVerifiedFromMac("state") }
         lastStateSeq = state.seq
-        lastStateAt = Date()
+        let stateNow = Date()
+        lastStateAt = stateNow
+        // 电脑签名报来的幕布状态：记下来，下次打开 App 第一帧当「上次」用（节流在 LastKnownStore）
+        LastKnownStore.standard.notePhase(closed: state.closed, at: stateNow)
         let liftedByUs = !state.closed && awaitingLiftOpen
         if state.closed || liftedByUs { awaitingLiftOpen = false }
         publish {
@@ -1245,6 +1258,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         netStatus = NetworkLinkPlan.status(client: state, previous: netStatus)
         if state == .ready, !wasReady {
             Self.linkLog.info("network path ready")
+            LinkTiming.mark(.networkReady)
+            connectedSinceLaunch = true
             sendNameOverNetwork()
         }
         if wasReady, state != .ready {
@@ -1288,13 +1303,24 @@ final class BLECurtainLink: NSObject, CurtainLink {
         var decision = NetworkLinkPlan.decide(
             paired: isPaired, hasAddress: address != nil, foreground: foreground, bleReady: bleReady,
             waited: intentNetwork ? NetworkLinkPlan.bleGrace : (bleWaitSince.map { Date().timeIntervalSince($0) } ?? 0),
-            running: netRunning)
+            running: netRunning,
+            grace: NetworkLinkPlan.grace(connectedSinceLaunch: connectedSinceLaunch))
         if netForce, isPaired, address != nil, inForeground { decision = .run }
         switch decision {
         case .run:
             if let address { startNetwork(address) }
         case .stop:
-            stopNetwork(keepFailed: keepFailed)
+            // 蓝牙刚通、网络上还有命令在等收据：让它们先了结（最多 6 秒），别把「已经发出去的盖上」说成没回应。
+            // 新命令已经走蓝牙了（activePath 蓝牙优先）
+            if bleReady, foreground, isPaired, netRunning, !networkAckCounters.isEmpty {
+                netEvalTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled else { return }
+                    self?.evaluateNetwork()
+                }
+            } else {
+                stopNetwork(keepFailed: keepFailed)
+            }
         case .wait(let seconds):
             netEvalTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(seconds + 0.05))
@@ -1400,8 +1426,24 @@ final class BLECurtainLink: NSObject, CurtainLink {
         next.path = path
         next.networkStatus = isPaired ? netStatus : .none
         guard next != snapshot else { return }
+        noteLastKnown(from: snapshot.connection, to: next.connection)
         snapshot = next
         onSnapshotChange?(next)
+    }
+
+    /// 「上次连上」：刚连上写一次，连着时按节流刷新，断开那一刻再写一次。不配对时不写
+    private func noteLastKnown(from old: CurtainConnection, to new: CurtainConnection) {
+        guard isPaired else { return }
+        let now = Date()
+        if new == .connected {
+            if old == .connected {
+                LastKnownStore.standard.touch(at: now)
+            } else {
+                LastKnownStore.standard.noteConnected(at: now)
+            }
+        } else if old == .connected {
+            LastKnownStore.standard.noteDisconnected(at: now)
+        }
     }
 
     /// 加服务；广播等 didAdd 成功再开（不然电脑连上来会找不到服务）
@@ -1438,6 +1480,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         guard wantsAdvertising, let manager, manager.state == .poweredOn, serviceState == .added,
               !manager.isAdvertising else { return }
         Self.linkLog.info("start advertising (\(why, privacy: .public))")
+        LinkTiming.mark(.advertisingStarted)
         manager.startAdvertising([
             CBAdvertisementDataServiceUUIDsKey: [Identity.service],
             CBAdvertisementDataLocalNameKey: Identity.localName,
@@ -1480,6 +1523,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
     func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         switch peripheral.state {
         case .poweredOn:
+            LinkTiming.mark(.poweredOn)
             if snapshot.connection == .bluetoothOff {
                 publish { $0.connection = self.isPaired ? .notConnected : .notPaired }
             }
@@ -1584,6 +1628,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         serviceState = .added
         addBackoff.reset()
         Self.linkLog.info("service added")
+        LinkTiming.mark(.serviceAdded)
         startAdvertising("service added")
     }
 
@@ -1591,6 +1636,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
                            didSubscribeTo characteristic: CBCharacteristic) {
         guard characteristic.uuid == Identity.outbox else { return }
         if central.identifier == pairingCentral?.identifier { return }
+        LinkTiming.mark(.firstSubscribe)
         if sideCentrals[central.identifier] != nil {
             // 旁路中心重新订阅：新连接，撤销那一条再试一次
             pendingTried[central.identifier] = nil

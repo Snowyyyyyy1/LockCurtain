@@ -9,6 +9,16 @@ struct DiagnosticsView: View {
                 LabeledContent("蓝牙", value: model.bluetoothDiagnosticValue)
                 LabeledContent("信号", value: model.signalDiagnosticValue)
                 LabeledContent("最后一次事件", value: model.lastEventDiagnosticValue)
+                if let timing = LinkTiming.shared.displayText {
+                    // COPY-TODO: 开发看的：冷启动到连上用了多久（毫秒，每一步）。暂用「冷启动 → 已连上」，正式版 Camo 定或干脆只在开发包里出现
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("冷启动 → 已连上")
+                        Text(timing)
+                            .font(.footnote.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
             } header: {
                 Text("连接")
             } footer: {

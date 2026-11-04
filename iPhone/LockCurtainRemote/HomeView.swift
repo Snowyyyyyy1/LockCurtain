@@ -143,24 +143,38 @@ struct HomeView: View {
     // MARK: - Rows
 
     private var curtainRow: some View {
-        LabeledContent {
-            Text(model.curtainDisplayValue)
-                .foregroundStyle(.secondary)
-        } label: {
-            Label {
-                HStack(spacing: 6) {
-                    Text("幕布")
-                    if model.demoMode {
-                        demoTagsmall
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            let row = model.curtainRow(at: clockNow)
+            LabeledContent {
+                if row.isLastKnown {
+                    // 上次的样子：淡着、带「上次」，不是现在
+                    Text(row.text)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(row.text)
+                        .foregroundStyle(.secondary)
+                }
+            } label: {
+                Label {
+                    HStack(spacing: 6) {
+                        Text("幕布")
+                        if model.demoMode {
+                            demoTagsmall
+                        }
+                    }
+                } icon: {
+                    if row.isLastKnown {
+                        Image(systemName: model.lastKnown?.phase == .closed ? "curtains.closed" : "curtains.open")
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Image(systemName: curtainSymbol)
                     }
                 }
-            } icon: {
-                Image(systemName: curtainSymbol)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("幕布")
+            .accessibilityValue(row.voice)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("幕布")
-        .accessibilityValue(model.curtainVoiceValue)
     }
 
     /// 分段用的「现在」：读一下 foregroundCount，回前台时立刻重算
@@ -171,20 +185,29 @@ struct HomeView: View {
 
     private var macRow: some View {
         TimelineView(.periodic(from: .now, by: 5)) { _ in
-            let state = model.unlinkedMacState(at: clockNow)
+            let row = model.macRow(at: clockNow)
             LabeledContent {
-                if let state, state.showsSpinner {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(state.value)
+                VStack(alignment: .trailing, spacing: 2) {
+                    if let row, row.showsSpinner {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(row.value)
+                                .contentTransition(.opacity)
+                        }
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Text(row?.value ?? model.macDisplayValue)
+                            .contentTransition(.opacity)
+                            .foregroundStyle(.secondary)
+                    }
+                    // 没连上、有「上次」：上次连上是什么时候（打开 App 的第一帧就有，不用等任何计时）
+                    if let line = row?.lastConnectedLine {
+                        Text(line)
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
                             .contentTransition(.opacity)
                     }
-                    .foregroundStyle(.secondary)
-                } else {
-                    Text(state?.value ?? model.macDisplayValue)
-                        .contentTransition(.opacity)
-                        .foregroundStyle(.secondary)
                 }
             } label: {
                 Label("这台电脑", systemImage: "laptopcomputer")
@@ -302,7 +325,8 @@ struct HomeView: View {
 
     /// 幕布盖着、不在「正在盖上…」：两行说明该出现的时候
     private var showsClosedNote: Bool {
-        model.phase == .closed && !model.isPending
+        // 没连上时手机里记着的 .closed 是上一次的：撤下那一套只在连着时出现
+        model.connection == .connected && model.phase == .closed && !model.isPending
     }
 
     /// 大字：「幕布」组的 footer = 状态行 + 两行说明（已连上时）
@@ -408,7 +432,9 @@ struct HomeView: View {
     // MARK: - Bottom bar
 
     private func showsBottomBar(at now: Date) -> Bool {
-        model.connection == .connected || model.connection == .notPaired || model.showsRetryNow(at: now)
+        // 配过对的手机从第一帧起就有「盖上幕布」（没连上时按下去是等连上再发，见 CoverButtonPolicy）
+        model.connection == .connected || model.connection == .notPaired || model.coverButtonState != .hidden
+            || model.showsRetryNow(at: now)
     }
 
     private func bottomBar(at now: Date) -> some View {
@@ -425,20 +451,6 @@ struct HomeView: View {
                     .buttonStyle(.glassProminent)
                     .controlSize(.large)
                     .glassEffectID("action", in: glassNS)
-                    .transition(.opacity)
-                } else if model.showsRetryNow(at: now) {
-                    // 「现在再试一次」：和「盖上幕布」同一个位置、同样大小；.glass（不是 prominent），连上了形变回「盖上幕布」
-                    Button {
-                        model.retryNow()
-                    } label: {
-                        Text(AppModel.UnlinkedMacState.retryButtonTitle)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 3)
-                    }
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                    .glassEffectID("action", in: glassNS)
-                    .accessibilityHint(AppModel.UnlinkedMacState.retryButtonHint)
                     .transition(.opacity)
                 } else if showsClosedNote && showsLiftFooter {
                     if model.liftHiddenOnNetwork {
@@ -480,6 +492,9 @@ struct HomeView: View {
                             .transition(.opacity)
                     }
                     coverButton
+                    if model.showsRetryNow(at: now) {
+                        retryNowButton
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -497,9 +512,64 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.showLiftedNote)
     }
 
+    /// 「现在再试一次」：没连上过了 30 秒就出现，在「盖上幕布」下面；.glass（不是 prominent），连上了就消失
+    private var retryNowButton: some View {
+        Button {
+            model.retryNow()
+        } label: {
+            Text(AppModel.UnlinkedMacState.retryButtonTitle)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+        }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .glassEffectID("retry", in: glassNS)
+        .accessibilityHint(AppModel.UnlinkedMacState.retryButtonHint)
+        .transition(.opacity)
+    }
+
     @ViewBuilder
     private var coverButton: some View {
-        if model.isPending {
+        coverButtonContent
+            .onAppear { LinkTiming.mark(.coverButtonShown) }
+    }
+
+    @ViewBuilder
+    private var coverButtonContent: some View {
+        if model.coverButtonState == .waitingForLink {
+            // 没连上时按过了：转圈 + 等连上，下面一颗「取消」。点主按钮不动（和「正在盖上…」一样），取消才算数
+            VStack(spacing: 4) {
+                Button {
+                } label: {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .tint(.white)
+                            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                        // COPY-TODO: 按了「盖上幕布」、还没连上，等连上再发时按钮上的字（暂用「正在连上…」，取自「正在重新连上…」）
+                        Text("正在连上…")
+                            .lineLimit(1)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 3)
+                }
+                .buttonStyle(.glassProminent)
+                .controlSize(.large)
+                .allowsHitTesting(false)
+                .glassEffectID("action", in: glassNS)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.updatesFrequently)
+
+                // COPY-TODO: 等连上时取消的按钮（暂用「取消」，设置里已有这个词）
+                Button("取消") {
+                    model.cancelQueuedCover()
+                }
+                .font(.body.weight(.semibold))
+                .buttonStyle(.borderless)
+                .frame(minHeight: 44)
+                // COPY-TODO: 取消按钮的 VoiceOver 提示
+                .accessibilityHint("不等了，不盖上幕布")
+            }
+        } else if model.isPending {
             // v2.9 P1-2：和「盖上幕布」同样的白字蓝底、同样全宽；不用 .disabled（会变灰看不清），只是点不动
             Button {
             } label: {
@@ -534,7 +604,10 @@ struct HomeView: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .glassEffectID("action", in: glassNS)
-            .accessibilityHint("发给这台电脑，盖上幕布")
+            // COPY-TODO: 没连上时的 VoiceOver 提示（连上之前按下去是等连上再发）
+            .accessibilityHint(model.coverButtonState == .coverWhenLinked
+                               ? "连上这台电脑以后，盖上幕布"
+                               : "发给这台电脑，盖上幕布")
         }
     }
 

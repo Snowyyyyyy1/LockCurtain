@@ -79,6 +79,12 @@ enum NetworkLinkPlan {
     /// 打开 App / 蓝牙掉了以后，先等这么久（手机是蓝牙外设，要电脑来连），蓝牙没好才走网络
     static let bleGrace: TimeInterval = 5
 
+    /// 这次启动里还没连上过（蓝牙网络都算）：不等蓝牙，蓝牙和网络一起赛，谁先通谁说了算（蓝牙通了就让网络走，见 BLECurtainLink.markReady）。
+    /// 连上过以后（蓝牙掉了、回前台）照旧先等 bleGrace
+    static func grace(connectedSinceLaunch: Bool) -> TimeInterval {
+        connectedSinceLaunch ? bleGrace : 0
+    }
+
     /// 现在走哪条路：蓝牙通了永远走蓝牙
     static func path(bleReady: Bool, networkReady: Bool) -> LinkPath? {
         if bleReady { return .bluetooth }
@@ -97,12 +103,13 @@ enum NetworkLinkPlan {
 
     /// - waited: 从「蓝牙开始等」（回前台 / 蓝牙掉了）过了多久
     /// - running: 网络客户端已经在跑（跑着就不用再等 5 秒）
+    /// - grace: 蓝牙先等多久；默认 bleGrace，这次启动还没连上过时是 0（见 grace(connectedSinceLaunch:)）
     static func decide(paired: Bool, hasAddress: Bool, foreground: Bool, bleReady: Bool,
-                       waited: TimeInterval, running: Bool) -> Decision {
+                       waited: TimeInterval, running: Bool, grace: TimeInterval = bleGrace) -> Decision {
         // 没存地址、没配对、不在前台、蓝牙通了：不走网络
         guard paired, hasAddress, foreground, !bleReady else { return .stop }
-        if running || waited >= bleGrace { return .run }
-        return .wait(bleGrace - waited)
+        if running || waited >= grace { return .run }
+        return .wait(grace - waited)
     }
 
     /// 网络客户端的状态 → 界面上的网络状态。试过一次没成，就一直是 failed，直到连上

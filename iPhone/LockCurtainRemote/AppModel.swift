@@ -140,6 +140,10 @@ final class AppModel {
     private(set) var retryingUntil: Date?
     /// 回到前台时加一：主屏立刻重算分段
     private(set) var foregroundCount = 0
+    /// 上次的样子（UserDefaults，见 LastKnown.swift）：只用来回答「上次」，永远不当现在。没连上时主屏用它，连着就不看
+    private(set) var lastKnown: LastKnownState?
+    /// 没连上时按了「盖上幕布」：在等连上，连上了就发。撤下永远不排队
+    private(set) var isCoverQueued = false
 
     /// 现在撤下 sent, waiting for the Mac to report the curtain uncovered
     private(set) var isLifting = false
@@ -167,6 +171,8 @@ final class AppModel {
     /// 只有「自动」露面时才建：藏起来的时候一次都不碰定位
     @ObservationIgnored private var coverTask: Task<Void, Never>?
     @ObservationIgnored private var timeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var coverQueueTask: Task<Void, Never>?
+    @ObservationIgnored private var coverQueuedAt: Date?
     @ObservationIgnored private var noticeTask: Task<Void, Never>?
     @ObservationIgnored private var liftTask: Task<Void, Never>?
     @ObservationIgnored private var liftTimeoutTask: Task<Void, Never>?
@@ -181,6 +187,7 @@ final class AppModel {
     nonisolated(unsafe) static weak var current: AppModel?
 
     init() {
+        LinkTiming.mark(.appInit)
         // 删了重装 = 从没配过对：第一次启动先清掉钥匙串里残留的东西
         PhoneKeychain.wipeIfFreshInstall()
         let defaults = UserDefaults.standard
@@ -232,6 +239,12 @@ final class AppModel {
             paired = storedPaired
             demoMode = false
             macName = storedName
+            // 上次的样子：第一帧就能说「上次连上是什么时候」（没配着的不留）
+            if storedPaired {
+                lastKnown = LastKnownStore.standard.load()
+            } else {
+                LastKnownStore.standard.clear()
+            }
             // 和快捷指令共用同一个蓝牙连接（App 被划掉后快捷指令可能已经建好了，见 CurtainLinkHub）
             link = CurtainLinkHub.obtain(paired: storedPaired, macName: storedName)
         }
@@ -249,6 +262,13 @@ final class AppModel {
         let fakeElapsed = UserDefaults.standard.double(forKey: "lcDisconnectedFor")
         if fakeElapsed > 0 { disconnectedSince = Date().addingTimeInterval(-fakeElapsed) }
         if ProcessInfo.processInfo.arguments.contains("-lcEverConnected") { everConnected = true }
+        // 截图用：-lcLastKnownAgo <秒> [-lcLastKnownPhase closed|open] —— 假装上次连上是这么久以前、幕布当时的样子（只在假连接里用，不写 UserDefaults）
+        let lastKnownAgo = UserDefaults.standard.double(forKey: "lcLastKnownAgo")
+        if forcedLink != nil, lastKnownAgo > 0 {
+            let at = Date().addingTimeInterval(-lastKnownAgo)
+            let phase: LastKnownState.Phase = UserDefaults.standard.string(forKey: "lcLastKnownPhase") == "closed" ? .closed : .open
+            lastKnown = LastKnownState(connectedAt: at, phase: phase, phaseAt: at)
+        }
         #endif
 
         #if DEBUG
@@ -316,6 +336,26 @@ final class AppModel {
         case .bluetoothOff: "蓝牙关了"
         case .notPaired: "没配对"
         }
+    }
+
+    /// 「这台电脑」那一行：没连上时带「上次连上：…」（没有「上次」就和以前一样）；连着或其他情况是 nil（照旧用 macDisplayValue）
+    func macRow(at now: Date) -> LastKnownPresentation.MacRow? {
+        guard let state = unlinkedMacState(at: now) else { return nil }
+        return LastKnownPresentation.macRow(state: state, lastKnown: lastKnown, now: now)
+    }
+
+    /// 「幕布」那一行：连着是现在的；没连上、有「上次」就是淡着的「上次：…」；都没有是「—」
+    func curtainRow(at now: Date) -> LastKnownPresentation.CurtainRow {
+        LastKnownPresentation.curtainRow(
+            connection: connection, paired: paired, demo: demoMode, lastKnown: lastKnown,
+            liveText: curtainDisplayValue, liveVoice: curtainVoiceValue,
+            disconnectedVoice: curtainVoiceValue, now: now)
+    }
+
+    /// 「盖上幕布」那颗按钮现在是什么样（纯规则在 CoverButtonPolicy）
+    var coverButtonState: CoverButtonPolicy.State {
+        CoverButtonPolicy.state(paired: paired, demo: demoMode, connection: connection, isPending: isPending,
+                                isQueued: isCoverQueued, hasNetworkAddress: networkAddress != nil)
     }
 
     // MARK: - 保持唤醒（ux-audit A4 / copy §16.3）
@@ -477,8 +517,58 @@ final class AppModel {
     }
 
     func cover() {
-        guard connection == .connected, !isPending, phase != .closed else { return }
+        switch CoverButtonPolicy.pressAction(coverButtonState) {
+        case .sendNow:
+            guard phase != .closed else { return }
+            startCover()
+        case .queue:
+            queueCover()
+        case .ignore:
+            break
+        }
+    }
+
+    /// 没连上时按下：等连上（最多 CoverButtonPolicy.queueTimeout 秒），连上了再发；到时没连上就如实说「电脑没有回应」。
+    /// 只有盖上能排队；撤下（现在撤下）照旧要连着、蓝牙、面容，不排队
+    private func queueCover() {
         coverTapCount += 1
+        showLiftedNote = false
+        liftNotice = nil
+        didTimeOut = false
+        coverMissingPermission = false
+        isCoverQueued = true
+        coverQueuedAt = Date()
+        coverQueueTask?.cancel()
+        coverQueueTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(CoverButtonPolicy.queueTimeout))
+            guard let self, !Task.isCancelled, self.isCoverQueued else { return }
+            self.expireQueuedCover()
+        }
+        // 催一下连接（和回到前台一样：只是确保在广播 / 网络在试，不打断已经在进行的连接）
+        if let ble = link as? BLECurtainLink { ble.resumeConnecting() }
+    }
+
+    /// 「取消」：不等了，什么都没发
+    func cancelQueuedCover() {
+        clearQueuedCover()
+    }
+
+    private func clearQueuedCover() {
+        isCoverQueued = false
+        coverQueuedAt = nil
+        coverQueueTask?.cancel()
+        coverQueueTask = nil
+    }
+
+    private func expireQueuedCover() {
+        clearQueuedCover()
+        didTimeOut = true
+        recordEvent(text: "没连上")
+    }
+
+    private func startCover(fromQueue: Bool = false) {
+        guard connection == .connected, !isPending else { return }
+        if !fromQueue { coverTapCount += 1 }
         showLiftedNote = false
         liftNotice = nil
         didTimeOut = false
@@ -658,6 +748,7 @@ final class AppModel {
     func setDemoMode(_ isOn: Bool) {
         guard isOn != demoMode else { return }
         demoMode = isOn
+        clearQueuedCover()
         coverTask?.cancel()
         timeoutTask?.cancel()
         isCovering = false
@@ -719,7 +810,8 @@ final class AppModel {
             let name = "这台电脑"
             macName = name
             UserDefaults.standard.set(name, forKey: Keys.macName)
-            // 换了电脑：旧电脑的网络地址作废
+            // 换了电脑：旧电脑的网络地址作废，「上次」也是旧电脑的
+            forgetLastKnown()
             forgetNetworkAddress()
         }
         return result
@@ -757,6 +849,7 @@ final class AppModel {
         justPaired = false
         macName = nil
         resetKeepAwakeSending()
+        forgetLastKnown()
         UserDefaults.standard.removeObject(forKey: Keys.macName)
         forgetNetworkAddress()
         if let ble = (link as? BLECurtainLink) ?? parkedLink {
@@ -774,8 +867,16 @@ final class AppModel {
         paired = false
         justPaired = false
         macName = nil
+        forgetLastKnown()
         UserDefaults.standard.removeObject(forKey: Keys.macName)
         forgetNetworkAddress()
+    }
+
+    /// 撤销配对 / 换电脑 / 被电脑撤销：「上次」是旧电脑的，一起清；等着的盖上也作废
+    private func forgetLastKnown() {
+        clearQueuedCover()
+        LastKnownStore.standard.clear()
+        lastKnown = nil
     }
 
     // MARK: - 网络地址
@@ -824,6 +925,8 @@ final class AppModel {
     }
 
     private func apply(_ snapshot: CurtainSnapshot) {
+        // 上次的样子由真连接写进 UserDefaults（BLECurtainLink）；这里只读。演示 / 假连接不读
+        if link is BLECurtainLink, !demoMode { lastKnown = paired ? LastKnownStore.standard.load() : nil }
         if snapshot.phase != phase || snapshot.connection != connection {
             liftNotice = nil      // the too-far / no-answer line lasts until the state changes
         }
@@ -869,6 +972,24 @@ final class AppModel {
             isCovering = false
         }
         recordEvent(from: snapshot)
+        resolveQueuedCover(connection: snapshot.connection)
+    }
+
+    /// 等着的「盖上幕布」：连上了就发（没过期的话）；配对没了 / 进了演示就作废
+    private func resolveQueuedCover(connection: CurtainConnection) {
+        guard isCoverQueued else { return }
+        if connection == .notPaired || demoMode {
+            clearQueuedCover()
+        } else if CoverButtonPolicy.shouldSendOnLinkUp(isQueued: true, connection: connection) {
+            let expired = coverQueuedAt.map { CoverButtonPolicy.hasExpired(queuedAt: $0, now: Date()) } ?? true
+            clearQueuedCover()
+            if expired {
+                expireQueuedCover()
+            } else {
+                // 连上这一刻手机里记的幕布状态可能是上一次的，电脑的新状态马上到：不拿它挡，让电脑自己回
+                startCover(fromQueue: true)
+            }
+        }
     }
 
     private func finishCover(_ outcome: CoverOutcome) {
