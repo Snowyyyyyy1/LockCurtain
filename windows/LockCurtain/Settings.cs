@@ -20,11 +20,18 @@ internal sealed class Settings
     /// 遮罩背景（CurtainBackground.cs），默认当前壁纸
     public CurtainBackground CurtainBackground { get; set; } = CurtainBackground.Wallpaper;
     /// 遮罩文字：图案下面的标题和提示，空字符串 = 不显示这一行（Mac 版 curtainTitle / curtainSubtitle）。
-    /// settings.json 里手改成 null 也当空的，不然显示遮罩时建窗口出错
+    /// 标题在 settings.json 里手改成 null 也当空的，不然显示遮罩时建窗口出错
     public string CurtainTitle { get; set => field = value ?? ""; } = DefaultCurtainTitle;
-    public string CurtainSubtitle { get; set => field = value ?? ""; } = DefaultCurtainSubtitle;
-    public const string DefaultCurtainTitle = "LockCurtain is Using Your PC";
-    public const string DefaultCurtainSubtitle = "Press any key or click to unlock";
+    /// 提示：null = 没自己写过，跟着这次怎么撤变（copy §16.6，见 DefaultSubtitle）
+    public string? CurtainSubtitle { get; set; }
+    public const string DefaultCurtainTitle = "LockCurtain 正在使用这台电脑";
+    /// 老版本的英文默认值：存着的还是它，就当没改过（跟着新的默认走）
+    const string LegacyDefaultTitle = "LockCurtain is Using Your PC", LegacyDefaultSubtitle = "Press any key or click to unlock";
+
+    /// 幕布上那行提示的默认值（copy §16.6）：离开模式按键先锁屏；预览按键直接关
+    public static string DefaultSubtitle(CurtainMode mode) => mode == CurtainMode.Preview ? "按任意键关掉预览" : "按任意键，先锁屏";
+    /// 这次盖上时显示的提示
+    public string SubtitleFor(CurtainMode mode) => CurtainSubtitle ?? DefaultSubtitle(mode);
     /// 离开模式下屏幕常亮；关掉时只防系统休眠，允许熄屏
     public bool AwayKeepDisplayOn { get; set; } = true;
     /// 离开模式下把内置屏亮度调到 0，撤遮罩时恢复
@@ -33,6 +40,8 @@ internal sealed class Settings
     public KeepAwakeSaved? KeepAwake { get; set; }
     /// 每天自动检查一次更新（Updater.cs），发现新版本时提示
     public bool AutoCheckUpdates { get; set; } = true;
+    /// 「开始用 LockCurtain」弹过了（第一次打开时弹一次，见 GuideForm.cs）
+    public bool GuideShown { get; set; }
 
     static readonly string FilePath = Path.Combine(Log.Dir, "settings.json");
     static readonly JsonSerializerOptions Json = new()
@@ -47,13 +56,21 @@ internal sealed class Settings
 
     static Settings Load()
     {
-        try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new(); }
+        try { return Migrate(JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new()); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return new(); }
         catch (JsonException e)
         {
             Log.Write($"settings.json 格式不对，用默认设置: {e.Message}");
             return new();
         }
+    }
+
+    /// 老的英文默认文字换成新的默认（下次改设置时写盘）
+    static Settings Migrate(Settings s)
+    {
+        if (s.CurtainTitle == LegacyDefaultTitle) s.CurtainTitle = DefaultCurtainTitle;
+        if (s.CurtainSubtitle == LegacyDefaultSubtitle) s.CurtainSubtitle = null;
+        return s;
     }
 
     /// 改设置都走这里：改完写盘，再通知

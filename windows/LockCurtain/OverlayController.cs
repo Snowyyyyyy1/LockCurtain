@@ -2,14 +2,15 @@
 //
 // 两种模式（Mac 版还有「锁屏」模式：Windows 的锁屏界面在安全桌面上，普通程序画不上去，
 // 锁屏期间自动化工具也用不了，所以没有这一种）：
-//   preview  菜单「遮罩预览」或 --send preview，真人输入后直接撤
-//   away     菜单「进入离开模式」或 --send away，真人输入后先锁屏，确认锁上再撤
+//   preview  菜单「预览幕布」或 --send preview，真人输入后直接撤
+//   away     菜单「盖上幕布」或 --send away，真人输入后先锁屏，确认锁上再撤
 //
 // 退出路径：
 //   1. 真人按键 / 点击 / 滚轮 —— InputFilter（前台是管理员窗口时钩子看不到，InputFilter 事后发现）
 //   2. 看门狗 —— 钩子连续 120 秒不可用时，先锁屏再撤遮罩，防止锁死
 //   3. 会话被锁（Win+L、Ctrl+Alt+Del 里点锁定）—— 直接撤，锁屏本身就挡住了桌面
-//   4. 菜单「紧急关闭遮罩」
+//   4. 菜单「撤下幕布」/ --send hide —— 和真人回来一样走 SafeHide：离开模式下先锁屏再撤
+//   5. 配对的手机撤下（LiftFromPhone）—— 签名、新鲜、走近都验过，只撤遮罩、不锁屏
 //
 // 安全约束和 Mac 版一样：离开模式下任何撤遮罩的路径都先锁屏，不会露出已解锁的桌面。
 
@@ -85,7 +86,7 @@ internal sealed class OverlayController
         if (art == CurtainArt.Custom) CustomArt.Reload();
         foreach (var screen in Screen.AllScreens)
         {
-            var form = new OverlayForm(screen, stealth, art, background);
+            var form = new OverlayForm(screen, stealth, art, background, Mode ?? CurtainMode.Away);
             form.Show();
             form.Bounds = screen.Bounds;    // 建在另一块缩放不同的屏上时，系统可能按 DPI 改过尺寸
             form.EnsureTopmost();

@@ -76,7 +76,9 @@ internal sealed class RuleEditor : Form
         bar.BackColor = theme.Card;
         save = new Button { Text = isNew ? "添加" : "保存", DialogResult = DialogResult.OK, UseVisualStyleBackColor = true };
         cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, UseVisualStyleBackColor = true };
-        delete = new Button { Text = "删除规则", DialogResult = DialogResult.Abort, UseVisualStyleBackColor = true, Visible = !isNew };
+        delete = new Button { Text = "删除规则", UseVisualStyleBackColor = true, Visible = !isNew };
+        // 删之前先问一次（copy §16.7，D8）；确认了才以 Abort 关窗，由 RulesPage 删掉
+        delete.Click += (_, _) => { if (ConfirmDelete(this)) DialogResult = DialogResult.Abort; };
         bar.Controls.AddRange(new Control[] { delete, cancel, save });
         bar.Layout += (_, _) => ArrangeBar();
         AcceptButton = save;
@@ -89,6 +91,23 @@ internal sealed class RuleEditor : Form
     }
 
     int S(int logical) => LogicalToDeviceUnits(logical);
+
+    /// 「删除这条规则？」取消 / 删除
+    static bool ConfirmDelete(IWin32Window owner)
+    {
+        var cancel = new TaskDialogButton("取消");
+        var remove = new TaskDialogButton("删除");
+        var page = new TaskDialogPage
+        {
+            Caption = "删除规则",
+            Heading = "删除这条规则？",
+            Text = "删掉以后，这条规则不再自动盖上幕布。",
+            Buttons = { cancel, remove },
+            DefaultButton = cancel,
+            Icon = TaskDialogIcon.Warning,
+        };
+        return TaskDialog.ShowDialog(owner, page) == remove;
+    }
 
     protected override void OnHandleCreated(EventArgs e)
     {
@@ -159,7 +178,7 @@ internal sealed class RuleEditor : Form
 
         // 进程
         conditions
-            .Toggle("某个程序在运行", () => rule.Processes != null, on => rule.Processes = on ? new() : null)
+            .Toggle("某个程序开着", () => rule.Processes != null, on => rule.Processes = on ? new() : null)
             .Only(() => rule.Processes != null, g => NameList(v, g, "processes", () => rule.Processes,
                 "进程名，如 claude", "运行中的程序", RunningChoices,
                 "列表里任意一个在运行即满足。填进程名，.exe 可以省略；命令行工具（比如 claude）也填它的进程名。"));
@@ -173,7 +192,8 @@ internal sealed class RuleEditor : Form
                 ((rule.SleepBlockers?.Count ?? 0) == 0
                     ? "留空 = 任意程序在阻止睡眠即满足；系统服务、驱动和 LockCurtain 自己不算。"
                     : "列表里任意一个在阻止睡眠即满足。")
-                + (elevated ? "" : "要以最高权限运行（用 install.ps1 安装）才读得到谁在阻止睡眠，现在这个条件不会满足。")));
+                // COPY-TODO: 原句带 install.ps1（D5），按 §16.8 的「以管理员身份运行」改写
+                + (elevated ? "" : "要以管理员身份运行才读得到谁在阻止睡眠，现在这个条件不会满足。设置 › 权限 里可以开启。")));
 
         // 时间段
         var window = rule.TimeWindow ?? TimeWindow.Default;

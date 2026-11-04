@@ -1,8 +1,9 @@
 // PairingForm.cs —— 「配对手机」窗口（对应 Mac 的 PairingWindow.swift，文案按 Windows 版 brief §8，用「电脑」）
 //
-// 托盘菜单「配对手机」打开：6 位码、一句告诉人在手机上做什么、脚注、「换一个码」「关闭」。
+// 托盘菜单「配对手机…」、面板「手机」那一行、设置 › 手机、开始指南打开：6 位码、一句告诉人在手机上做什么、脚注、「换一个码」「关闭」。
 // 关掉窗口码就作废（没配过手机的话也不再找手机）；配上时窗口自己留着，让人看清「已和这台手机配上。」再关。
-// 「撤销配对」的确认框也在这里（ConfirmUnpair）。
+// 「撤销配对」的确认框也在这里（ConfirmUnpair，只撤一台）。
+// 深浅色和设置窗口一样跟着系统（Theme.Current()，深色标题栏，系统界面字体）。
 
 using System.Drawing;
 using LockCurtain.Phone;
@@ -15,6 +16,8 @@ internal sealed class PairingForm : Form
     readonly Label above = new(), code = new(), below = new(), footnote = new(), headline = new(), detail = new(), liftLine = new();
     readonly Button refresh = new() { Text = "换一个码", AutoSize = true, MinimumSize = new Size(96, 32) };
     readonly Button close = new() { Text = "关闭", AutoSize = true, MinimumSize = new Size(96, 32) };
+    readonly Theme theme = Theme.Current();
+    readonly string fontFamily = (SystemFonts.MessageBoxFont ?? SystemFonts.DefaultFont).FontFamily.Name;
 
     public PairingForm(PhoneLink link)
     {
@@ -27,10 +30,12 @@ internal sealed class PairingForm : Form
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96, 96);
         ClientSize = new Size(440, 340);
-        Font = new Font("Microsoft YaHei UI", 9.75f);
+        Font = new Font(fontFamily, 9.75f);
+        BackColor = theme.Page;
+        ForeColor = theme.Text;
         try { Icon = Icon.ExtractAssociatedIcon(Environment.ProcessPath!); } catch (Exception) { }
 
-        var secondary = SystemColors.GrayText;
+        var secondary = theme.Secondary;
         Style(above, 10.5f, FontStyle.Regular, null);
         Style(code, 30f, FontStyle.Bold, null, "Consolas");
         Style(below, 9.75f, FontStyle.Regular, secondary);
@@ -79,8 +84,15 @@ internal sealed class PairingForm : Form
         Render();
     }
 
-    static void Style(Label l, float size, FontStyle style, Color? color, string family = "Microsoft YaHei UI")
+    protected override void OnHandleCreated(EventArgs e)
     {
+        base.OnHandleCreated(e);
+        Native.UseDarkTitleBar(Handle, theme.Dark);
+    }
+
+    void Style(Label l, float size, FontStyle style, Color? color, string? family = null)
+    {
+        family ??= fontFamily;
         l.AutoSize = true;
         l.Dock = DockStyle.Fill;
         l.TextAlign = ContentAlignment.MiddleCenter;
@@ -145,8 +157,8 @@ internal sealed class PairingForm : Form
         }
     }
 
-    /// 「撤销配对」：先确认，撤销后告诉人手机那边会怎样
-    public static void ConfirmUnpair(PhoneLink link)
+    /// 「撤销配对」：先确认，只撤这一台（protocol v3 §4）。撤完那一行直接消失，不再弹「已撤销」（copy §16.1）
+    public static void ConfirmUnpair(PhoneLink link, Guid phoneID, IWin32Window? owner = null)
     {
         var cancel = new TaskDialogButton("取消");
         var revoke = new TaskDialogButton("撤销配对");
@@ -154,19 +166,12 @@ internal sealed class PairingForm : Form
         {
             Caption = "撤销配对",
             Heading = "撤销这台手机的配对？",
-            Text = "撤销后要在这台手机上重新输码，才能再盖上幕布。",
+            Text = "撤销后，这台手机要重新输码才能再盖上幕布。其他手机的配对不受影响。",
             Buttons = { cancel, revoke },
             DefaultButton = cancel,
             Icon = TaskDialogIcon.Warning,
         };
-        if (TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen) != revoke) return;
-        link.UnpairAll();
-        TaskDialog.ShowDialog(new TaskDialogPage
-        {
-            Caption = "撤销配对",
-            Heading = "已经撤销了。",
-            Text = "手机那边会回到没配对。",
-            Buttons = { TaskDialogButton.OK },
-        }, TaskDialogStartupLocation.CenterScreen);
+        var picked = owner != null ? TaskDialog.ShowDialog(owner, page) : TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen);
+        if (picked == revoke) link.Unpair(phoneID);
     }
 }

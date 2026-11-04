@@ -26,7 +26,7 @@ namespace LockCurtain;
 internal sealed class OverlayForm : Form
 {
     /// 标题和提示在设置里改，建窗口时读一次，下次显示遮罩时生效
-    readonly string title = Settings.Current.CurtainTitle.Trim(), subtitle = Settings.Current.CurtainSubtitle.Trim();
+    readonly string title = Settings.Current.CurtainTitle.Trim(), subtitle;
     readonly bool stealth;
     readonly CurtainArt art;
     readonly CurtainBackground curtainBackground;
@@ -48,9 +48,11 @@ internal sealed class OverlayForm : Form
     /// 这个窗口盖的那块屏
     public Screen Display { get; }
 
-    public OverlayForm(Screen screen, bool stealth, CurtainArt art, CurtainBackground curtainBackground)
+    public OverlayForm(Screen screen, bool stealth, CurtainArt art, CurtainBackground curtainBackground, CurtainMode mode)
     {
         Display = screen;
+        // 没自己写过提示时跟着模式变：离开模式「按任意键，先锁屏」，预览「按任意键关掉预览」
+        subtitle = Settings.Current.SubtitleFor(mode).Trim();
         this.stealth = stealth;
         this.art = art;
         this.curtainBackground = curtainBackground;
