@@ -33,7 +33,15 @@
 //   * 记得的标识按手机记（每台最近 2 个）；一台手机认过身份，它别的没认身份的连接悄悄断掉（不拉黑）。
 //   * 服务变了（didModifyServices）、发件箱退订、连续 3 次写失败：主动断开，交给正常重连。
 //
-// 日志：/tmp/lockcurtain-ble.log，每步一行；反复出现的（健康检查 / 退避 / RSSI / 问询）只在状态变了时写、或每分钟最多一行。
+// 协议 v3（handoff/ux-p1/protocol-v3.md）：
+//   * ping 的回复：先 State，再 KeepAwakeState；保持唤醒每变一次（不管谁改的）都报给连着的手机
+//   * awake:off / 1h / 2h / 5h / always：先回 Ack 0，再改保持唤醒，再报 KeepAwakeState（不要面容，不盖幕布）
+//   * name:<手机名>：存起来给「手机」页显示
+//   * away：Mac 没给辅助功能时不盖，回签名的 Ack 4（缺权限），见 canCover
+//   * unpair：先回签名的 Ack 0，再删钥匙，再断开
+//   * 每台手机记 name / pairedAt / lastSeen（UserDefaults，不是秘密），钥匙在钥匙串
+//
+// 日志：~/Library/Logs/LockCurtain/ble.log（调试版 LockCurtain Debug/），每步一行；反复出现的（健康检查 / 退避 / RSSI / 问询）只在状态变了时写、或每分钟最多一行。
 // 满 2 MB 轮转成 .log.1（只留一个）。不写码、不写钥匙。
 // CBCentralManager 的回调都投递到 main 队列，所以这里的 @Published 永远在主线程上改。
 
@@ -50,8 +58,21 @@ final class PhonePairing: NSObject, ObservableObject {
         case bluetoothOff         // 蓝牙没开
         case unauthorized         // 系统没给蓝牙权限
         case unsupported
-        /// 刚撤销过配对
-        case revoked
+    }
+
+    /// 蓝牙这一层现在能不能用（「手机」页的横幅、权限页的蓝牙一行）
+    enum Radio: Equatable {
+        case unknown, on, off, unauthorized, unsupported
+    }
+
+    /// 「手机」页的一行
+    struct PhoneInfo: Identifiable, Equatable {
+        let id: UUID
+        var name: String
+        /// 老记录没有：界面上省掉日期
+        var pairedAt: Date?
+        var lastSeen: Date?
+        var connected: Bool
     }
 
     static let serviceUUID = CBUUID(string: "E9A1B2C3-D4E5-4F60-8A7B-1C2D3E4F5A6B")
@@ -78,6 +99,23 @@ final class PhonePairing: NSObject, ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var code = ""
+    /// 这个窗口里错满 5 次，码作废了（「换一个码」照样能按，按了等于重新打开窗口）
+    @Published private(set) var codeInvalidated = false
+    /// 配过的手机（钥匙串里有钥匙的），按配对时间排
+    @Published private(set) var phones: [PhoneInfo] = []
+    @Published private(set) var radio: Radio = .unknown
+
+    /// 能不能盖幕布（Mac 没给辅助功能时不能）：手机发来的 away 由它决定回 Ack 0 还是 Ack 4
+    var canCover: () -> Bool = { true }
+    /// 手机发来的 awake:* 命令；返回 false = 不认识
+    var onKeepAwake: ((String) -> Bool)?
+    /// 现在的保持唤醒状态（报给手机）
+    var keepAwakeState: () -> (mode: PairingCrypto.KeepAwakeMode, endsAt: UInt64, appName: String) = { (.off, 0, "") }
+
+    /// 每台手机的名字 / 配对时间 / 最后连上时间：{phoneID: {name, pairedAt, lastSeen}}
+    private static let phoneInfoKey = "phonePairing.phoneInfo"
+    /// 手机名最长字节数（protocol v3）
+    private static let maxNameBytes = 60
 
     /// 手机发来的命令（away / hide …），由 AppDelegate 接到原来的命令通道上
     var onCommand: ((String) async -> Void)?
@@ -138,14 +176,58 @@ final class PhonePairing: NSObject, ObservableObject {
         var ignoreStaleDisconnect = false
         init(_ peripheral: CBPeripheral) { self.peripheral = peripheral }
     }
-    private var peers: [UUID: Peer] = [:]
+    private var peers: [UUID: Peer] = [:] { didSet { refreshPhones() } }
+    /// 正在处理手机的 awake:* 命令：保持唤醒的 onChange 先不报，处理完统一报一次
+    private(set) var handlingAwake = false
     /// 暂时不理的外设（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
     private var ignored = TimedIgnoreList<UUID>()
 
     override init() {
         super.init()
         UserDefaults.standard.removeObject(forKey: Self.legacyPairedKey)
+        refreshPhones()
     }
+
+    // MARK: - 每台手机的记录
+
+    private func metadata() -> [String: [String: Any]] {
+        UserDefaults.standard.dictionary(forKey: Self.phoneInfoKey) as? [String: [String: Any]] ?? [:]
+    }
+
+    private func updateMetadata(_ phoneID: UUID, _ change: (inout [String: Any]) -> Void) {
+        var all = metadata()
+        var entry = all[phoneID.uuidString] ?? [:]
+        change(&entry)
+        all[phoneID.uuidString] = entry
+        UserDefaults.standard.set(all, forKey: Self.phoneInfoKey)
+        refreshPhones()
+    }
+
+    private func forgetMetadata(_ phoneID: UUID) {
+        var all = metadata()
+        all[phoneID.uuidString] = nil
+        UserDefaults.standard.set(all, forKey: Self.phoneInfoKey)
+    }
+
+    /// 钥匙串里的手机 + 存的名字 / 时间 + 现在连没连着 → phones
+    func refreshPhones() {
+        let meta = metadata()
+        let connected = Set(peers.values.compactMap(\.phoneID))
+        let list = authority.pairedPhoneIDs.map { id -> PhoneInfo in
+            let m = meta[id.uuidString] ?? [:]
+            let name = (m["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "iPhone"
+            return PhoneInfo(id: id, name: name, pairedAt: m["pairedAt"] as? Date, lastSeen: m["lastSeen"] as? Date,
+                             connected: connected.contains(id))
+        }.sorted { ($0.pairedAt ?? .distantPast, $0.id.uuidString) < ($1.pairedAt ?? .distantPast, $1.id.uuidString) }
+        if list != phones { phones = list }
+    }
+
+    private func touchLastSeen(_ phoneID: UUID) {
+        updateMetadata(phoneID) { $0["lastSeen"] = Date() }
+    }
+
+    /// 连上的手机里有没有认过身份的
+    var anyPhoneConnected: Bool { phones.contains { $0.connected } }
 
     var isPaired: Bool { authority.isPaired }
 
@@ -172,6 +254,7 @@ final class PhonePairing: NSObject, ObservableObject {
         code = fresh
         windowOpen = true
         phase = .waiting
+        codeInvalidated = false
         ignored.removeAll()
         identifierBackoff.removeAll()
         if stoppedAfterEarlyDrops {
@@ -186,6 +269,7 @@ final class PhonePairing: NSObject, ObservableObject {
     func stop() {
         authority.closeWindow()
         code = ""
+        codeInvalidated = false
         windowOpen = false
         if phase != .bluetoothOff && phase != .unauthorized && phase != .unsupported { phase = .idle }
         if !isPaired {
@@ -195,29 +279,41 @@ final class PhonePairing: NSObject, ObservableObject {
         }
     }
 
-    /// 撤销这台机器上记着的所有手机：连着的手机先收到签名的撤销通知（它会删掉自己的钥匙），再删 Mac 的钥匙
-    func unpairAll() {
-        let notices = authority.revokeAll()
-        for peer in peers.values {
-            guard let id = peer.phoneID else { continue }
+    /// 撤销一台手机（「手机」页 / 右键菜单）：连着的话先收到签名的撤销通知（它会删掉自己的钥匙），再删 Mac 的钥匙。
+    /// 别的手机不受影响
+    func unpair(_ phoneID: UUID) {
+        let notice = authority.revoke(phoneID)
+        for peer in peers.values where peer.phoneID == phoneID {
             peer.phoneID = nil
-            if let notice = notices[id] {
-                Self.log("revoke: notifying connected phone \(id.uuidString)")
+            if let notice {
+                Self.log("revoke: notifying connected phone \(phoneID.uuidString)")
                 send(notice, to: peer)
                 peer.disconnectAfterWrites = true
+            } else {
+                central?.cancelPeripheralConnection(peer.peripheral)
             }
         }
-        UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
-        identifierBackoff.removeAll()
-        gates.removeAll()
-        code = ""
-        phase = .revoked
-        if !windowOpen {
+        forget(phoneID)
+        if !shouldRun {
             central?.stopScan()
             for peer in peers.values where !peer.disconnectAfterWrites {
                 central?.cancelPeripheralConnection(peer.peripheral)
             }
         }
+    }
+
+    /// 删掉一台手机在 Mac 上留下的其他东西：记得的外设标识、撤下判断、名字 / 时间
+    private func forget(_ phoneID: UUID) {
+        gates[phoneID] = nil
+        if !isPaired {
+            UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
+            identifierBackoff.removeAll()
+        } else {
+            UserDefaults.standard.set(KnownPeripherals.encode(KnownPeripherals.forget(knownEntries(), phoneID: phoneID)),
+                                      forKey: Self.knownPeripheralsKey)
+        }
+        forgetMetadata(phoneID)
+        refreshPhones()
     }
 
     /// 幕布状态变了：告诉已连上的手机（签名的）
@@ -238,7 +334,20 @@ final class PhonePairing: NSObject, ObservableObject {
         }
     }
 
-    /// 换一个码：老的立刻作废；错满 5 次的窗口换不出新码
+    /// 保持唤醒变了（不管谁改的）：告诉已连上、认过身份的手机
+    func reportKeepAwake() {
+        for peer in peers.values { sendKeepAwake(to: peer) }
+    }
+
+    private func sendKeepAwake(to peer: Peer) {
+        guard let id = peer.phoneID else { return }
+        let s = keepAwakeState()
+        if let message = authority.keepAwakeStateMessage(mode: s.mode, endsAt: s.endsAt, appName: s.appName, for: id) {
+            send(message, to: peer)
+        }
+    }
+
+    /// 换一个码：老的立刻作废。错满 5 次作废以后按它，等于关掉窗口重新打开（新码、重新给 5 次）
     func refreshCode() {
         guard phase == .waiting else { return }
         let fresh = Self.makeCode()
@@ -246,9 +355,11 @@ final class PhonePairing: NSObject, ObservableObject {
             code = fresh
             Self.log("code refreshed")
         } else {
-            code = ""
-            Self.log("refresh refused: code locked after \(PairingCrypto.maxCodeAttempts) wrong attempts, reopen the window")
+            authority.openWindow(code: fresh)
+            code = fresh
+            Self.log("code was locked after \(PairingCrypto.maxCodeAttempts) wrong attempts; new code issued (same as reopening the window)")
         }
+        codeInvalidated = false
     }
 
     private static func makeCode() -> String {
@@ -420,6 +531,12 @@ final class PhonePairing: NSObject, ObservableObject {
     /// 每 30 秒：配过、蓝牙开着、没有认过身份的手机连着 ⇒ 放出到点的标识、重新挂记得的标识（退避中的除外）、确保在扫
     private func healthCheck() {
         let now = Date()
+        // 连着的手机：至少每分钟记一次「上次连上」
+        let meta = metadata()
+        for id in Set(peers.values.compactMap(\.phoneID)) {
+            let last = meta[id.uuidString]?["lastSeen"] as? Date ?? .distantPast
+            if now.timeIntervalSince(last) >= 55 { touchLastSeen(id) }
+        }
         let released = ignored.expire(at: now)
         if !released.isEmpty {
             Self.log("health: ignore expired for \(released.map(\.uuidString).joined(separator: ", "))")
@@ -528,21 +645,29 @@ final class PhonePairing: NSObject, ObservableObject {
             case .noCode(let reply), .malformed(let reply):
                 send(reply, to: peer)
             }
-            if authority.isLocked { code = "" }
+            if authority.isLocked { code = ""; codeInvalidated = true }
         case .presence, .liftNow:
             handleAnswer(message, from: peer)
         case .command:
             switch authority.handleCommand(message) {
-            case .accepted(let command, let phoneID, _, let confirmed, let ack):
+            case .accepted(let command, let phoneID, let counter, let confirmed, let ack):
                 let firstTime = peer.phoneID == nil
                 peer.phoneID = phoneID
                 remember(peer.peripheral, as: phoneID)
                 if firstTime { identified(peer, as: phoneID) }
-                send(ack, to: peer)
                 if confirmed {
                     phase = .paired
                     NSLog("LockCurtain paired with a phone (%@)", phoneID.uuidString)
+                    updateMetadata(phoneID) { $0["pairedAt"] = Date() }
                 }
+                if firstTime { touchLastSeen(phoneID) }
+                // N2：没给辅助功能就不盖（盖上以后键盘鼠标撤不下来），回签名的「缺权限」
+                if command.lowercased() == "away", !canCover() {
+                    Self.log("command \"away\" from \(phoneID.uuidString) refused: accessibility permission missing (ack 4)")
+                    send(authority.missingPermissionAck(counter: counter, for: phoneID) ?? ack, to: peer)
+                    return
+                }
+                send(ack, to: peer)
                 handle(command, phoneID: phoneID, peer: peer)
             case .rejected(_, _, let ack):
                 if let ack { send(ack, to: peer) }
@@ -655,23 +780,36 @@ final class PhonePairing: NSObject, ObservableObject {
     }
 
     private func handle(_ command: String, phoneID: UUID, peer: Peer) {
-        switch command.lowercased() {
+        // 手机名区分大小写，先于下面的 lowercased 处理
+        if command.hasPrefix("name:") {
+            let trimmed = String(command.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = String(decoding: PairingCrypto.utf8Prefix(trimmed, maxBytes: Self.maxNameBytes), as: UTF8.self)
+            Self.log("phone \(phoneID.uuidString) name: \(name)")
+            updateMetadata(phoneID) { $0["name"] = name }
+            return
+        }
+        let lower = command.lowercased()
+        if lower.hasPrefix("awake:") {
+            // 收据已经先发了；改保持唤醒（改的时候不报），再把结果报给所有连着的手机
+            handlingAwake = true
+            let known = onKeepAwake?(lower) ?? false
+            handlingAwake = false
+            Self.log("phone \(phoneID.uuidString) keep-awake command \(lower)\(known ? "" : " (unknown, ignored)")")
+            if known { reportKeepAwake() }
+            return
+        }
+        switch lower {
         case "ping":
-            // 握手确认 / 重连时表明身份：把现在的幕布状态告诉它
+            // 握手确认 / 重连时表明身份：把现在的幕布状态、保持唤醒状态告诉它
             if let state = authority.stateMessage(closed: curtainClosed, for: phoneID) { send(state, to: peer) }
+            sendKeepAwake(to: peer)
             if !windowOpen { central?.stopScan() }
         case "unpair":
+            // 顺序：签名的 Ack 0 已经在 receive 里先排进写队列，这里才删钥匙，写完再断开
             Self.log("phone \(phoneID.uuidString) asked to unpair")
             _ = authority.revoke(phoneID)
-            gates[phoneID] = nil
             peer.phoneID = nil
-            if !isPaired {
-                UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
-            } else {
-                let known = knownEntries()
-                UserDefaults.standard.set(KnownPeripherals.encode(KnownPeripherals.forget(known, phoneID: phoneID)),
-                                          forKey: Self.knownPeripheralsKey)
-            }
+            forget(phoneID)
             peer.disconnectAfterWrites = true
             if let inbox = peer.inbox { pump(peer, inbox) }
             if !shouldRun { central?.stopScan() }
@@ -738,6 +876,13 @@ final class PhonePairing: NSObject, ObservableObject {
 extension PhonePairing: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Self.log("central state \(central.state.rawValue)")
+        switch central.state {
+        case .poweredOn: radio = .on
+        case .poweredOff: radio = .off
+        case .unauthorized: radio = .unauthorized
+        case .unsupported: radio = .unsupported
+        default: break
+        }
         switch central.state {
         case .poweredOn:
             if phase == .bluetoothOff || phase == .unauthorized { phase = windowOpen ? .waiting : .idle }
@@ -838,7 +983,10 @@ extension PhonePairing: CBCentralManagerDelegate {
         let wasIdentified = peer?.phoneID != nil
         let quiet = peer?.quietCancel ?? false
         let serviceMissing = peer?.serviceMissing ?? false
-        if let phone = peer?.phoneID { gates[phone]?.resetRSSI() }
+        if let phone = peer?.phoneID {
+            gates[phone]?.resetRSSI()
+            if authority.pairedPhoneIDs.contains(phone) { touchLastSeen(phone) }
+        }
         peers[id] = nil
         updateRSSITimer()
         let now = Date()
@@ -987,9 +1135,39 @@ extension PhonePairing: CBPeripheralDelegate {
     }
 }
 
-/// /tmp/lockcurtain-ble.log：一个 DateFormatter、一个一直开着的 FileHandle；满 2 MB 改名成 .1（只留一个）重新开
+/// App 自己的日志文件夹：~/Library/Logs/LockCurtain/（调试版 LockCurtain Debug/）。
+/// 不放 /tmp：/tmp 所有用户共享，日志里有手机标识。右键菜单和 设置 › 权限 › 排查信息 的「打开日志文件夹」打开这里
+enum LogFolder {
+    static let url: URL = {
+        let base = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs", isDirectory: true)
+        let name = Bundle.main.bundleIdentifier?.hasSuffix(".debug") == true ? "LockCurtain Debug" : "LockCurtain"
+        return base.appendingPathComponent(name, isDirectory: true)
+    }()
+
+    static func file(_ name: String) -> URL {
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url.appendingPathComponent(name)
+    }
+
+    static func open() {
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(url)
+    }
+
+    /// 老版本写在 /tmp 的蓝牙日志：删掉（只删自己的，别的用户的删不掉也不管）
+    static func removeLegacyTmpLog() {
+        for p in ["/tmp/lockcurtain-ble.log", "/tmp/lockcurtain-ble.log.1"] {
+            if let owner = (try? FileManager.default.attributesOfItem(atPath: p))?[.ownerAccountID] as? NSNumber,
+               owner.uint32Value == getuid() {
+                try? FileManager.default.removeItem(atPath: p)
+            }
+        }
+    }
+}
+
+/// 蓝牙日志 ble.log（在 LogFolder 里）：一个 DateFormatter、一个一直开着的 FileHandle；满 2 MB 改名成 .1（只留一个）重新开
 final class BLELogFile: @unchecked Sendable {
-    static let shared = BLELogFile(path: "/tmp/lockcurtain-ble.log")
+    static let shared = BLELogFile(path: LogFolder.file("ble.log").path)
 
     private let path: String
     private let lock = NSLock()

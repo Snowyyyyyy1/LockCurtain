@@ -1,7 +1,8 @@
 // PairingAuthority.swift —— Mac 端的配对 / 验签规则（和蓝牙无关，自测直接在进程里跑它）
 //
 //   * 配对码：窗口打开时给一个码；一个窗口最多错 5 次，第 5 次错完这个码作废，
-//     「换一个码」也换不出新的，要关掉窗口重新打开。码只用一次：握手过了就作废。
+//     refresh（「换一个码」）换不出新的。PhonePairing 在作废之后按「换一个码」时走 openWindow，
+//     等于关掉窗口重新打开（新码、重新给 5 次）。码只用一次：握手过了就作废。
 //   * 握手是 CPace（见 PairingCrypto）：Mac 回 Yb/Tb 的那一刻就把这一轮记成一次错码，
 //     只有手机的确认标签 Ta 验过才算成。Ta 不对、手机放弃、半路不来都算错，这一轮作废。
 //     同一时间只有一轮在进行；sid 用过就不再收；换码 / 关窗口时进行中的那一轮也作废。
@@ -355,11 +356,30 @@ final class PairingAuthority {
 
     // MARK: - 发给手机的东西
 
+    /// 发给手机的 State / KeepAwakeState 共用的 seq：毫秒时间，同一毫秒里连发两条也严格递增
+    private var lastSeq: UInt64 = 0
+    private func nextSeq() -> UInt64 {
+        lastSeq = max(UInt64(Date().timeIntervalSince1970 * 1000), lastSeq + 1)
+        return lastSeq
+    }
+
     func stateMessage(closed: Bool, for phoneID: UUID) -> Data? {
         guard let record = store.load(phoneID) else { return nil }
         // seq 用毫秒时间：只要单调，手机拿它挡重放的旧状态
-        let seq = UInt64(Date().timeIntervalSince1970 * 1000)
-        return PairingCrypto.makeState(closed: closed, seq: seq, phoneID: phoneID, key: record.key)
+        return PairingCrypto.makeState(closed: closed, seq: nextSeq(), phoneID: phoneID, key: record.key)
+    }
+
+    /// 保持唤醒状态（协议 v3），seq 和 State 共用
+    func keepAwakeStateMessage(mode: PairingCrypto.KeepAwakeMode, endsAt: UInt64, appName: String, for phoneID: UUID) -> Data? {
+        guard let record = store.load(phoneID) else { return nil }
+        return PairingCrypto.makeKeepAwakeState(phoneID: phoneID, seq: nextSeq(), mode: mode.rawValue, endsAt: endsAt,
+                                                appName: appName, key: record.key)
+    }
+
+    /// 已经收下（计数已记）的命令，改回一条签名的「缺权限没做」（Ack status 4）
+    func missingPermissionAck(counter: UInt64, for phoneID: UUID) -> Data? {
+        guard let record = store.load(phoneID) else { return nil }
+        return PairingCrypto.makeAck(phoneID: phoneID, counter: counter, status: .missingPermission, key: record.key)
     }
 
     /// 撤销一台：先签好撤销通知再删钥匙
