@@ -20,7 +20,8 @@ final class DemoCurtainLink: CurtainLink {
             auto: auto,
             macName: macName,
             isAway: false,
-            keepAwake: .off
+            keepAwake: .off,
+            path: .bluetooth
         )
     }
 

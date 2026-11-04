@@ -441,8 +441,12 @@ struct HomeView: View {
                     .accessibilityHint(AppModel.UnlinkedMacState.retryButtonHint)
                     .transition(.opacity)
                 } else if showsClosedNote && showsLiftFooter {
-                    axLiftButton
-                        .transition(.opacity)
+                    if model.liftHiddenOnNetwork {
+                        networkLiftNote
+                    } else {
+                        axLiftButton
+                            .transition(.opacity)
+                    }
                 } else if showsClosedNote {
                     closedNote
                         .glassEffect(.clear, in: .rect(cornerRadius: 26))
@@ -559,14 +563,27 @@ struct HomeView: View {
                 }
             }
             .accessibilityElement(children: .combine)
-            // 「现在撤下」不看「走近撤下」开关（design v2.10 B）
-            liftButton
+            // 「现在撤下」不看「走近撤下」开关（design v2.10 B）。走网络时不显示按钮（撤下只能在蓝牙上），换一行说明
+            if model.liftHiddenOnNetwork {
+                networkLiftNote
+            } else {
+                liftButton
+            }
         }
         .multilineTextAlignment(.center)
         .padding(.top, 14)
         .padding(.bottom, 6)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
+    }
+
+    /// 走网络连着、幕布盖着：不能撤下的说明（蓝牙连上后按钮回来、这一行消失）
+    private var networkLiftNote: some View {
+        Text("走网络时不能撤下。撤下要手机在电脑旁边。")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity, minHeight: 44)
     }
 
     @ViewBuilder

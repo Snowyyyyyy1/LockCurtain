@@ -85,6 +85,13 @@ struct SettingsView: View {
                     }
                     .foregroundStyle(.tint)
                 }
+                if model.paired && !model.demoMode {
+                    NavigationLink {
+                        NetworkAddressView()
+                    } label: {
+                        LabeledContent("网络地址", value: model.networkAddress?.text ?? "没填")
+                    }
+                }
                 Button("撤销配对", role: .destructive) {
                     showUnpairConfirmation = true
                 }

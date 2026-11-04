@@ -35,6 +35,13 @@
 //   * 已经和现在这台连好时又来的中心（以及换电脑时多出来的中心）记成「旁路」：只收发撤销配对那一条，别的一概不理。
 //   * 有待撤销的就一直（安静地）广播，即使什么都没配着；没有了、又只是为它广播的，就停。
 //
+// 走网络（Sources/PhoneNetClient.swift，TCP）：手机填了电脑的地址、蓝牙又没通时的第二条路。只能盖上、开关保持唤醒、看状态；
+// 现在撤下 / Presence 回答 / 配对 / 撤销配对都只走蓝牙（电脑那边也会拒）。
+//   * 顺序：打开 App / 蓝牙掉了以后先等 NetworkLinkPlan.bleGrace（5 秒）让电脑来连；蓝牙没通、存了地址、配着对、在前台，才开网络；
+//     蓝牙通了就让位（路径切回蓝牙、关掉 TCP）；进后台就关（iOS 会挂起 TCP）。没存地址永远不走网络。
+//   * 网络来的消息（PhoneNetClient 已经验过签名、新鲜度、对得上等着的命令）和蓝牙走同一套处理：applyState / applyKeepAwake / handleAckFromComputer。
+//   * 网络上的命令计数仍然来自钥匙串（reserveNextCounter），一次只走一条路。
+//
 // 服务 / 特征 UUID 必须和 Mac 端 PhonePairing 一致。
 
 import CoreBluetooth
@@ -172,6 +179,8 @@ final class BLECurtainLink: NSObject, CurtainLink {
         case ok
         /// 电脑签名回 Ack 4：缺权限，没做（N2）
         case missingPermission
+        /// 电脑签名回 Ack 5：这条命令走网络不被允许，没做。永远不算成功
+        case notAllowedOnNetwork
         case rejected
         case failed
     }
@@ -191,6 +200,26 @@ final class BLECurtainLink: NSObject, CurtainLink {
     /// 「现在撤下」最多等多久（Mac 每 2 秒问一次）
     private static let liftTimeoutSeconds: Double = 5
 
+    // 走网络
+    private let net = PhoneNetClient(queue: .main)
+    /// 网络客户端开着（start 过、没 stop）
+    private var netRunning = false
+    private var netAddressInUse: NetworkAddress?
+    /// 用户刚存了地址：不等蓝牙，马上试一次（也触发 iOS 的「本地网络」询问）；连上或失败一次就算完成
+    private var netForce = false
+    private var netWasReady = false
+    private var netStatus: NetworkStatus = .none
+    /// 在前台（进后台就关网络）
+    private var inForeground = UIApplication.shared.applicationState != .background
+    /// 蓝牙从什么时候开始「没通」（算那 5 秒）；蓝牙通了 / 后台 / 没配对时清掉
+    private var bleWaitSince: Date?
+    private var netEvalTask: Task<Void, Never>?
+    /// 走网络发出去、还在等收据的命令计数（网络停了只了结这些，不碰蓝牙的）
+    private var networkAckCounters: Set<UInt64> = []
+    private var sentNameThisNetLink = false
+    /// 发命令时等电脑给 nonce 的最长时间（每条命令的收据后电脑才发下一个 nonce）
+    private static let netNonceWaitSeconds: Double = 3
+
     init(paired: Bool, macName: String?) {
         isPaired = paired
         snapshot = CurtainSnapshot(
@@ -200,6 +229,13 @@ final class BLECurtainLink: NSObject, CurtainLink {
             macName: paired ? macName : nil,
             isAway: false
         )
+        super.init()
+        net.reserveCounter = { PhoneKeychain.reserveNextCounter()?.counter }
+        net.key = { PhoneKeychain.loadLink().map { SymmetricKeyBox($0.key).key } }
+        net.phoneID = { PhoneKeychain.phoneID() }
+        net.onMessage = { [weak self] message in self?.receiveFromNetwork(message) }
+        net.onStateChange = { [weak self] state in self?.networkStateChanged(state) }
+        net.log = { Self.linkLog.info("\($0, privacy: .public)") }
     }
 
     // MARK: - CurtainLink
@@ -207,6 +243,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
     func activate() {
         quietOnly = false
         startLink(showPowerAlert: true)
+        evaluateNetwork()
     }
 
     /// 什么都没配着、只有待撤销的：安静地广播（不弹蓝牙框，界面上什么都不说），等旧电脑来连
@@ -272,9 +309,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
     }
 
     func cover() async -> CoverOutcome {
-        guard mac != nil, ready, isPaired else { return .unavailable }
+        guard activePath != nil else { return .unavailable }
         publish { $0.phase = .closing }
-        let ack = await sendSigned("away")
+        let ack = await sendCommand("away")
+        if ack == .notAllowedOnNetwork {
+            // 电脑签名说走网络不许（正常不会发生：away 在允许名单里）：没盖，绝不当成功
+            publish { $0.phase = .open }
+            return .timedOut
+        }
         if ack == .missingPermission {
             // 电脑签名说缺权限、没盖（N2）：幕布还是开着
             publish { $0.phase = .open }
@@ -300,16 +342,17 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     /// 保持唤醒：签名命令，5 秒内要电脑签收；新状态由电脑随后的 KeepAwakeState 报回来
     func setKeepAwake(_ choice: KeepAwakeChoice) async -> Bool {
-        guard mac != nil, ready, isPaired else { return false }
+        guard activePath != nil else { return false }
         Self.linkLog.info("keep-awake command \(choice.command, privacy: .public)")
-        return await sendSigned(choice.command, ackSeconds: 5) == .ok
+        return await sendCommand(choice.command, ackSeconds: 5) == .ok
     }
 
     /// 「现在撤下」（调用方已经过了面容 / 密码）：等 Mac 的下一条问询，用它的 nonce 发签名的 LiftNow，
     /// 等 Mac 签名的结果。老版本的 Mac 不问询，就是超时。
     /// 不看「走近撤下」开关：开关只管「走近自己撤」，按「现在撤下」照样撤（电脑那边 LiftGate.liftNow 也不看开关）
     func liftNow() async -> LiftOutcome {
-        guard mac != nil, ready, isPaired, snapshot.phase == .closed else { return .unavailable }
+        // 只有蓝牙（mac != nil && ready）；走网络时 activePath == .network，这里照样 .unavailable
+        guard mac != nil, ready, isPaired, activePath == .bluetooth, snapshot.phase == .closed else { return .unavailable }
         finishLift(.unavailable)
         Self.liftLog.info("lift-now requested; waiting for the next poll")
         return await withCheckedContinuation { cont in
@@ -398,7 +441,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
             PhoneKeychain.removePendingUnpair(macIdentifier: macID.uuidString)
             markReady()
             return .accepted
-        case .rejected, .failed:
+        case .rejected, .failed, .notAllowedOnNetwork:
             PhoneKeychain.deleteLink()
             return mac == nil ? .disconnected : .macRefused
         }
@@ -692,7 +735,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
                     // 签名的回答：它认得我们
                     self.markReady()
                     return
-                case .rejected, .failed:
+                case .rejected, .failed, .notAllowedOnNetwork:
                     // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连接，过一会儿再试。
                     self.publish { $0.connection = .notConnected }
                     // 不认这把钥匙的中心可能是撤销过的旧电脑：用待撤销的旧钥匙试一次（这次连接里每份只试一次）
@@ -718,16 +761,23 @@ final class BLECurtainLink: NSObject, CurtainLink {
         resetBackoff("ready")
         publish { $0.connection = .connected }
         if !wasReady { sendName() }
+        // 蓝牙通了：网络让位
+        evaluateNetwork()
     }
 
     /// 每次连上发一次手机名（protocol-v3 §1：≤ 60 字节，去掉首尾空白）。电脑拿去在「手机」页上显示
     private func sendName() {
         guard !sentNameThisLink else { return }
         sentNameThisLink = true
+        let command = Self.nameCommand()
+        Task { [weak self] in _ = await self?.sendSigned(command) }
+    }
+
+    private static func nameCommand() -> String {
         let raw = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmed = String(decoding: PairingCrypto.utf8Prefix(raw.isEmpty ? "iPhone" : raw, maxBytes: 60), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        Task { [weak self] in _ = await self?.sendSigned("name:" + trimmed) }
+        return "name:" + trimmed
     }
 
     /// 收到 Mac 验过签名的消息（收据 / 状态 / 问询）：它一定认得我们，算已连接
@@ -745,6 +795,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
+        stopNetwork()
         publish {
             $0.connection = .notPaired
             $0.macName = nil
@@ -764,6 +815,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     private func finishAck(_ counter: UInt64, _ result: AckResult) {
         guard let pending = pendingAcks.removeValue(forKey: counter) else { return }
+        networkAckCounters.remove(counter)
         pending.timeout.cancel()
         pending.cont.resume(returning: result)
     }
@@ -824,44 +876,11 @@ final class BLECurtainLink: NSObject, CurtainLink {
                   ack.phoneID == PhoneKeychain.phoneID() else { return }
             // 在回待撤销那条 unpair 的：只给撤销流程
             if handlePendingAttemptAck(ack, from: central) { return }
-            // verifyAck 对签名的 0 和 4 都会过：都证明电脑认得我们
-            let verified = PhoneKeychain.loadLink().map {
-                PairingCrypto.verifyAck(ack, key: SymmetricKeyBox($0.key).key)
-            } == true
-            // 晚到的收据（前一次 ping 的）也证明电脑认得我们
-            if verified { noteVerifiedFromMac("ack") }
-            guard pendingAcks[ack.counter] != nil else { return }
-            if verified {
-                finishAck(ack.counter, ack.status == .missingPermission ? .missingPermission : .ok)
-            } else {
-                finishAck(ack.counter, ack.status == .unknownOrBadSignature ? .rejected : .failed)
-            }
+            handleAckFromComputer(ack, via: .bluetooth)
         case .state:
-            guard let record = PhoneKeychain.loadLink(),
-                  let state = PairingCrypto.openState(message, phoneID: PhoneKeychain.phoneID(),
-                                                      key: SymmetricKeyBox(record.key).key),
-                  state.seq > lastStateSeq else { return }
-            noteVerifiedFromMac("state")
-            lastStateSeq = state.seq
-            let liftedByUs = !state.closed && awaitingLiftOpen
-            if state.closed || liftedByUs { awaitingLiftOpen = false }
-            publish {
-                $0.phase = state.closed ? .closed : .open
-                if liftedByUs { $0.phoneLiftCount += 1 }
-            }
-            if state.closed { finishCover(.covered) } else { finishLift(.lifted) }
+            applyState(message, via: .bluetooth)
         case .keepAwakeState:
-            guard let record = PhoneKeychain.loadLink(),
-                  let report = PairingCrypto.openKeepAwakeState(message, phoneID: PhoneKeychain.phoneID(),
-                                                                key: SymmetricKeyBox(record.key).key),
-                  report.seq > lastAwakeSeq else { return }
-            noteVerifiedFromMac("keep-awake state")
-            lastAwakeSeq = report.seq
-            guard let state = KeepAwakeState(mode: report.mode, endsAt: report.endsAt, appName: report.appName) else {
-                Self.linkLog.info("keep-awake state: unknown mode \(report.mode); ignored")
-                return
-            }
-            publish { $0.keepAwake = state }
+            applyKeepAwake(message, via: .bluetooth)
         case .poll:
             answerPoll(message)
         case .liftResult:
@@ -897,12 +916,69 @@ final class BLECurtainLink: NSObject, CurtainLink {
                 handlePendingRevoke(message, from: central)
                 return
             }
-            PhoneKeychain.deleteLink()
-            forgetLocally()
-            onRevoked?()
+            revokedByComputer()
         default:
             break
         }
+    }
+
+    // MARK: - 蓝牙和网络共用的处理（电脑发来、已经是这条路上收到的）
+
+    /// 电脑的收据。via == .bluetooth 时和以前完全一样；网络来的已经被 PhoneNetClient 验过「对得上一条等着的命令」
+    private func handleAckFromComputer(_ ack: PairingCrypto.Ack, via path: LinkPath) {
+        // verifyAck 对签名的 0、4、5 都会过：都证明电脑认得我们
+        let verified = PhoneKeychain.loadLink().map {
+            PairingCrypto.verifyAck(ack, key: SymmetricKeyBox($0.key).key)
+        } == true
+        // 晚到的收据（前一次 ping 的）也证明电脑认得我们（网络的「已连接」由 PhoneNetClient 的 ready 说了算）
+        if verified, path == .bluetooth { noteVerifiedFromMac("ack") }
+        guard pendingAcks[ack.counter] != nil else { return }
+        if verified {
+            switch ack.status {
+            case .missingPermission: finishAck(ack.counter, .missingPermission)
+            case .notAllowedOnNetwork: finishAck(ack.counter, .notAllowedOnNetwork)
+            default: finishAck(ack.counter, .ok)
+            }
+        } else {
+            finishAck(ack.counter, ack.status == .unknownOrBadSignature ? .rejected : .failed)
+        }
+    }
+
+    private func applyState(_ message: Data, via path: LinkPath) {
+        guard let record = PhoneKeychain.loadLink(),
+              let state = PairingCrypto.openState(message, phoneID: PhoneKeychain.phoneID(),
+                                                  key: SymmetricKeyBox(record.key).key),
+              state.seq > lastStateSeq else { return }
+        if path == .bluetooth { noteVerifiedFromMac("state") }
+        lastStateSeq = state.seq
+        let liftedByUs = !state.closed && awaitingLiftOpen
+        if state.closed || liftedByUs { awaitingLiftOpen = false }
+        publish {
+            $0.phase = state.closed ? .closed : .open
+            if liftedByUs { $0.phoneLiftCount += 1 }
+        }
+        if state.closed { finishCover(.covered) } else { finishLift(.lifted) }
+    }
+
+    private func applyKeepAwake(_ message: Data, via path: LinkPath) {
+        guard let record = PhoneKeychain.loadLink(),
+              let report = PairingCrypto.openKeepAwakeState(message, phoneID: PhoneKeychain.phoneID(),
+                                                            key: SymmetricKeyBox(record.key).key),
+              report.seq > lastAwakeSeq else { return }
+        if path == .bluetooth { noteVerifiedFromMac("keep-awake state") }
+        lastAwakeSeq = report.seq
+        guard let state = KeepAwakeState(mode: report.mode, endsAt: report.endsAt, appName: report.appName) else {
+            Self.linkLog.info("keep-awake state: unknown mode \(report.mode); ignored")
+            return
+        }
+        publish { $0.keepAwake = state }
+    }
+
+    /// 电脑用现在的钥匙签了撤销通知：钥匙删掉，界面回到没配对
+    private func revokedByComputer() {
+        PhoneKeychain.deleteLink()
+        forgetLocally()
+        onRevoked?()
     }
 
     /// 换电脑时，新电脑发来的：只认配对回话和那条 ping 的收据（用内存里的新钥匙验）
@@ -1080,11 +1156,207 @@ final class BLECurtainLink: NSObject, CurtainLink {
         send(data)
     }
 
+    // MARK: - 走网络
+
+    /// 现在说话走哪条路：蓝牙通了永远蓝牙，否则网络（ready 了的），都没有就 nil
+    private var activePath: LinkPath? {
+        guard isPaired else { return nil }
+        return NetworkLinkPlan.path(bleReady: mac != nil && ready, networkReady: net.isReady)
+    }
+
+    /// 发一条签名命令：蓝牙通了走蓝牙（和以前一样），否则走网络
+    private func sendCommand(_ command: String, ackSeconds: Double = 6) async -> AckResult {
+        if mac != nil, ready { return await sendSigned(command, ackSeconds: ackSeconds) }
+        return await sendSignedOverNetwork(command, ackSeconds: ackSeconds)
+    }
+
+    /// 走网络发：PhoneNetClient 把命令包上 nonce 发出去；每条命令的收据后电脑才再给一个 nonce，没有就等一会儿。
+    /// 收据（含 Ack 5）经 receiveFromNetwork 了结；等不到就是 .failed。登记等收据必须在发出去的同一刻（回调里）做。
+    private func sendSignedOverNetwork(_ command: String, ackSeconds: Double) async -> AckResult {
+        let deadline = Date().addingTimeInterval(Self.netNonceWaitSeconds)
+        let started = Date()
+        var pinged = false
+        while true {
+            guard isPaired, net.isReady else { return .failed }
+            var needNonce = false
+            let result: AckResult = await withCheckedContinuation { cont in
+                net.send(command) { [weak self] sent in
+                    guard let self else { cont.resume(returning: .failed); return }
+                    switch sent {
+                    case .sent(let counter):
+                        self.networkAckCounters.insert(counter)
+                        let timeout = Task { [weak self] in
+                            try? await Task.sleep(for: .seconds(ackSeconds))
+                            guard !Task.isCancelled else { return }
+                            self?.finishAck(counter, .failed)
+                        }
+                        self.pendingAcks[counter] = (cont, timeout)
+                    case .noNonce:
+                        needNonce = true
+                        cont.resume(returning: .failed)
+                    case .notReady, .unavailable:
+                        cont.resume(returning: .failed)
+                    }
+                }
+            }
+            guard needNonce, Date() < deadline else { return result }
+            // 一秒还没等到 nonce：发一条 ping 让电脑再给一个
+            if !pinged, Date().timeIntervalSince(started) > 1 {
+                pinged = true
+                net.ping()
+            }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    /// 网络客户端发来的（已验过签名、新鲜、对得上等着的命令）：和蓝牙走同一套处理。
+    /// 只认收据 / 状态 / 保持唤醒 / 撤销通知；别的（Poll → Presence、撤下）网络上根本不处理
+    private func receiveFromNetwork(_ message: Data) {
+        guard isPaired else { return }
+        switch PairingCrypto.kind(of: message) {
+        case .ack:
+            guard let ack = try? PairingCrypto.Ack(decoding: message), ack.phoneID == PhoneKeychain.phoneID() else { return }
+            handleAckFromComputer(ack, via: .network)
+        case .state:
+            applyState(message, via: .network)
+        case .keepAwakeState:
+            applyKeepAwake(message, via: .network)
+        case .revoke:
+            guard let record = PhoneKeychain.loadLink(),
+                  PairingCrypto.verifyRevoke(message, phoneID: PhoneKeychain.phoneID(),
+                                             key: SymmetricKeyBox(record.key).key) else { return }
+            revokedByComputer()
+        default:
+            break
+        }
+    }
+
+    private func networkStateChanged(_ state: PhoneNetClient.State) {
+        // 已经停了（stop 的回声、蓝牙让位之后）：不理，免得把「失败」冲掉
+        guard netRunning else { return }
+        let wasReady = netWasReady
+        netWasReady = state == .ready
+        netStatus = NetworkLinkPlan.status(client: state, previous: netStatus)
+        if state == .ready, !wasReady {
+            Self.linkLog.info("network path ready")
+            sendNameOverNetwork()
+        }
+        if wasReady, state != .ready {
+            // 网络断了：等着的网络命令了结；蓝牙没通就是「没连上」
+            Self.linkLog.info("network path lost")
+            sentNameThisNetLink = false
+            for counter in Array(networkAckCounters) { finishAck(counter, .failed) }
+            if mac == nil || !ready { finishCover(.unavailable) }
+        }
+        publish { _ in }
+        // 用户刚存的那次试连：连上或失败一次就算完成，看蓝牙在不在再决定留不留
+        var failedOnce = false
+        if case .waiting = state { failedOnce = true }
+        if netForce, state == .ready || failedOnce {
+            netForce = false
+            evaluateNetwork(keepFailed: failedOnce)
+        }
+    }
+
+    private func sendNameOverNetwork() {
+        guard !sentNameThisNetLink else { return }
+        sentNameThisNetLink = true
+        let command = Self.nameCommand()
+        Task { [weak self] in _ = await self?.sendSignedOverNetwork(command, ackSeconds: 6) }
+    }
+
+    /// 该不该开网络、开不开：按 NetworkLinkPlan 的规则。蓝牙状态 / 前后台 / 地址变了都调一次，可重复调
+    private func evaluateNetwork(keepFailed: Bool = false) {
+        netEvalTask?.cancel()
+        netEvalTask = nil
+        let address = NetworkAddress.load()
+        let bleReady = mac != nil && ready
+        if bleReady || !inForeground || !isPaired {
+            bleWaitSince = nil
+        } else if bleWaitSince == nil {
+            bleWaitSince = Date()
+        }
+        var decision = NetworkLinkPlan.decide(
+            paired: isPaired, hasAddress: address != nil, foreground: inForeground, bleReady: bleReady,
+            waited: bleWaitSince.map { Date().timeIntervalSince($0) } ?? 0, running: netRunning)
+        if netForce, isPaired, address != nil, inForeground { decision = .run }
+        switch decision {
+        case .run:
+            if let address { startNetwork(address) }
+        case .stop:
+            stopNetwork(keepFailed: keepFailed)
+        case .wait(let seconds):
+            netEvalTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(seconds + 0.05))
+                guard !Task.isCancelled else { return }
+                self?.evaluateNetwork()
+            }
+        }
+    }
+
+    private func startNetwork(_ address: NetworkAddress) {
+        if netRunning, netAddressInUse == address { return }
+        Self.linkLog.info("network client start")
+        netRunning = true
+        netAddressInUse = address
+        netWasReady = false
+        sentNameThisNetLink = false
+        netStatus = .trying
+        net.start(host: address.host, port: address.port)
+        publish { _ in }
+    }
+
+    private func stopNetwork(keepFailed: Bool = false) {
+        netEvalTask?.cancel()
+        netEvalTask = nil
+        let wasRunning = netRunning
+        if wasRunning {
+            Self.linkLog.info("network client stop")
+            net.stop()
+        }
+        netRunning = false
+        netAddressInUse = nil
+        netWasReady = false
+        sentNameThisNetLink = false
+        for counter in Array(networkAckCounters) { finishAck(counter, .failed) }
+        let next: NetworkStatus = keepFailed && netStatus == .failed ? .failed : .none
+        if netStatus != next || wasRunning {
+            netStatus = next
+            publish { _ in }
+        }
+    }
+
+    /// 前台 / 后台：进后台关网络（iOS 会挂起 TCP），回前台重新算
+    func setForeground(_ isForeground: Bool) {
+        guard inForeground != isForeground else { return }
+        inForeground = isForeground
+        evaluateNetwork()
+    }
+
+    /// 地址存了 / 改了 / 清了。connectNow：用户刚存，不等蓝牙，马上试一次
+    func networkAddressChanged(connectNow: Bool) {
+        netForce = connectNow && NetworkAddress.load() != nil
+        // 地址变了（或再存一次）：旧的连接作废，重新来
+        stopNetwork()
+        evaluateNetwork()
+    }
+
     // MARK: - 内部
 
     private func publish(_ change: (inout CurtainSnapshot) -> Void) {
         var next = snapshot
         change(&next)
+        // 路径跟着现状走（蓝牙优先）；网络通着、蓝牙没通就是「已连接 · 网络」
+        let path = activePath
+        if path == .network {
+            next.connection = .connected
+        } else if path == nil, snapshot.path == .network, next.connection == .connected {
+            // 网络刚断：不再是已连接
+            let btOff = manager.map { [.poweredOff, .unauthorized, .unsupported].contains($0.state) } ?? false
+            next.connection = !isPaired ? .notPaired : (btOff ? .bluetoothOff : .notConnected)
+        }
+        next.path = path
+        next.networkStatus = isPaired ? netStatus : .none
         guard next != snapshot else { return }
         snapshot = next
         onSnapshotChange?(next)
@@ -1221,6 +1493,8 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         sideCentrals.removeAll()
         pendingTried.removeAll()
         finishAllPendingAttempts()
+        // 蓝牙没了：网络（有地址的话）等 5 秒后顶上
+        evaluateNetwork()
     }
 
     /// 系统把 App 叫回来时（状态恢复），把之前加过的服务和订阅着的 Mac 接回来
@@ -1294,6 +1568,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             sentNameThisLink = false
             assembler.reset()
             startConfirmLink(reason: "re-subscribe")
+            evaluateNetwork()
             return
         }
         if isPaired && replacing {
@@ -1383,6 +1658,8 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
+        // 蓝牙断了：网络（有地址的话）等 5 秒后顶上
+        evaluateNetwork()
     }
 
     func peripheralManagerIsReady(toUpdateSubscribers peripheral: CBPeripheralManager) {

@@ -10,6 +10,23 @@ enum CurtainConnection: Equatable, Sendable {
     case notPaired
 }
 
+/// Which road the verified conversation with the Mac is on right now.
+/// Bluetooth always wins when both are up. Over `.network` the phone may only
+/// cover, set keep-awake and read state; 现在撤下 stays Bluetooth-only.
+enum LinkPath: Equatable, Sendable {
+    case bluetooth
+    case network
+}
+
+/// Where the network attempt stands (only meaningful when an address is saved
+/// and the phone is paired). `trying` = first attempt in flight, `failed` = the
+/// last attempt did not get a signed answer (stays `failed` while the client keeps retrying).
+enum NetworkStatus: Equatable, Sendable {
+    case none
+    case trying
+    case failed
+}
+
 /// What the Mac last reported about the curtain.
 enum CurtainPhase: Equatable, Sendable {
     case open
@@ -146,6 +163,9 @@ struct CurtainSnapshot: Equatable, Sendable {
     var phoneLiftCount: Int = 0
     /// 电脑报来的保持唤醒状态；nil = 这次还没报过（老电脑不报：手机那一行就是「—」、点不动）
     var keepAwake: KeepAwakeState?
+    /// Which road `connection == .connected` is on; nil when not connected
+    var path: LinkPath?
+    var networkStatus: NetworkStatus = .none
 }
 
 /// The only door between the UI and a curtain. HomeView, SettingsView and
@@ -192,6 +212,13 @@ final class DebugForcedCurtainLink: CurtainLink {
     init?(argument: String, macName: String) {
         var snap = CurtainSnapshot(connection: .notConnected, phase: .open, auto: .off, macName: macName)
         switch argument {
+        case "network":
+            // 假装走网络连上、幕布盖着：看「走网络时不能撤下」那一行
+            snap.connection = .connected
+            snap.phase = .closed
+            snap.path = .network
+        case "networkfailed":
+            snap.networkStatus = .failed
         case "waiting":
             snap.isAdvertising = true
             snap.waitEpoch = 1

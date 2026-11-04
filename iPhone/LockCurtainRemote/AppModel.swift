@@ -103,6 +103,12 @@ final class AppModel {
     private(set) var demoMode = false
     private(set) var macName: String?
     private(set) var connection: CurtainConnection = .notPaired
+    /// 已连接时走哪条路（蓝牙优先）；没连上是 nil
+    private(set) var path: LinkPath?
+    /// 网络那一路试得怎么样（设置里「网络地址」那一页用）
+    private(set) var networkStatus: NetworkStatus = .none
+    /// 存着的网络地址（UserDefaults lc.netAddress）；没填是 nil。没有地址永远不走网络
+    private(set) var networkAddress: NetworkAddress? = NetworkAddress.load()
     private(set) var phase: CurtainPhase = .open
     private(set) var auto: CurtainAuto = .off
     private(set) var isCovering = false
@@ -299,7 +305,12 @@ final class AppModel {
 
     var macDisplayValue: String {
         switch connection {
-        case .connected: "已连接"
+        case .connected:
+            switch path {
+            case .network: "已连接 · 网络"
+            case .bluetooth: "已连接 · 蓝牙"
+            case nil: "已连接"
+            }
         case .notConnected: unlinkedMacState?.value ?? "没连上"
         case .bluetoothOff: "蓝牙关了"
         case .notPaired: "没配对"
@@ -512,7 +523,12 @@ final class AppModel {
 
     /// 不看「走近撤下」开关：已连上、幕布盖着就能按
     var canLiftNow: Bool {
-        connection == .connected && phase == .closed && !isLifting
+        connection == .connected && phase == .closed && !isLifting && NetworkLinkPlan.canLift(path: path)
+    }
+
+    /// 走网络连着、幕布盖着：撤下只能在蓝牙上，主屏不显示「现在撤下」，换一行说明
+    var liftHiddenOnNetwork: Bool {
+        connection == .connected && path == .network && phase == .closed
     }
 
     /// 现在撤下: Face ID or passcode first (not in the demo, not with 撤下前验证面容 off), then the signed lift-now.
@@ -594,12 +610,15 @@ final class AppModel {
     /// The success line goes away when the app goes to the background
     func appDidEnterBackground() {
         showLiftedNote = false
+        // 网络只在前台走（iOS 会挂起后台的 TCP）
+        ((link as? BLECurtainLink) ?? parkedLink)?.setForeground(false)
     }
 
     /// 回到前台：退避清零、马上广播（不等任何计时）；主屏立刻重算分段（经过时间不清零）
     func appDidBecomeActive() {
         foregroundCount += 1
         TerminationNotice.refresh()
+        ((link as? BLECurtainLink) ?? parkedLink)?.setForeground(true)
         if paired, !demoMode, let ble = link as? BLECurtainLink {
             ble.resumeConnecting()
         } else if !paired, let ble = (link as? BLECurtainLink) ?? parkedLink {
@@ -699,6 +718,8 @@ final class AppModel {
             let name = "这台电脑"
             macName = name
             UserDefaults.standard.set(name, forKey: Keys.macName)
+            // 换了电脑：旧电脑的网络地址作废
+            forgetNetworkAddress()
         }
         return result
     }
@@ -736,6 +757,7 @@ final class AppModel {
         macName = nil
         resetKeepAwakeSending()
         UserDefaults.standard.removeObject(forKey: Keys.macName)
+        forgetNetworkAddress()
         if let ble = (link as? BLECurtainLink) ?? parkedLink {
             ble.unpair()
         } else {
@@ -752,6 +774,32 @@ final class AppModel {
         justPaired = false
         macName = nil
         UserDefaults.standard.removeObject(forKey: Keys.macName)
+        forgetNetworkAddress()
+    }
+
+    // MARK: - 网络地址
+
+    /// 存下用户填的地址并马上试连一次（第一次也会触发 iOS 的「本地网络」询问）。解析不过返回 false，什么都不存
+    @discardableResult
+    func saveNetworkAddress(_ text: String) -> Bool {
+        guard paired, !demoMode, let address = NetworkAddress.parse(text) else { return false }
+        NetworkAddress.save(address)
+        networkAddress = address
+        ((link as? BLECurtainLink) ?? parkedLink)?.networkAddressChanged(connectNow: true)
+        return true
+    }
+
+    /// 「清除」：忘掉地址，网络停掉
+    func clearNetworkAddress() {
+        forgetNetworkAddress()
+    }
+
+    /// 撤销配对 / 换电脑 / 被电脑撤销：地址跟着配对走，一起清
+    private func forgetNetworkAddress() {
+        NetworkAddress.clear()
+        networkAddress = nil
+        networkStatus = .none
+        ((link as? BLECurtainLink) ?? parkedLink)?.networkAddressChanged(connectNow: false)
     }
 
     // MARK: - Link plumbing
@@ -806,6 +854,8 @@ final class AppModel {
             retryingUntil = nil
         }
         connection = snapshot.connection
+        path = snapshot.connection == .connected ? snapshot.path : nil
+        networkStatus = snapshot.networkStatus
         phase = snapshot.phase
         auto = snapshot.auto
         if let name = snapshot.macName {
