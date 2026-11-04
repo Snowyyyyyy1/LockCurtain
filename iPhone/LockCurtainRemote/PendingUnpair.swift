@@ -118,7 +118,7 @@ struct PendingUnpairBook: Equatable {
             return PairingCrypto.verifyAck(ack, key: SymmetricKey(data: key)) ? .signedAck : .other
         case .unknownOrBadSignature:
             return .unknownPhone
-        case .replay, .malformed, .missingPermission:
+        case .replay, .malformed, .missingPermission, .notAllowedOnNetwork:
             return .other
         }
     }

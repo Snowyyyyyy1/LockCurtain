@@ -10,6 +10,11 @@
 //     才写进钥匙串、算真的配上 —— 这样 Mac 说「配上了」时，两边一定算出了同一把钥匙。
 //   * 命令：签名对、手机认识、计数比上次大，才收；收之前先把新计数写进钥匙串。
 //
+//   * 走网络（Transport.network）：同样的签名 / 计数，但只认已确认配上的手机（不看 pending），
+//     签名和计数验过之后命令还要在白名单里（NetworkPolicy，默认拒绝：只有 ping / away / awake:* / name:），
+//     撤下 / 解除配对 / 预览 / 设置 / 配对 / Presence / LiftNow 一律拒绝；除 ping 外，命令必须是
+//     n1:<nonce>:<命令>，nonce 是 Mac 刚发的签名 Poll（networkPollMessage）里的，只能用一次、有寿命。
+//
 // 日志只写步骤和结果，不写码、不写钥匙。
 
 import CryptoKit
@@ -108,6 +113,67 @@ final class KeychainPairingStore: PairingRecordStore {
     }
 }
 
+/// 消息是从哪条链路来的。蓝牙的行为从来没变；网络收紧（见 NetworkPolicy）
+enum Transport: Equatable {
+    case bluetooth
+    case network
+}
+
+/// 走网络时手机能做什么：默认拒绝，只有明确列出来的才放行。
+/// 规则在接收这一侧，不靠签名里带什么标记，所以蓝牙上签的撤下 / 解除配对被拿到网络上重放也是拒绝
+enum NetworkPolicy {
+    /// 网络命令的传输标记：n1:<32 位十六进制 nonce>:<命令>
+    static let noncePrefix = "n1:"
+
+    /// 命令（已去掉 n1: 标记）网络上是否允许。ping、away、awake:off|1h|2h|5h|always、name:*
+    static func allows(command: String) -> Bool {
+        if command.hasPrefix("name:") { return true }
+        switch command.lowercased() {
+        case "ping", "away", "awake:off", "awake:1h", "awake:2h", "awake:5h", "awake:always": return true
+        default: return false
+        }
+    }
+
+    /// 网络命令字符串 → (nonce?, 命令)；有 n1: 前缀但格式不对返回 nil
+    static func unwrap(_ command: String) -> (nonce: Data?, command: String)? {
+        guard command.hasPrefix(noncePrefix) else { return (nil, command) }
+        let rest = command.dropFirst(noncePrefix.count)
+        let hex = rest.prefix(PairingCrypto.nonceLength * 2)
+        guard hex.count == PairingCrypto.nonceLength * 2,
+              rest.dropFirst(hex.count).first == ":",
+              let nonce = Self.data(hex: String(hex)) else { return nil }
+        return (nonce, String(rest.dropFirst(hex.count + 1)))
+    }
+
+    /// 手机：把命令包上 nonce（ping 不用）
+    static func wrap(_ command: String, nonce: Data) -> String {
+        noncePrefix + hex(nonce) + ":" + command
+    }
+
+    static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
+
+    static func data(hex: String) -> Data? {
+        let chars = Array(hex.utf8)
+        guard chars.count % 2 == 0 else { return nil }
+        func nibble(_ c: UInt8) -> UInt8? {
+            switch c {
+            case 48...57: return c - 48
+            case 97...102: return c - 87
+            case 65...70: return c - 55
+            default: return nil
+            }
+        }
+        var out = Data()
+        var i = 0
+        while i < chars.count {
+            guard let hi = nibble(chars[i]), let lo = nibble(chars[i + 1]) else { return nil }
+            out.append(hi << 4 | lo)
+            i += 2
+        }
+        return out
+    }
+}
+
 final class PairingAuthority {
     let store: PairingRecordStore
     private let log: (String) -> Void
@@ -123,6 +189,13 @@ final class PairingAuthority {
     private var inFlight: PairingCrypto.MacSession?
     /// 收过的 sid（本次运行内），同一个 sid 不收第二次
     private var usedSessions: Set<Data> = []
+
+    /// 网络问询 nonce 的寿命、每台手机最多同时留几个（自测可以换时钟）
+    static let networkNonceLifetime: TimeInterval = 90
+    static let networkNonceLimit = 4
+    var clock: () -> Date = Date.init
+    /// 每台手机发出去、还没用的网络 nonce（旧的在前）
+    private var networkNonces: [UUID: [(nonce: Data, issuedAt: Date)]] = [:]
 
     init(store: PairingRecordStore, log: @escaping (String) -> Void) {
         self.store = store
@@ -175,7 +248,12 @@ final class PairingAuthority {
     }
 
     /// 握手消息（PairRequest / PairConfirm / PairAbort）都从这里进
-    func handlePair(_ data: Data) -> PairOutcome {
+    func handlePair(_ data: Data, via transport: Transport = .bluetooth) -> PairOutcome {
+        // 配对只走蓝牙：不碰码、不碰握手状态，调用方应当断开
+        guard transport == .bluetooth else {
+            log("pair message over network refused")
+            return .malformed(reply: PairingCrypto.pairReject(.noCode))
+        }
         switch PairingCrypto.kind(of: data) {
         case .pairRequest: return handleRequest(data)
         case .pairConfirm: return handleConfirm(data)
@@ -272,6 +350,10 @@ final class PairingAuthority {
         case badSignature = "bad signature"
         case replay = "old counter (replay)"
         case storeFailed = "keychain write failed"
+        /// 走网络不许这条命令 / 这类消息
+        case networkForbidden = "not allowed on network"
+        /// 网络命令的 nonce 缺、不对、用过或过期
+        case badNonce = "network nonce missing, stale or reused"
     }
 
     enum CommandOutcome: Equatable {
@@ -280,21 +362,22 @@ final class PairingAuthority {
         case rejected(RejectReason, phoneID: UUID?, ack: Data?)
     }
 
-    func handleCommand(_ data: Data) -> CommandOutcome {
+    func handleCommand(_ data: Data, via transport: Transport = .bluetooth) -> CommandOutcome {
         guard let envelope = try? PairingCrypto.CommandEnvelope(decoding: data) else {
             log("command rejected: \(RejectReason.malformed.rawValue)")
             return .rejected(.malformed, phoneID: nil, ack: nil)
         }
         let id = envelope.phoneID
-        func reject(_ reason: RejectReason, _ status: PairingCrypto.AckStatus) -> CommandOutcome {
+        func reject(_ reason: RejectReason, _ status: PairingCrypto.AckStatus, key: SymmetricKey? = nil) -> CommandOutcome {
             log("command rejected from \(id.uuidString): \(reason.rawValue) (counter \(envelope.counter))")
             return .rejected(reason, phoneID: id,
-                             ack: PairingCrypto.makeAck(phoneID: id, counter: envelope.counter, status: status, key: nil))
+                             ack: PairingCrypto.makeAck(phoneID: id, counter: envelope.counter, status: status, key: key))
         }
 
         let stored = store.load(id)
-        let isPending = stored == nil && pending[id] != nil
-        guard let record = stored ?? pending[id].map({ PairingRecord(key: $0, lastCounter: 0) }) else {
+        // 网络只认已经确认配上的手机，不看刚握手、还没确认的 pending
+        let isPending = transport == .bluetooth && stored == nil && pending[id] != nil
+        guard let record = stored ?? (transport == .bluetooth ? pending[id].map({ PairingRecord(key: $0, lastCounter: 0) }) : nil) else {
             return reject(.unknownPhone, .unknownOrBadSignature)
         }
         guard PairingCrypto.verifyCommand(envelope, key: record.key) else {
@@ -306,14 +389,61 @@ final class PairingAuthority {
         guard store.save(PairingRecord(key: record.key, lastCounter: envelope.counter), for: id) else {
             return reject(.storeFailed, .malformed)
         }
+        var command = envelope.command
+        if transport == .network {
+            // 签名和计数已过（计数已记），再看白名单：签了名的撤下也一样拒绝
+            let parsed = NetworkPolicy.unwrap(envelope.command)
+            let inner = parsed?.command ?? envelope.command
+            guard let parsed, NetworkPolicy.allows(command: inner) else {
+                log("network command from \(id.uuidString) refused: not on the allow-list")
+                return reject(.networkForbidden, .notAllowedOnNetwork, key: record.key)
+            }
+            // ping 不用 nonce（它是拿 nonce 的办法）；带了就照样核对。其余必须带，nonce 只用一次
+            if inner.lowercased() != "ping" || parsed.nonce != nil {
+                guard let nonce = parsed.nonce, consumeNetworkNonce(nonce, for: id) else {
+                    return reject(.badNonce, .replay)
+                }
+            }
+            command = inner
+        }
         if isPending {
             pending[id] = nil
             log("pairing confirmed with \(id.uuidString) (first signed command verified, key stored)")
         }
-        log("command accepted from \(id.uuidString): \"\(envelope.command)\" counter \(envelope.counter)")
+        log("command accepted from \(id.uuidString): \"\(command)\" counter \(envelope.counter)\(transport == .network ? " (network)" : "")")
         let ack = PairingCrypto.makeAck(phoneID: id, counter: envelope.counter, status: .accepted, key: record.key)
-        return .accepted(command: envelope.command, phoneID: id, counter: envelope.counter,
+        return .accepted(command: command, phoneID: id, counter: envelope.counter,
                          confirmedPairing: isPending, ack: ack)
+    }
+
+    // MARK: - 网络 nonce（防止被扣住的命令事后再送到）
+
+    /// 发一条签名的 Poll 给走网络的手机，里面的 nonce 记下来（单次、有寿命）。不进 LiftGate。
+    /// 手机不认识（没配上）返回 nil
+    func networkPollMessage(for phoneID: UUID) -> Data? {
+        guard store.load(phoneID) != nil else { return nil }
+        let nonce = PairingCrypto.makeNonce()
+        guard let message = pollMessage(nonce: nonce, for: phoneID) else { return nil }
+        var list = networkNonces[phoneID, default: []].filter { clock().timeIntervalSince($0.issuedAt) < Self.networkNonceLifetime }
+        list.append((nonce, clock()))
+        if list.count > Self.networkNonceLimit { list.removeFirst(list.count - Self.networkNonceLimit) }
+        networkNonces[phoneID] = list
+        return message
+    }
+
+    /// 用掉一个 nonce：没发过、用过了、过期了都是 false
+    private func consumeNetworkNonce(_ nonce: Data, for phoneID: UUID) -> Bool {
+        let now = clock()
+        var list = networkNonces[phoneID, default: []]
+        guard let index = list.firstIndex(where: { $0.nonce == nonce }) else { return false }
+        let entry = list.remove(at: index)
+        networkNonces[phoneID] = list
+        return now.timeIntervalSince(entry.issuedAt) < Self.networkNonceLifetime
+    }
+
+    /// 这台手机的网络 nonce 都作废（断开 / 撤销时）
+    func dropNetworkNonces(for phoneID: UUID) {
+        networkNonces[phoneID] = nil
     }
 
     // MARK: - 撤下幕布：手机的回答（Presence / LiftNow）
@@ -324,8 +454,13 @@ final class PairingAuthority {
         case rejected(RejectReason, phoneID: UUID?)
     }
 
-    /// 只认已经确认配上的手机（钥匙在存储里）；和命令共用同一个计数
-    func handleAnswer(_ data: Data) -> AnswerOutcome {
+    /// 只认已经确认配上的手机（钥匙在存储里）；和命令共用同一个计数。
+    /// 走网络一律拒绝：在验签之前就返回，不耗计数，LiftGate / onLift 都够不到
+    func handleAnswer(_ data: Data, via transport: Transport = .bluetooth) -> AnswerOutcome {
+        guard transport == .bluetooth else {
+            log("answer over network refused (lift is bluetooth-only)")
+            return .rejected(.networkForbidden, phoneID: nil)
+        }
         guard let answer = try? PairingCrypto.PhoneAnswer(decoding: data) else {
             log("answer rejected: \(RejectReason.malformed.rawValue)")
             return .rejected(.malformed, phoneID: nil)
@@ -387,6 +522,7 @@ final class PairingAuthority {
         let notice = store.load(phoneID).map { PairingCrypto.makeRevoke(phoneID: phoneID, key: $0.key) }
         store.delete(phoneID)
         pending[phoneID] = nil
+        networkNonces[phoneID] = nil
         log("pairing deleted for \(phoneID.uuidString)")
         return notice
     }

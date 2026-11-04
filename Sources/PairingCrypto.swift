@@ -25,7 +25,8 @@
 //               mac = HMAC-SHA256(sharedKey, 前面所有字节)；counter 必须严格递增
 //   Mac  → 手机 Ack       = ver | 0x06 | phoneID(16) | counter(8) | status(1) [| mac(32)，只有 status=0 才带]
 //               status 0 = 收下了（签名，手机据此确认握手真的成了），1 = 不认识/签名错，2 = 旧计数，3 = 格式错，
-//               4 = 没做：电脑缺权限（Mac 没给辅助功能，不肯盖；和 0 一样签名，老手机见到非 0 就当没做）
+//               4 = 没做：电脑缺权限（Mac 没给辅助功能，不肯盖；和 0 一样签名，老手机见到非 0 就当没做），
+//               5 = 没做：这条命令走网络不被允许（和 0 一样签名；只有新 Mac 走网络时才发）
 //   Mac  → 手机 State     = ver | 0x05 | phoneID(16) | seq(8) | state(1: 0 开着 / 1 盖着) | mac(32)
 //   Mac  → 手机 Revoke    = ver | 0x04 | phoneID(16) | mac(32)   撤销通知，签名后 Mac 才删钥匙
 //
@@ -51,6 +52,10 @@
 //
 // 分帧（PairingFraming）：任何一条消息按传输层的单包上限切块，每块前面 1 字节头：
 //   bit7 = 最后一块，低 7 位 = 块序号（模 128）。
+//
+// 走网络（TCP，NetFraming）：每条消息前面加 2 字节大端长度，一帧一整条消息（1...1024）；长度 0 或超过 1024 就断开。
+//   网络上手机只能 ping / away / awake:* / name:，其余命令、Presence、LiftNow、配对一律拒绝（见 PairingAuthority.NetworkPolicy）。
+//   除 ping 外，网络上的命令字符串是 n1:<32 位十六进制 nonce>:<命令>，nonce 是 Mac 刚发的签名 Poll 里的，只能用一次。
 
 import CryptoKit
 import Foundation
@@ -307,16 +312,19 @@ enum PairingCrypto {
         case malformed = 3
         /// 没做：电脑缺权限（Mac 没给辅助功能时不盖）。和 accepted 一样带签名
         case missingPermission = 4
+        /// 没做：这条命令走网络不被允许（撤下 / 解除配对 / 预览 / 设置等只能走蓝牙）。带签名；只有新 Mac 走网络时才发，
+        /// 老手机见到非 0 就当没做
+        case notAllowedOnNetwork = 5
 
-        /// 带签名的两种：收下了 / 缺权限没做
-        var isSigned: Bool { self == .accepted || self == .missingPermission }
+        /// 带签名的三种：收下了 / 缺权限没做 / 走网络不许
+        var isSigned: Bool { self == .accepted || self == .missingPermission || self == .notAllowedOnNetwork }
     }
 
     struct Ack: Equatable {
         var phoneID: UUID
         var counter: UInt64
         var status: AckStatus
-        /// 只有 accepted / missingPermission 才签名
+        /// 只有 accepted / missingPermission / notAllowedOnNetwork 才签名
         var mac: Data?
 
         static func signedPart(phoneID: UUID, counter: UInt64, status: AckStatus) -> Data {
@@ -727,6 +735,47 @@ enum PairingFraming {
                 return message
             }
             return nil
+        }
+    }
+}
+
+
+// MARK: - 网络分帧
+
+/// TCP 上的分帧：2 字节大端长度 + 一整条 PairingCrypto 消息（1...maxMessage 字节）
+enum NetFraming {
+    static let maxMessage = PairingFraming.maxMessage
+
+    /// 加上长度头；空消息或超长返回 nil
+    static func frame(_ message: Data) -> Data? {
+        guard !message.isEmpty, message.count <= maxMessage else { return nil }
+        return Data([UInt8(message.count >> 8), UInt8(message.count & 0xFF)]) + message
+    }
+
+    /// 收字节流拼帧：随便切开、随便合并都行。头里的长度是 0 或超过 maxMessage 就坏了（isBroken），
+    /// 之后什么都不再交出来，调用方应当断开连接
+    struct Reader {
+        private var buffer: [UInt8] = []
+        private(set) var isBroken = false
+
+        init() {}
+
+        mutating func feed(_ bytes: Data) -> [Data] {
+            guard !isBroken else { return [] }
+            buffer.append(contentsOf: bytes)
+            var out: [Data] = []
+            while buffer.count >= 2 {
+                let length = Int(buffer[0]) << 8 | Int(buffer[1])
+                guard length >= 1, length <= NetFraming.maxMessage else {
+                    isBroken = true
+                    buffer = []
+                    return out
+                }
+                guard buffer.count >= 2 + length else { break }
+                out.append(Data(buffer[2..<(2 + length)]))
+                buffer.removeFirst(2 + length)
+            }
+            return out
         }
     }
 }
