@@ -105,7 +105,7 @@ internal sealed class CurtainRule
     {
         var parts = new List<string>();
         if (IdleMinutes is { } m) parts.Add($"空闲 {m} 分钟");
-        if (Processes is { } p) parts.Add(p.Count == 0 ? "进程（未填）" : string.Join(" / ", p) + " 在运行");
+        if (Processes is { } p) parts.Add(p.Count == 0 ? "进程（未填）" : string.Join(" / ", p) + " 开着");
         if (SleepBlockers is { } b)
             parts.Add(b.Count == 0 ? "有程序在阻止睡眠" : string.Join(" / ", b) + " 在阻止睡眠");
         if (TimeWindow is { } w)

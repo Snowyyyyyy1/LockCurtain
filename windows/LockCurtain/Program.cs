@@ -85,7 +85,7 @@ internal static class ElevatedTask
         {
             Log.Write("开启以管理员身份运行: UAC 没同意");
             // COPY-TODO: 「没点同意」也算原因（§16.8），句子是我写的
-            return "没开成：管理员确认那一步没点同意。";
+            return "没开成：管理员那一步没点同意。";
         }
         catch (System.ComponentModel.Win32Exception e)
         {

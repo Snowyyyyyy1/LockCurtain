@@ -170,7 +170,7 @@ internal sealed partial class TrayApp : ApplicationContext
             // 和真人回来一样：离开模式下先锁屏再撤（N3），预览直接撤
             new("撤下幕布", () => _ = overlay.SafeHide(), !idle),
             new("保持唤醒", () => { }, SeparatorBefore: true, Submenu: KeepAwakeCommands()),
-            new($"手机：{(!phone.IsPaired ? "未配对" : phone.AnyConnected ? "已连上" : "没连上")}", () => { }, Enabled: false,
+            new($"手机 · {(!phone.IsPaired ? "未配对" : phone.AnyConnected ? "已连上" : "没连上")}", () => { }, Enabled: false,
                 SeparatorBefore: true),
             new("配对手机…", ShowPairing),
             .. phones.Count switch

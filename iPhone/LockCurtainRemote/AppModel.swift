@@ -352,7 +352,8 @@ final class AppModel {
 
     /// 「还剩 1 小时 20 分」：分钟往上取整（刚开 1 小时就是「还剩 1 小时」）
     static func remainingText(_ seconds: TimeInterval) -> String {
-        let minutes = max(1, Int((seconds / 60).rounded(.up)))
+        if seconds < 60 { return "不到 1 分钟" }  // copy v15 §17.3：别出现「还剩 0 分」
+        let minutes = Int((seconds / 60).rounded(.up))
         let h = minutes / 60
         let m = minutes % 60
         if h == 0 { return "还剩 \(m) 分" }

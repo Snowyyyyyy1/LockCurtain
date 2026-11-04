@@ -181,7 +181,7 @@ internal sealed class RuleEditor : Form
             .Toggle("某个程序开着", () => rule.Processes != null, on => rule.Processes = on ? new() : null)
             .Only(() => rule.Processes != null, g => NameList(v, g, "processes", () => rule.Processes,
                 "进程名，如 claude", "运行中的程序", RunningChoices,
-                "列表里任意一个在运行即满足。填进程名，.exe 可以省略；命令行工具（比如 claude）也填它的进程名。"));
+                "列表里任意一个开着就算满足。填进程名，.exe 可以省略；命令行工具（比如 claude）也填它的进程名。"));
 
         // 阻止睡眠
         var elevated = ElevatedTask.IsElevated();

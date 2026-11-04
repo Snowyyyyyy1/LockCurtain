@@ -145,8 +145,8 @@ private struct RuleEditor: View {
             IdentityListEditor(list: listBinding(\.processes), placeholder: "进程名，如 claude",
                                menuTitle: "运行中的 app", choices: runningApps)
             if list.isEmpty {
-                // COPY-TODO: Camo 没给这行说明；按「某个 app 开着」的叫法改了动词
-                Text("列表里任意一个开着就算。命令行工具（没有 bundle ID）填进程名。")
+                // copy v15 §17.1-6
+                Text("列表里任意一个开着就算满足；一个都没选，这条永远不满足。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

@@ -491,8 +491,8 @@ private struct PermissionsPane: View {
                     request: SystemPermissions.requestScreenRecording)
                 row("辅助功能", ok: accessibility, detail: "监听并吞掉真人输入，一碰就撤下幕布",
                     request: SystemPermissions.requestAccessibility)
-                // COPY-TODO: 蓝牙一行的说明，Camo 没给 Mac 的；先借手机那句的意思
-                row("蓝牙", ok: bluetooth == .allowed, detail: "找到配对的手机") {
+                // copy v15 §17.1-2
+                row("蓝牙", ok: bluetooth == .allowed, detail: "用来和配对的手机连接。关掉的话，手机就找不到这台电脑。") {
                     if bluetooth == .notDetermined { actions.requestBluetooth() } else { SystemPermissions.openPrivacy("Privacy_Bluetooth") }
                 }
             } header: {

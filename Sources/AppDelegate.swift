@@ -409,7 +409,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let phones = pairing.phones
         let phoneState = phones.isEmpty ? "未配对" : pairing.anyPhoneConnected ? "已连上" : "没连上"
-        _ = add("手机：\(phoneState)", nil, enabled: false)
+        _ = add("手机 · \(phoneState)", nil, enabled: false)
         _ = add("配对手机…", #selector(openPairing))
         if phones.count == 1 {
             add("撤销配对…", #selector(revokePairing(_:))).representedObject = phones[0].id

@@ -449,13 +449,13 @@ internal sealed class SettingsWindow : Form
         var section = v.Section("以管理员身份运行", () => "以管理员身份运行的窗口在前台时，普通权限的 LockCurtain 看不到发给它的按键："
                                          + "按键会先落进那个窗口，约 0.2 秒后才发现并锁屏。开启后，登录时以管理员身份启动，能直接拦住这些按键。"
                                          + "开启要管理员确认一次。");
-        // COPY-TODO: 「已开」「未开」是 Colo D5 的写法，Camo 没给值
+        // copy v15 §17.2-3：已开 / 没开
         if (installed) section.Value("以管理员身份运行", "已开");
         else section.Add(new PageView.Row
         {
             Title = "以管理员身份运行",
             Detail = elevateError,
-            Value = "未开",
+            Value = "没开",
             Controls = [v.MakeButton("开启", () =>
             {
                 elevateError = ElevatedTask.Enable();

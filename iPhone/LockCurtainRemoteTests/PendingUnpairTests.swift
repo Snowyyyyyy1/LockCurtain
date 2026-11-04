@@ -134,7 +134,8 @@ struct KeepAwakeTextTests {
         #expect(AppModel.remainingText(3600) == "还剩 1 小时")
         #expect(AppModel.remainingText(3599) == "还剩 1 小时")
         #expect(AppModel.remainingText(20 * 60 - 30) == "还剩 20 分")
-        #expect(AppModel.remainingText(5) == "还剩 1 分")
+        #expect(AppModel.remainingText(5) == "不到 1 分钟")
+        #expect(AppModel.remainingText(61) == "还剩 2 分")
     }
 
     @Test
