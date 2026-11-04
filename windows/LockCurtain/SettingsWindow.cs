@@ -3,17 +3,22 @@
 // 左边是页面列表，右边是当前页（PageView.cs）。改动立即写进 Settings / RuleStore，没有「保存」按钮。
 // 深浅色跟着系统（Program.cs 里 Application.SetColorMode），底色和卡片用 Win11 设置的配色。
 //
-// 和 Mac 版五页的差别：
-//   通用      没有「在 Dock 中显示」和「锁屏时显示遮罩」：Windows 的锁屏界面在安全桌面上，遮罩画不上去
+// 侧栏顺序和 Mac 版一致（Colo A1）：通用 / 手机 / 离开模式 / 保持唤醒 / 规则 / 远程控制 / 权限。和 Mac 版的差别：
+//   通用      没有「在 Dock 中显示」和「锁屏时也盖上幕布」：Windows 的锁屏界面在安全桌面上，幕布盖不上去
+//   手机      同一套（A1）：配上的手机一台一行（已连上 / 没连上 · 上次连上），一台一台撤；没配过时是空状态；蓝牙横幅
 //   离开模式  一样
+//   保持唤醒  同一套（A3）：和托盘面板、右键菜单同一份菜单（KeepAwakeMenu）
 //   规则      一样（RulesPage.cs）
-//   远程控制  只有命令行；SSH 远程控制还没在 Windows 上实测过，先不写步骤
-//   权限      Windows 不用系统授权，这页显示有没有用 install.ps1 以最高权限安装
+//   远程控制  只有一行命令（copy §16.9，D2）；SSH 远程控制还没在 Windows 上实测过，先不写步骤
+//   权限      Windows 不用系统授权，这页是「以管理员身份运行」开了没有，没开有「开启」（D5，走 install.ps1，界面上不提脚本名）
 
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Media;
+using LockCurtain.Phone;
 
 namespace LockCurtain;
 
@@ -21,21 +26,40 @@ internal sealed class SettingsWindow : Form
 {
     const int LogicalWidth = 760, LogicalHeight = 520, NavWidth = 200, NavItemHeight = 36;
 
-    readonly Action enterAway;
+    public const string PhonePage = "手机", KeepAwakePage = "保持唤醒";
+
+    readonly Action enterAway, showPairing, showGuide;
+    readonly PhoneLink phone;
+    readonly KeepAwake keepAwake;
     readonly Theme theme = Theme.Current();
+    /// 手机页的「N 分钟前」、保持唤醒页的「还剩 …」跟着走
+    readonly System.Windows.Forms.Timer tick = new() { Interval = 30_000 };
+    /// 画好的行首图标（手机、杯子、警告），关窗时扔掉
+    readonly Dictionary<string, Bitmap> icons = new();
+    /// 保持唤醒页「到指定时间…」的选择框开着，和里面选的时刻（当天零点起的分钟）
+    bool picking;
+    int pickMinute;
+    /// 权限页「开启」没开成的原因
+    string? elevateError;
     readonly (string Title, Action<PageView> Build)[] pages;
     readonly Panel navPanel = new() { Dock = DockStyle.Left };
     readonly ListBox nav = new() { Dock = DockStyle.Fill, BorderStyle = BorderStyle.None, DrawMode = DrawMode.OwnerDrawFixed, IntegralHeight = false };
     readonly PageView page;
     Font? navFont;
 
-    public SettingsWindow(RuleStore rules, Action enterAway)
+    public SettingsWindow(RuleStore rules, Action enterAway, PhoneLink phone, KeepAwake keepAwake, Action showPairing, Action showGuide)
     {
         this.enterAway = enterAway;
+        this.phone = phone;
+        this.keepAwake = keepAwake;
+        this.showPairing = showPairing;
+        this.showGuide = showGuide;
         pages = new (string, Action<PageView>)[]
         {
             ("通用", BuildGeneral),
+            (PhonePage, BuildPhone),
             ("离开模式", BuildAway),
+            (KeepAwakePage, BuildKeepAwake),
             (RulesPage.Title, v => RulesPage.Build(v, rules, this)),
             ("远程控制", BuildRemote),
             ("权限", BuildPermissions),
@@ -59,6 +83,56 @@ internal sealed class SettingsWindow : Form
         ApplyDpi();
         ClientSize = new Size(S(LogicalWidth), S(LogicalHeight));
         nav.SelectedIndex = 0;
+
+        phone.PhonesChanged += OnPhonesChanged;
+        keepAwake.Changed += OnKeepAwakeChanged;
+        tick.Tick += (_, _) => { Refresh(PhonePage); Refresh(KeepAwakePage); };
+        tick.Start();
+    }
+
+    string CurrentTitle => pages[Math.Max(0, nav.SelectedIndex)].Title;
+
+    /// 换到某一页（托盘菜单、面板「手机」那一行、开始指南用）
+    public void Select(string title)
+    {
+        var i = Array.FindIndex(pages, p => p.Title == title);
+        if (i >= 0) nav.SelectedIndex = i;
+    }
+
+    /// 右键菜单「保持唤醒 ▸ 到指定时间…」：到保持唤醒页，展开选时刻的框
+    public void PickKeepAwakeTime()
+    {
+        pickMinute = KeepAwakeMenu.DefaultPickMinute();
+        picking = true;
+        if (CurrentTitle == KeepAwakePage) Refresh(KeepAwakePage);
+        else Select(KeepAwakePage);
+    }
+
+    /// 这一页正开着就重建（停在原来滚到的位置）。点的按钮可能还在处理 Click（比如撤销配对），等它返回再重建
+    void Refresh(string title)
+    {
+        if (IsDisposed || !IsHandleCreated || CurrentTitle != title) return;
+        BeginInvoke(() =>
+        {
+            if (IsDisposed || CurrentTitle != title) return;
+            var index = Math.Max(0, nav.SelectedIndex);
+            page.Build(pages[index].Title, pages[index].Build, keepScroll: true);
+        });
+    }
+
+    void OnPhonesChanged() => Refresh(PhonePage);
+
+    void OnKeepAwakeChanged()
+    {
+        picking = false;
+        Refresh(KeepAwakePage);
+    }
+
+    Bitmap Icon24(string key, Func<int, Bitmap> make)
+    {
+        key = $"{key}@{DeviceDpi}";
+        if (!icons.TryGetValue(key, out var bmp)) icons[key] = bmp = make(S(24));
+        return bmp;
     }
 
     int S(int logical) => LogicalToDeviceUnits(logical);
@@ -88,6 +162,10 @@ internal sealed class SettingsWindow : Form
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        phone.PhonesChanged -= OnPhonesChanged;
+        keepAwake.Changed -= OnKeepAwakeChanged;
+        tick.Dispose();
+        foreach (var b in icons.Values) b.Dispose();
         navFont?.Dispose();
         Icon?.Dispose();
         base.OnFormClosed(e);
@@ -123,12 +201,13 @@ internal sealed class SettingsWindow : Form
     {
         var installed = ElevatedTask.IsInstalled();
         v.Section("启动", () => installed
-                ? "已用 install.ps1 安装：登录时由计划任务以最高权限启动。不想自动启动，用 install.ps1 -Uninstall 卸载。"
+                // COPY-TODO: 原句带 install.ps1（D5 不许出现脚本名），按 §14.2「以后每次登录 Windows 都会自动启动」改写
+                ? "已开启以管理员身份运行：以后每次登录 Windows 都会自动启动。"
                 : "")
             .Toggle("登录时打开 LockCurtain", () => installed || LoginItem.IsEnabled(), LoginItem.Set, enabled: !installed);
         v.Section("图标", () => Settings.Current.ShowTrayIcon
                 ? ""
-                : "隐藏后，再打开一次 LockCurtain 即可回到这里，也可以运行 LockCurtain.exe settings。")
+                : $"隐藏后，再打开一次 LockCurtain 即可回到这里，也可以运行 {CommandLine("settings")}")
             .Toggle("在通知区域显示", () => Settings.Current.ShowTrayIcon, on => Settings.Update(s => s.ShowTrayIcon = on));
         var tiles = Enum.GetValues<CurtainArt>().Select(a => new ArtTile(a, theme) { Checked = a == Settings.Current.CurtainArt }).ToList();
         var customTile = tiles.Single(t => t.Art == CurtainArt.Custom);
@@ -170,21 +249,58 @@ internal sealed class SettingsWindow : Form
             .Tiles(backgroundTiles);
         _ = LoadThumbnailsAsync(backgroundTiles);
         var titleBox = CurtainTextBox(v, "标题", Settings.Current.CurtainTitle, text => Settings.Update(s => s.CurtainTitle = text));
-        var subtitleBox = CurtainTextBox(v, "提示", Settings.Current.CurtainSubtitle, text => Settings.Update(s => s.CurtainSubtitle = text));
+        // 提示没自己写过时跟着模式变（copy §16.6）：框里显示离开模式那句，改回这句就是又跟着变
+        var awayHint = Settings.DefaultSubtitle(CurtainMode.Away);
+        var subtitleBox = CurtainTextBox(v, "提示", Settings.Current.CurtainSubtitle ?? awayHint,
+                                         text => Settings.Update(s => s.CurtainSubtitle = text == awayHint ? null : text));
         v.Section("幕布文字", () => "显示在图案下面，太长会自动换行。留空就不显示这一行。下次盖上幕布时生效。")
             .Controls("标题", null, titleBox)
             .Controls("提示", null, subtitleBox)
             .Only(() => Settings.Current.CurtainTitle != Settings.DefaultCurtainTitle
-                        || Settings.Current.CurtainSubtitle != Settings.DefaultCurtainSubtitle, g => g
+                        || Settings.Current.CurtainSubtitle != null, g => g
                 .Button("恢复默认", () =>
                 {
                     titleBox.Text = Settings.DefaultCurtainTitle;
-                    subtitleBox.Text = Settings.DefaultCurtainSubtitle;
+                    subtitleBox.Text = awayHint;
                 }));
         v.Section("关于")
-            .Value("版本", Updater.Version)
+            .Value("版本", Updater.Version, button: Updater.Available ? ("检查更新…", new Action(Updater.CheckNow)) : null)
             .Only(() => Updater.Available, g => g
-                .Toggle("自动检查更新", () => Settings.Current.AutoCheckUpdates, on => Settings.Update(s => s.AutoCheckUpdates = on)));
+                .Toggle("自动检查更新", () => Settings.Current.AutoCheckUpdates, on => Settings.Update(s => s.AutoCheckUpdates = on)))
+            .Button("再看一遍开始指南", showGuide);
+    }
+
+    /// 远程控制页教的那一行（copy §16.9）：真实路径拼好，PowerShell 里照抄就能跑
+    static string CommandLine(string command) =>
+        $"& \"{Path.Combine(AppContext.BaseDirectory, "LockCurtain.exe")}\" --send {command}";
+
+    /// 「拷贝」：点了按钮字变「已拷贝」，1.5 秒后变回来（copy §16.7，D11）
+    static Button CopyButton(PageView v, string text)
+    {
+        Button? b = null;
+        b = v.MakeButton("拷贝", () =>
+        {
+            try { Clipboard.SetText(text); }
+            catch (System.Runtime.InteropServices.ExternalException e)
+            {
+                // 剪贴板被别的程序占着
+                Log.Write($"拷贝失败: {e.Message}");
+                SystemSounds.Beep.Play();
+                return;
+            }
+            b!.Text = "已拷贝";
+            v.Arrange();
+            var back = new System.Windows.Forms.Timer { Interval = 1500 };
+            back.Tick += (_, _) =>
+            {
+                back.Dispose();
+                if (b.IsDisposed) return;
+                b.Text = "拷贝";
+                v.Arrange();
+            };
+            back.Start();
+        });
+        return b;
     }
 
     /// 遮罩文字的输入框：每改一个字就存，「恢复默认」该不该显示跟着变，所以重排
@@ -230,40 +346,124 @@ internal sealed class SettingsWindow : Form
     void BuildAway(PageView v)
     {
         v.Section("防休眠", () => "关掉「屏幕常亮」后只阻止系统休眠，屏幕可以熄灭；熄屏后要不要重新登录，看系统的登录选项和屏幕保护程序设置。"
-                               + "亮度只对笔记本内置屏有效，撤下幕布时恢复。设置在下次进入离开模式时生效。")
+                               + "亮度只对笔记本内置屏有效，撤下幕布时恢复。设置在下次盖上幕布时生效。")
             .Toggle("屏幕常亮", () => Settings.Current.AwayKeepDisplayOn, on => Settings.Update(s => s.AwayKeepDisplayOn = on))
             .Toggle("亮度调到最低", () => Settings.Current.AwayDimBrightness, on => Settings.Update(s => s.AwayDimBrightness = on));
         v.Section("离开模式", () => "幕布盖着的时候，你的按键和点击会被吞掉，不会传给下层的程序；agent 的合成输入照常穿透。")
             .Value("回来时", "碰一下键盘或鼠标：先锁屏，再撤下幕布")
-            .Button("立即进入离开模式", enterAway);
+            .Button("现在盖上幕布", enterAway);
     }
 
+    // MARK: - 手机（Colo A1，copy §16.1）
+
+    void BuildPhone(PageView v)
+    {
+        phone.Probe();      // 没配过手机也看一眼蓝牙开着没有
+        var warning = Icon24("warning", size => PageView.GlyphBitmap("\uE7BA", size, Color.FromArgb(0xF2, 0xA6, 0x1E)));
+        var phoneIcon = Icon24("phone", size => PageView.GlyphBitmap("\uE8EA", size, theme.Secondary));
+        if (phone.BluetoothUnsupported)
+            v.Section().Item(warning, "这台电脑的蓝牙用不了，手机连不上。", null);
+        else if (phone.BluetoothOn == false)
+            // COPY-TODO: §16.1 只说「后面配一颗按钮」，按钮字用 Colo A1 的「打开蓝牙设置」
+            v.Section().Item(warning, "蓝牙关了，手机连不上。", null, controls: v.MakeButton("打开蓝牙设置", OpenBluetoothSettings));
+
+        var phones = phone.Phones;
+        if (phones.Count == 0)
+        {
+            v.Section().Item(phoneIcon, "还没配对手机",
+                             "配对以后，手机上能盖上幕布、走近时撤下幕布，还能开关保持唤醒。\n手机上先装 LockCurtain。");
+            v.Section().Bare().Controls("", null, v.MakeButton("配对手机…", showPairing, prominent: true));
+            return;
+        }
+        var list = v.Section("已配对的手机");
+        var now = DateTime.UtcNow;
+        foreach (var p in phones)
+        {
+            var id = p.ID;
+            list.Add(new PageView.Row
+            {
+                Icon = phoneIcon,
+                Title = UiText.PhoneTitle(p.Name, p.PairedAt),
+                Detail = UiText.PhoneStatus(p.Connected, p.LastSeen, now),
+                DetailDot = p.Connected ? v.ConnectedDot : v.DisconnectedDot,
+                Controls = [v.MakeButton("撤销配对", () => PairingForm.ConfirmUnpair(phone, id, this))],
+            });
+        }
+        v.Section("", () => "手机能做的：盖上幕布；你走近、手机解锁着时撤下幕布；开关保持唤醒。").Bare()
+            .Controls("", null, v.MakeButton("配对手机…", showPairing));
+    }
+
+    static void OpenBluetoothSettings()
+    {
+        try { Process.Start(new ProcessStartInfo("ms-settings:bluetooth") { UseShellExecute = true })?.Dispose(); }
+        catch (Win32Exception e) { Log.Write($"打开蓝牙设置失败: {e.Message}"); }
+    }
+
+    // MARK: - 保持唤醒（Colo A3，copy §16.2）
+
+    void BuildKeepAwake(PageView v)
+    {
+        var g = v.Section("保持唤醒", () => "不盖幕布，只让电脑不睡；屏幕照样会熄灭。手机上也能开关。"
+                                         + "离开模式里的防休眠是另一件事，在「离开模式」那一页。");
+        if (picking)
+        {
+            var picker = RuleEditor.TimePicker(v, pickMinute, "保持唤醒到");
+            picker.ValueChanged += (_, _) => pickMinute = picker.Minute;
+            g.Controls("保持唤醒到", null, picker,
+                       v.MakeButton("取消", () => { picking = false; Refresh(KeepAwakePage); }),
+                       v.MakeButton("开始", () => KeepAwakeMenu.StartAt(keepAwake, pickMinute), prominent: true));
+        }
+        else if (keepAwake.Mode != null)
+        {
+            var cup = Icon24("cup", size => TrayApp.CupImage(size, theme.Text));
+            Button? change = null;
+            // COPY-TODO: 「改时长」是 Colo A3 的字，Camo §16 没写
+            change = v.MakeButton("改时长", () => ShowKeepAwakeMenu(change!));
+            g.Item(cup, "LockCurtain 保持唤醒", keepAwake.Detail() + (keepAwake.StartedByPhone ? " · 手机开的" : ""),
+                   controls: [change, v.MakeButton("停止", keepAwake.Stop)]);
+        }
+        else
+        {
+            Button? start = null;
+            start = v.MakeButton("开始", () => ShowKeepAwakeMenu(start!));
+            g.Controls("关", null, start);
+        }
+    }
+
+    void ShowKeepAwakeMenu(Button from) =>
+        NativeMenu.Show(Handle, from.PointToScreen(new Point(0, from.Height)), KeepAwakeMenu.Choices(keepAwake, PickKeepAwakeTime));
+
+    /// 只教一行（copy §16.9，D2）：真实路径拼好，「拷贝」拷的就是这一行
     void BuildRemote(PageView v)
     {
-        var exe = Path.Combine(AppContext.BaseDirectory, "LockCurtain.exe");
-        var section = v.Section("命令行", () => "一行命令进，一行 JSON 出；成功时退出码 0。App 本身不监听任何网络端口，只接受本机当前用户的连接。"
-                                               + "在 PowerShell 里调用要在路径前加 &。")
-            .Value("路径", exe, mono: true, button: ("拷贝", () => Clipboard.SetText(exe)));
-        foreach (var (cmd, what) in new[]
-        {
-            ("away", "进入离开模式（App 没运行时会先拉起）"),
-            ("hide", "撤下幕布；离开模式下先锁屏再撤"),
-            ("status", "查询状态，输出一行 JSON"),
-            ("preview", "预览幕布"),
-            ("settings", "打开这个窗口"),
-        })
-            section.Command($"--send {cmd}", what);
+        var line = CommandLine("away");
+        v.Section("命令行", () => "一行命令进，一行 JSON 出；成功时退出码 0。App 本身不监听任何网络端口，只接受本机当前用户的连接。"
+                                + "把 away 换成 hide、status、preview、settings，就是另外四个命令。照这行抄，别自己改。")
+            .Add(new PageView.Row { Title = line, MonoTitle = true, Controls = [CopyButton(v, line)] });
     }
 
     void BuildPermissions(PageView v)
     {
         var installed = ElevatedTask.IsInstalled();
-        v.Section("以最高权限运行", () => "以管理员身份运行的窗口在前台时，普通权限的 LockCurtain 看不到发给它的按键：按键会先落进那个窗口，"
-                                       + "约 0.2 秒后才发现并锁屏。用 install.ps1 安装后，登录时以最高权限启动，能直接拦住这些按键。"
-                                       + "安装和卸载各要管理员确认一次。")
-            .Value("install.ps1", installed ? "已安装" : "未安装")
-            .Value("当前实例", ElevatedTask.IsElevated() ? "以管理员身份运行" : "普通权限");
-        v.Section("诊断")
+        // COPY-TODO: 原段落带 install.ps1（D5），只把脚本名换成「开启」，其余照旧
+        var section = v.Section("以管理员身份运行", () => "以管理员身份运行的窗口在前台时，普通权限的 LockCurtain 看不到发给它的按键："
+                                         + "按键会先落进那个窗口，约 0.2 秒后才发现并锁屏。开启后，登录时以管理员身份启动，能直接拦住这些按键。"
+                                         + "开启要管理员确认一次。");
+        // COPY-TODO: 「已开」「未开」是 Colo D5 的写法，Camo 没给值
+        if (installed) section.Value("以管理员身份运行", "已开");
+        else section.Add(new PageView.Row
+        {
+            Title = "以管理员身份运行",
+            Detail = elevateError,
+            Value = "未开",
+            Controls = [v.MakeButton("开启", () =>
+            {
+                elevateError = ElevatedTask.Enable();
+                Refresh("权限");
+            })],
+        });
+        section.Value("当前实例", ElevatedTask.IsElevated() ? "以管理员身份运行" : "普通权限");
+        v.Section("排查信息")
             .Button("打开日志文件夹", Log.OpenDir);
     }
 }

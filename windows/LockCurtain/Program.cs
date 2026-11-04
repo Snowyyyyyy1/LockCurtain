@@ -58,6 +58,42 @@ internal static class ElevatedTask
 
     public static bool IsInstalled() => Schtasks($"/query /tn {Name}");
 
+    /// 设置 › 权限「开启」：以管理员身份跑旁边的 install.ps1（弹 UAC），它装好计划任务、杀掉本进程、再从计划任务起来。
+    /// 返回没开成的原因（给人看，不提脚本名）；null = 已经交给 install.ps1
+    public static string? Enable()
+    {
+        var script = Path.Combine(AppContext.BaseDirectory, "install.ps1");
+        if (!File.Exists(script))
+        {
+            Log.Write($"开启以管理员身份运行: 没有 {script}");
+            // COPY-TODO: §16.8 只说「开不了就写原因」，没给字
+            return "没开成：这份 LockCurtain 里少了安装要用的文件，重新下载安装包装一次。";
+        }
+        try
+        {
+            var sid = WindowsIdentity.GetCurrent().User?.Value;
+            Process.Start(new ProcessStartInfo("powershell.exe",
+                $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\"" + (sid != null ? $" -ForUser {sid}" : ""))
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+            })?.Dispose();
+            Log.Write("开启以管理员身份运行: 已起 install.ps1");
+            return null;
+        }
+        catch (System.ComponentModel.Win32Exception e) when (e.NativeErrorCode == 1223)     // ERROR_CANCELLED：UAC 点了否
+        {
+            Log.Write("开启以管理员身份运行: UAC 没同意");
+            // COPY-TODO: 「没点同意」也算原因（§16.8），句子是我写的
+            return "没开成：管理员确认那一步没点同意。";
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            Log.Write($"开启以管理员身份运行失败: {e.Message}");
+            return $"没开成：{e.Message}";
+        }
+    }
+
     static bool Schtasks(string arguments)
     {
         try

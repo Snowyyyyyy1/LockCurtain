@@ -50,6 +50,8 @@ internal sealed class PageView : Panel
     public const TextFormatFlags LineFlags = TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter
                                            | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
     const TextFormatFlags WrapFlags = TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
+    /// 等宽字的标题（远程控制页那行命令）：整行要看得全，折行；没有空格的长路径也从中间折开
+    const TextFormatFlags MonoWrapFlags = WrapFlags | TextFormatFlags.TextBoxControl;
 
     public readonly Theme Theme;
     readonly List<Group> groups = new();
@@ -90,8 +92,8 @@ internal sealed class PageView : Panel
     static int LineHeight(Font font) =>
         TextRenderer.MeasureText(" ", font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Height;
 
-    static int WrappedHeight(string text, Font font, int width) =>
-        TextRenderer.MeasureText(text, font, new Size(Math.Max(1, width), int.MaxValue), WrapFlags).Height;
+    static int WrappedHeight(string text, Font font, int width, TextFormatFlags flags = WrapFlags) =>
+        TextRenderer.MeasureText(text, font, new Size(Math.Max(1, width), int.MaxValue), flags).Height;
 
     static int TextWidth(string text, Font font) =>
         TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width;
@@ -148,6 +150,26 @@ internal sealed class PageView : Panel
     {
         base.OnScroll(se);
         Invalidate();
+    }
+
+    /// 可点的行：鼠标在上面时是手形，点了执行 OnClick
+    Row? ClickableRowAt(Point p)
+    {
+        var o = AutoScrollPosition;
+        var at = new Point(p.X - o.X, p.Y - o.Y);
+        return groups.SelectMany(g => g.Rows).FirstOrDefault(r => r.Shown && r.OnClick != null && r.Rect.Contains(at));
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        Cursor = ClickableRowAt(e.Location) != null ? Cursors.Hand : Cursors.Default;
+    }
+
+    protected override void OnMouseClick(MouseEventArgs e)
+    {
+        base.OnMouseClick(e);
+        if (e.Button == MouseButtons.Left) ClickableRowAt(e.Location)?.OnClick?.Invoke();
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)
@@ -244,11 +266,13 @@ internal sealed class PageView : Panel
         // 值靠右，最多占掉标题之外的地方；路径这类长值在中间省略
         var valueW = row.Value == null ? 0
             : row.ValueColor != null ? TextWidth(row.Value, smallFont!) + S(BadgePadX) * 2
+            : row.ValueDot != null ? TextWidth(row.Value, valueFont) + S(DotSize) + S(DotGap)
             : Math.Min(TextWidth(row.Value, valueFont), Math.Max(S(40), innerW - right - TextWidth(row.Title, titleFont) - S(ControlGap)));
         var iconW = row.Icon == null ? 0 : S(IconSize) + S(ControlGap);
         var textW = innerW - iconW - right - (valueW > 0 ? valueW + S(ControlGap) : 0);
-        var titleH = leading ? 0 : LineHeight(titleFont);
-        var detailH = row.Detail == null ? 0 : S(2) + WrappedHeight(row.Detail, smallFont!, textW);
+        var titleH = leading ? 0 : row.MonoTitle ? WrappedHeight(row.Title, titleFont, textW, MonoWrapFlags) : LineHeight(titleFont);
+        var dotW = row.DetailDot == null ? 0 : S(DotSize) + S(DotGap);
+        var detailH = row.Detail == null ? 0 : S(2) + WrappedHeight(row.Detail, smallFont!, textW - dotW);
         h = Math.Max(S(RowMinHeight), Math.Max(titleH + detailH, controlsH) + S(RowPadY) * 2);
 
         row.Rect = new Rectangle(x, y, width, h);
@@ -295,13 +319,38 @@ internal sealed class PageView : Panel
                 var text = At(row.TextRect);
                 if (row.TitleHeight > 0)
                     TextRenderer.DrawText(g, row.Title, row.MonoTitle ? monoFont : BodyFont,
-                                          new Rectangle(text.X, text.Y, text.Width, row.TitleHeight), Theme.Text, LineFlags);
+                                          new Rectangle(text.X, text.Y, text.Width, row.TitleHeight), Theme.Text,
+                                          row.MonoTitle ? MonoWrapFlags : LineFlags);
                 if (row.Detail != null)
-                    TextRenderer.DrawText(g, row.Detail, smallFont,
-                                          Rectangle.FromLTRB(text.Left, text.Top + row.TitleHeight + S(2), text.Right, text.Bottom),
-                                          Theme.Secondary, WrapFlags);
+                {
+                    var detail = Rectangle.FromLTRB(text.Left, text.Top + row.TitleHeight + S(2), text.Right, text.Bottom);
+                    if (row.DetailDot is { } dotColor)
+                    {
+                        // 状态点（已连上 = 绿，没连上 = 灰），和第一行字的中线对齐
+                        var d = S(DotSize);
+                        var mode = g.SmoothingMode;
+                        g.SmoothingMode = SmoothingMode.AntiAlias;
+                        using (var dot = new SolidBrush(dotColor))
+                            g.FillEllipse(dot, detail.Left, detail.Top + (LineHeight(smallFont!) - d) / 2f, d, d);
+                        g.SmoothingMode = mode;
+                        detail = Rectangle.FromLTRB(detail.Left + d + S(DotGap), detail.Top, detail.Right, detail.Bottom);
+                    }
+                    TextRenderer.DrawText(g, row.Detail, smallFont, detail, Theme.Secondary, WrapFlags);
+                }
                 if (row.Value != null && row.ValueColor is { } badge)
                     DrawBadge(g, row.Value, badge, At(row.ValueRect));
+                else if (row.Value != null && row.ValueDot is { } valueDot)
+                {
+                    // 面板「手机」那一行：值前面一个状态点
+                    var r = At(row.ValueRect);
+                    var d = S(DotSize);
+                    var mode = g.SmoothingMode;
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    using (var dot = new SolidBrush(valueDot)) g.FillEllipse(dot, r.X, r.Y + (r.Height - d) / 2f, d, d);
+                    g.SmoothingMode = mode;
+                    TextRenderer.DrawText(g, row.Value, BodyFont, Rectangle.FromLTRB(r.X + d + S(DotGap), r.Y, r.Right, r.Bottom),
+                                          Theme.Secondary, LineFlags);
+                }
                 else if (row.Value != null)
                     TextRenderer.DrawText(g, row.Value, row.MonoValue ? monoFont : BodyFont, At(row.ValueRect), Theme.Secondary,
                                           (LineFlags & ~TextFormatFlags.EndEllipsis) | TextFormatFlags.Right
@@ -312,7 +361,24 @@ internal sealed class PageView : Panel
         }
     }
 
-    const int BadgePadX = 8;
+    const int BadgePadX = 8, DotSize = 8, DotGap = 6;
+
+    /// 「已连上」的绿点（Win11 的成功色：浅色 #0F7B0F，深色 #6CCB5F）和「没连上」的灰点
+    public Color ConnectedDot => Theme.Dark ? Color.FromArgb(0x6C, 0xCB, 0x5F) : Color.FromArgb(0x0F, 0x7B, 0x0F);
+    public Color DisconnectedDot => Theme.Disabled;
+
+    /// 图标字体（Segoe Fluent Icons）里的一个字画成 size 见方的图，给行首的图标用
+    public static Bitmap GlyphBitmap(string glyph, int size, Color color)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        using var font = new Font(IconFontFamily, size * 0.8f, FontStyle.Regular, GraphicsUnit.Pixel);
+        g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        using var brush = new SolidBrush(color);
+        using var center = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+        g.DrawString(glyph, font, brush, new RectangleF(0, 0, size, size), center);
+        return bmp;
+    }
 
     /// 值画成一个带底色的小胶囊（Mac 版 KindBadge）：底色是 color 调淡，字是 color 往正文色靠一点，深浅色下都看得清
     void DrawBadge(Graphics g, string text, Color color, Rectangle valueRect)
@@ -376,6 +442,12 @@ internal sealed class PageView : Panel
         public Image? Icon;
         /// 有它时值画成这个颜色的小胶囊
         public Color? ValueColor;
+        /// 有它时说明前面画一个这个颜色的小圆点（设置 › 手机 的已连上 / 没连上）
+        public Color? DetailDot;
+        /// 有它时值前面画一个这个颜色的小圆点（托盘面板「手机」那一行）
+        public Color? ValueDot;
+        /// 有它时整行可点（行里的按钮照样自己处理点击）
+        public Action? OnClick;
         public bool Shown = true;
         public int TitleHeight;
         public Rectangle Rect, TextRect, ValueRect, IconRect;
@@ -424,10 +496,6 @@ internal sealed class PageView : Panel
             var controls = button is { } b ? new Control[] { view.MakeButton(b.Label, b.Run) } : Array.Empty<Control>();
             return Add(new Row { Title = title, Value = value, MonoValue = mono, Controls = controls });
         }
-
-        /// 等宽字的标题加一行说明，比如命令行的各个命令
-        public Group Command(string command, string what) =>
-            Add(new Row { Title = command, MonoTitle = true, Detail = what });
 
         public Group Text(string title, string? detail = null) => Add(new Row { Title = title, Detail = detail });
 

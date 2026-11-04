@@ -1,10 +1,12 @@
 // TrayApp.cs —— 通知区域图标和菜单，对应 Mac 版的菜单栏图标
 //
 // 图标（TrayGlyphs.cs）：初代 Mac，屏幕上是笑脸表示没有遮罩，屏幕涂满、抠出一把锁表示遮罩显示中，杯子表示保持唤醒中（遮罩优先）。
-// 左键弹面板（StatusPanel：离开模式、预览、保持唤醒、谁在阻止睡眠），右键弹系统原生菜单。
+// 左键弹面板（StatusPanel：盖上幕布、预览、手机、保持唤醒、谁在阻止睡眠），右键弹系统原生菜单（顺序见 Commands，copy v14.3 §14.1）。
+// 图标颜色跟着任务栏深浅色，切换主题时重画（D10）。第一次打开弹「开始用 LockCurtain」（GuideForm，N1）。
 
 using System.Drawing;
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 using LockCurtain.Phone;
 
 namespace LockCurtain;
@@ -20,7 +22,7 @@ internal sealed partial class TrayApp : ApplicationContext
     readonly ControlServer server;
     readonly SessionWatcher watcher;
     readonly NotifyIcon tray;
-    readonly Icon idleIcon, lockedIcon, cupIcon;
+    Icon idleIcon, lockedIcon, cupIcon;
     readonly KeepAwake keepAwake = new();
     /// 右键菜单的主人：TrackPopupMenu 要一个本线程的窗口
     readonly NativeWindow menuOwner = new();
@@ -31,6 +33,8 @@ internal sealed partial class TrayApp : ApplicationContext
     /// 配对手机（蓝牙）：手机盖上 / 撤下幕布
     readonly PhoneLink phone;
     PairingForm? pairing;
+    GuideForm? guide;
+    readonly SynchronizationContext ui;
 
     public TrayApp(bool stealth, bool preview)
     {
@@ -56,16 +60,22 @@ internal sealed partial class TrayApp : ApplicationContext
         };
         overlay.StateChanged += UpdateTrayIcon;
         keepAwake.Changed += UpdateTrayIcon;
+        SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
-        var ui = SynchronizationContext.Current!;
+        ui = SynchronizationContext.Current!;
         phone = new PhoneLink(ui)
         {
             // 手机签名的命令（盖上幕布 = away）走和 --send away 一样的路
             OnCommand = cmd => overlay.HandleCommand(cmd),
             // 只撤遮罩，不解锁 Windows
             OnLift = overlay.LiftFromPhone,
+            // 手机的 awake:*（protocol v3）：只有一直 / 1、2、5 小时 / 关
+            OnAwake = keepAwake.Apply,
+            KeepAwakeSnapshot = keepAwake.Wire,
         };
         overlay.StateChanged += () => phone.ReportCurtainState(overlay.Mode != null);
+        // 保持唤醒不管哪儿改的（面板、设置、菜单、到点、手机），都告诉连着的手机
+        keepAwake.Changed += phone.ReportKeepAwake;
         // UI 线程超过 2 秒没处理消息就写进 ble.log（连同蓝牙的状态）
         new UiWatchdog(ui, phone.DescribeState).Start();
         server.Start();
@@ -75,12 +85,16 @@ internal sealed partial class TrayApp : ApplicationContext
         keepAwake.Restore();
         Log.Write($"LockCurtain started, stealth={stealth}, locked={Session.QueryLocked()?.ToString() ?? "unknown"}");
         if (preview) SynchronizationContext.Current!.Post(_ => overlay.Show(CurtainMode.Preview), null);
+        // 第一次打开：托盘图标多半收在 ^ 里，没人找得到（N1）
+        else if (!Settings.Current.GuideShown) ui.Post(_ => ShowGuide(), null);
     }
 
     protected override void ExitThreadCore()
     {
         Log.Write("LockCurtain exit");
+        SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         panel?.Close();
+        guide?.Close();
         keepAwake.Dispose();
         settings?.Close();
         pairing?.Close();
@@ -115,6 +129,21 @@ internal sealed partial class TrayApp : ApplicationContext
         overlay.StateChanged += OnChanged;
     }
 
+    /// 切深浅色后任务栏的颜色变了：图标按新颜色重画（D10）。SystemEvents 可能在别的线程上发
+    void OnUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.VisualStyle or UserPreferenceCategory.Color)) return;
+        ui.Post(_ =>
+        {
+            Icon[] old = [idleIcon, lockedIcon, cupIcon];
+            idleIcon = MacIcon(locked: false);
+            lockedIcon = MacIcon(locked: true);
+            cupIcon = CupIcon();
+            UpdateTrayIcon();
+            foreach (var i in old) i.Dispose();
+        }, null);
+    }
+
     void UpdateTrayIcon()
     {
         tray.Icon = overlay.Mode != null ? lockedIcon : keepAwake.Mode != null ? cupIcon : idleIcon;
@@ -129,23 +158,41 @@ internal sealed partial class TrayApp : ApplicationContext
         _ => "离开模式中，按键会先锁屏",
     };
 
-    /// 右键菜单的命令
+    /// 右键菜单的命令（copy v14.3 §14.1，「保持唤醒 ▸」按 Ato / Colo A3 放在撤下幕布后面）
     List<TrayCommand> Commands()
     {
         var idle = overlay.Mode == null;
+        var phones = phone.Phones;
         return
         [
-            new("进入离开模式", () => overlay.Show(CurtainMode.Away), idle),
+            new("盖上幕布", () => overlay.Show(CurtainMode.Away), idle),
             new("预览幕布", () => overlay.Show(CurtainMode.Preview), idle),
-            new("紧急撤下幕布", overlay.Hide, !idle),
-            new("配对手机", ShowPairing, SeparatorBefore: true),
-            .. phone.IsPaired ? new[] { new TrayCommand("撤销配对", () => PairingForm.ConfirmUnpair(phone)) } : [],
-            new("设置…", ShowSettings, SeparatorBefore: true),
+            // 和真人回来一样：离开模式下先锁屏再撤（N3），预览直接撤
+            new("撤下幕布", () => _ = overlay.SafeHide(), !idle),
+            new("保持唤醒", () => { }, SeparatorBefore: true, Submenu: KeepAwakeCommands()),
+            new($"手机：{(!phone.IsPaired ? "未配对" : phone.AnyConnected ? "已连上" : "没连上")}", () => { }, Enabled: false,
+                SeparatorBefore: true),
+            new("配对手机…", ShowPairing),
+            .. phones.Count switch
+            {
+                0 => Array.Empty<TrayCommand>(),
+                1 => [new TrayCommand("撤销配对…", () => PairingForm.ConfirmUnpair(phone, phones[0].ID))],
+                // 配着几台时列出每一台，只撤点的那台
+                _ => [new TrayCommand("撤销配对…", () => { }, Submenu: phones
+                         .Select(p => new TrayCommand(UiText.PhoneTitle(p.Name, p.PairedAt), () => PairingForm.ConfirmUnpair(phone, p.ID)))
+                         .ToList())],
+            },
+            new("设置…", () => ShowSettings(), SeparatorBefore: true),
             .. Updater.Available ? new[] { new TrayCommand("检查更新…", Updater.CheckNow) } : [],
             new("打开日志文件夹", Log.OpenDir),
             new("退出 LockCurtain", ExitThread, SeparatorBefore: true),
         ];
     }
+
+    /// 「保持唤醒 ▸」：在跑时是置灰的状态行和「停止」；没在跑时和面板同一份菜单，「到指定时间…」去设置页里选
+    List<TrayCommand> KeepAwakeCommands() => keepAwake.Mode != null
+        ? [new(keepAwake.Short(), () => { }, Enabled: false), new("停止", keepAwake.Stop)]
+        : KeepAwakeMenu.Choices(keepAwake, () => ShowSettings()?.PickKeepAwakeTime());
 
     /// settings 命令在这里处理，其余交给遮罩
     Task<Dictionary<string, object>> HandleCommand(string cmd)
@@ -155,17 +202,33 @@ internal sealed partial class TrayApp : ApplicationContext
         return Task.FromResult(new Dictionary<string, object> { ["ok"] = true, ["running"] = true });
     }
 
-    /// 只开一个设置窗口，已开着就提到前面
-    void ShowSettings()
+    /// 只开一个设置窗口，已开着就提到前面；page 不空时换到那一页
+    SettingsWindow ShowSettings(string? page = null)
     {
         if (settings == null)
         {
-            settings = new SettingsWindow(rules, () => overlay.Show(CurtainMode.Away));
+            settings = new SettingsWindow(rules, () => overlay.Show(CurtainMode.Away), phone, keepAwake, ShowPairing, ShowGuide);
             settings.FormClosed += (_, _) => settings = null;
         }
+        if (page != null) settings.Select(page);
         if (settings.WindowState == FormWindowState.Minimized) settings.WindowState = FormWindowState.Normal;
         settings.Show();
         settings.Activate();
+        return settings;
+    }
+
+    /// 「开始用 LockCurtain」：第一次打开时自己弹，以后从 设置 › 通用 › 关于 找回来
+    void ShowGuide()
+    {
+        if (!Settings.Current.GuideShown) Settings.Update(s => s.GuideShown = true);
+        if (guide == null)
+        {
+            guide = new GuideForm(phone, ShowPairing);
+            guide.FormClosed += (_, _) => guide = null;
+        }
+        if (guide.WindowState == FormWindowState.Minimized) guide.WindowState = FormWindowState.Normal;
+        guide.Show();
+        guide.Activate();
     }
 
     /// 只开一个配对窗口；已开着就提到前面（码不变）
@@ -199,8 +262,9 @@ internal sealed partial class TrayApp : ApplicationContext
         catch (Exception e) { Log.Write($"托盘面板读数据出错: {e.Message}"); }
         finally { panelOpening = false; }
 
-        panel = new StatusPanel(anchor, overlay.Mode == null, blockers, history, keepAwake,
-                                () => overlay.Show(CurtainMode.Away), () => overlay.Show(CurtainMode.Preview), ShowSettings);
+        panel = new StatusPanel(anchor, overlay.Mode == null, blockers, history, keepAwake, phone,
+                                () => overlay.Show(CurtainMode.Away), () => overlay.Show(CurtainMode.Preview), () => ShowSettings(),
+                                () => ShowSettings(SettingsWindow.PhonePage), ShowPairing);
         panel.FormClosed += (_, _) =>
         {
             panel = null;

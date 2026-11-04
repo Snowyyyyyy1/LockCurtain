@@ -1,13 +1,14 @@
 // StatusPanel.cs —— 左键点托盘图标弹出的面板（对应 Mac 版 StatusPanel.swift）；右键还是系统原生菜单（NativeMenu）
 //
-// 从上到下：一排按钮（进入离开模式、预览遮罩、设置）；「阻止睡眠」卡片：保持唤醒，加上现在谁在阻止睡眠；
+// 从上到下：一排按钮（盖上幕布、预览幕布、设置）；「手机」一行（已连上 / 没连上，没配对时右边是「配对手机」，
+// 整行点了打开 设置 › 手机，Colo A2）；「阻止睡眠」卡片：保持唤醒，加上现在谁在阻止睡眠；
 // 「过去 24 小时」卡片：什么时候睡着了（Windows 只做睡眠和唤醒，见 SleepHistory.cs）。
 // 面板开着时每 2 秒在后台读一次 powercfg /requests，有变化才重排。读不到（没有管理员权限）时在卡片下面说明。
 // 卡片和行用设置窗口的 PageView 画，跟着系统深浅色走。位置贴着任务栏、对准图标，失去焦点或按 Esc 关闭，
 // 圆角交给 DWM（和 Ledge Windows 版的浮窗一样）。NotifyIcon 不公开图标位置，用点击时的鼠标位置。
 
-using System.Diagnostics;
 using System.Drawing;
+using LockCurtain.Phone;
 
 namespace LockCurtain;
 
@@ -18,8 +19,9 @@ internal sealed class StatusPanel : Form
 
     readonly Point anchor;
     readonly bool idle;
-    readonly Action enterAway, preview, openSettings;
+    readonly Action enterAway, preview, openSettings, openPhone, pairPhone;
     readonly KeepAwake keepAwake;
+    readonly PhoneLink phone;
     readonly PageView page;
     readonly System.Windows.Forms.Timer refresh = new() { Interval = RefreshMs };
     SleepBlockerSnapshot? blockers;
@@ -29,11 +31,15 @@ internal sealed class StatusPanel : Form
     /// 「到指定时间…」的选择框开着，和里面选的时刻（当天零点起的分钟）
     bool picking;
     int pickMinute;
-    Bitmap? cup;
+    Bitmap? cup, phoneIcon;
 
     public StatusPanel(Point anchor, bool idle, SleepBlockerSnapshot? blockers, (List<Span>? Sleeps, string? Error) history,
-                       KeepAwake keepAwake, Action enterAway, Action preview, Action openSettings)
+                       KeepAwake keepAwake, PhoneLink phone, Action enterAway, Action preview, Action openSettings,
+                       Action openPhone, Action pairPhone)
     {
+        this.phone = phone;
+        this.openPhone = openPhone;
+        this.pairPhone = pairPhone;
         this.anchor = anchor;
         this.idle = idle;
         this.blockers = blockers;
@@ -59,6 +65,7 @@ internal sealed class StatusPanel : Form
         Rebuild();
 
         keepAwake.Changed += OnKeepAwakeChanged;
+        phone.PhonesChanged += Rebuild;
         refresh.Tick += async (_, _) => await Reload();
         refresh.Start();
     }
@@ -101,8 +108,10 @@ internal sealed class StatusPanel : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         keepAwake.Changed -= OnKeepAwakeChanged;
+        phone.PhonesChanged -= Rebuild;
         refresh.Dispose();
         cup?.Dispose();
+        phoneIcon?.Dispose();
         base.OnFormClosed(e);
     }
 
@@ -141,7 +150,8 @@ internal sealed class StatusPanel : Form
     {
         var rows = Rows();
         var next = string.Join("\n", rows.Select(r => $"{r.Display}|{r.Title}|{r.Reason}"))
-                   + $"\n{blockers?.SystemCount}|{blockers == null}|{keepAwake.Mode}|{KeepAwakeDetail()}|{picking}";
+                   + $"\n{blockers?.SystemCount}|{blockers == null}|{keepAwake.Mode}|{keepAwake.Detail()}|{picking}"
+                   + $"|{phone.IsPaired}|{phone.AnyConnected}";
         if (next == signature) return;
         signature = next;
 
@@ -170,20 +180,32 @@ internal sealed class StatusPanel : Form
 
     void Build(PageView v, List<BlockerRow> rows)
     {
-        var away = v.MakeButton("进入离开模式", () => Run(enterAway), prominent: true);
+        var away = v.MakeButton("盖上幕布", () => Run(enterAway), prominent: true);
         var look = v.MakeButton("预览幕布", () => Run(preview));
         away.Enabled = look.Enabled = idle;
         var gear = new IconButton("\uE713", "设置…") { Font = v.BodyFont };   // Segoe Fluent Icons 的齿轮
         gear.Click += (_, _) => Run(openSettings);
         v.Section().Bare().Controls("", null, away, look, gear);
 
-        var card = v.Section("阻止睡眠", Footer);
+        // 「手机」一行（Colo A2）：没配对时它自己就是配对入口
         var icon = v.S(24);
+        phoneIcon ??= PageView.GlyphBitmap("\uE8EA", icon, v.Theme.Secondary);    // Segoe Fluent 的 CellPhone
+        var phoneRow = new PageView.Row { Icon = phoneIcon, Title = "手机", OnClick = () => Run(openPhone) };
+        if (phone.IsPaired)
+        {
+            var connected = phone.AnyConnected;
+            phoneRow.Value = connected ? "已连上" : "没连上";
+            phoneRow.ValueDot = connected ? v.ConnectedDot : v.DisconnectedDot;
+        }
+        else phoneRow.Controls = [v.MakeButton("配对手机", () => Run(pairPhone))];
+        v.Section().Add(phoneRow);
+
+        var card = v.Section("阻止睡眠", Footer);
         if (keepAwake.Mode != null)
         {
             // exe 没有自己的图标，用托盘上保持唤醒时那只杯子
             cup ??= TrayApp.CupImage(icon, v.Theme.Text);
-            card.Item(cup, "LockCurtain 保持唤醒", KeepAwakeDetail(), controls: v.MakeButton("停止", keepAwake.Stop));
+            card.Item(cup, "LockCurtain 保持唤醒", keepAwake.Detail(), controls: v.MakeButton("停止", keepAwake.Stop));
         }
         else if (picking)
         {
@@ -216,74 +238,24 @@ internal sealed class StatusPanel : Form
         if (blockers == null)
             return ElevatedTask.IsElevated()
                 ? "读不到电源请求（powercfg /requests 出错），详情见日志。"
-                : "要以最高权限运行（用 install.ps1 安装）才看得到谁在阻止睡眠。";
+                // COPY-TODO: 原句带 install.ps1（D5 不许出现脚本名），按 §16.8 的「以管理员身份运行」改写
+                : "要以管理员身份运行才看得到谁在阻止睡眠。";
         return blockers.SystemCount > 0 ? $"另有 {blockers.SystemCount} 个系统服务或驱动也在阻止睡眠。" : "";
     }
 
-    string KeepAwakeDetail() => keepAwake.Mode switch
-    {
-        KeepAwakeMode.Forever => "直到你点停止；屏幕照样会熄灭",
-        KeepAwakeMode.Until u => $"到{(u.EndUtc.ToLocalTime().Date == DateTime.Today ? "" : "明天 ")}{u.EndUtc.ToLocalTime():HH:mm}，还剩 {Duration(u.EndUtc - DateTime.UtcNow)}",
-        KeepAwakeMode.WhileRunning w => $"{w.Name} 退出就结束",
-        _ => "",
-    };
+    /// 不到 1 分 / N 分 / N 小时 / N 小时 M 分（和 Mac 版一样，见 UiText）
+    public static string Duration(TimeSpan span) => UiText.Duration(span);
 
-    /// 不到 1 分 / N 分 / N 小时 / N 小时 M 分（和 Mac 版一样）
-    public static string Duration(TimeSpan span)
-    {
-        var minutes = (int)Math.Floor(span.TotalMinutes);
-        if (minutes < 1) return "不到 1 分";
-        if (minutes < 60) return $"{minutes} 分";
-        return minutes % 60 == 0 ? $"{minutes / 60} 小时" : $"{minutes / 60} 小时 {minutes % 60} 分";
-    }
-
-    void ShowKeepAwakeMenu(Button from)
-    {
-        TrayCommand For(string label, TimeSpan span) =>
-            new(label, () => keepAwake.Start(new KeepAwakeMode.Until(DateTime.UtcNow + span)));
-        NativeMenu.Show(Handle, from.PointToScreen(new Point(0, from.Height)), new List<TrayCommand>
+    /// 和设置 › 保持唤醒、右键菜单同一份菜单（KeepAwakeMenu）
+    void ShowKeepAwakeMenu(Button from) =>
+        NativeMenu.Show(Handle, from.PointToScreen(new Point(0, from.Height)), KeepAwakeMenu.Choices(keepAwake, () =>
         {
-            new("一直", () => keepAwake.Start(new KeepAwakeMode.Forever())),
-            For("1 小时", TimeSpan.FromHours(1)),
-            For("2 小时", TimeSpan.FromHours(2)),
-            For("5 小时", TimeSpan.FromHours(5)),
-            new("到指定时间…", () =>
-            {
-                // 默认停在至少一小时后的整点
-                var at = DateTime.Now.AddHours(1);
-                pickMinute = (at.Minute == 0 && at.Second == 0 ? at.Hour : at.Hour + 1) % 24 * 60;
-                picking = true;
-                Rebuild();
-            }),
-            new("某个程序开着时", () => { }, SeparatorBefore: true, Submenu: RunningApps()),
-        });
-    }
+            pickMinute = KeepAwakeMenu.DefaultPickMinute();
+            picking = true;
+            Rebuild();
+        }));
 
-    /// 任务栏上有窗口的程序（不含自己），按显示名排；它退出就结束保持唤醒
-    List<TrayCommand> RunningApps()
-    {
-        var apps = new SortedDictionary<string, TrayCommand>(StringComparer.CurrentCultureIgnoreCase);
-        foreach (var pid in ProcessInfo.WithWindows())
-        {
-            if (pid == Environment.ProcessId || ProcessInfo.PathOf(pid) is not { } path) continue;
-            var title = ProcessInfo.Title(pid, path);
-            if (apps.ContainsKey(title)) continue;
-            Process p;
-            try { p = Process.GetProcessById(pid); }
-            catch (ArgumentException) { continue; }     // 刚退出
-            using (p)
-                if (KeepAwake.Bind(p, title) is { } bound) apps[title] = new TrayCommand(title, () => keepAwake.Start(bound));
-        }
-        return apps.Count > 0 ? apps.Values.ToList() : new() { new("现在没有", () => { }, Enabled: false) };
-    }
-
-    /// 选的时刻下一次到来的时候；已经过了就是明天
-    void StartPicked()
-    {
-        var end = DateTime.Today.AddMinutes(pickMinute);
-        if (end <= DateTime.Now) end = end.AddDays(1);
-        keepAwake.Start(new KeepAwakeMode.Until(end.ToUniversalTime()));
-    }
+    void StartPicked() => KeepAwakeMenu.StartAt(keepAwake, pickMinute);
 
     /// 贴着任务栏、对准图标，离任务栏和屏幕边缘都留 gap
     static Point Place(Point anchor, Size size, int gap)
@@ -379,7 +351,7 @@ internal sealed class SleepBar : Control, IWideRow
         var x = 0;
         var y = labels.Bottom + S(10);
         foreach (var (color, text) in new[] { (Asleep, $"睡眠 {StatusPanel.Duration(asleep)}"),
-                                              (Track, $"醒着 {StatusPanel.Duration(SleepHistory.Window - asleep)}") })
+                                              (Track, $"在用 {StatusPanel.Duration(SleepHistory.Window - asleep)}") })
         {
             var dot = S(8);
             using (var b = new SolidBrush(color))
