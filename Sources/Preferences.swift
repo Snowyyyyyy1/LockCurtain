@@ -45,11 +45,32 @@ enum Prefs {
     static var awayUnlock: AwayUnlock {
         UserDefaults.standard.string(forKey: PrefKey.awayUnlock).flatMap(AwayUnlock.init(rawValue:)) ?? .lockScreen
     }
-    static let defaultCurtainTitle = "LockCurtain is Using Your Mac"
-    static let defaultCurtainSubtitle = "Press any key or click to unlock"
+    static let defaultCurtainTitle = "LockCurtain 正在使用这台电脑"
+    /// 老版本的英文默认值：存着的还是它，就当没改过（跟着新的默认走）
+    static let legacyDefaultTitle = "LockCurtain is Using Your Mac"
+    static let legacyDefaultSubtitle = "Press any key or click to unlock"
     /// 没设置过用默认文案；设成空（或只有空白）就不显示
-    static var curtainTitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainTitle) ?? defaultCurtainTitle }
-    static var curtainSubtitle: String { UserDefaults.standard.string(forKey: PrefKey.curtainSubtitle) ?? defaultCurtainSubtitle }
+    static var curtainTitle: String {
+        let s = UserDefaults.standard.string(forKey: PrefKey.curtainTitle)
+        return s == nil || s == legacyDefaultTitle ? defaultCurtainTitle : s!
+    }
+    /// 用户自己写过的提示；nil = 没写过，跟着「回来时」变（D6）
+    static var customCurtainSubtitle: String? {
+        let s = UserDefaults.standard.string(forKey: PrefKey.curtainSubtitle)
+        return s == legacyDefaultSubtitle ? nil : s
+    }
+    /// 幕布上那行提示的默认值，跟着这次怎么撤变（Camo §16.6）
+    static func defaultCurtainSubtitle(for mode: CurtainMode, unlock: AwayUnlock) -> String {
+        switch mode {
+        case .preview: return "按任意键关掉预览"
+        case .away: return unlock == .systemAuth ? "按任意键，验证后回来" : "按任意键，先锁屏"
+        // COPY-TODO: 系统锁屏上那层幕布没有给定的提示（按键露出的是系统锁屏），先不显示
+        case .lock: return ""
+        }
+    }
+    static func curtainSubtitle(for mode: CurtainMode, unlock: AwayUnlock) -> String {
+        customCurtainSubtitle ?? defaultCurtainSubtitle(for: mode, unlock: unlock)
+    }
 }
 
 /// 离开模式下真人碰了键鼠之后怎么撤遮罩

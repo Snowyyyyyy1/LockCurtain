@@ -20,6 +20,8 @@ final class UnlockPanel: NSPanel {
 
     private let passwordField = NSSecureTextField(frame: .zero)
     private let hintLabel = NSTextField(labelWithString: "")
+    /// 密码框下面的红字：错了几次、还能试几次（D7）
+    private let errorLabel = NSTextField(labelWithString: "")
     private var touchIDView: LAAuthenticationView?
 
     /// ctx = nil 表示触控 ID 不可用，只显示密码
@@ -65,8 +67,10 @@ final class UnlockPanel: NSPanel {
     /// 核对密码期间禁止再输入
     func setBusy(_ busy: Bool) { passwordField.isEnabled = !busy }
 
-    /// 密码不对：抖一下，再把焦点放回密码框
-    func rejected() {
+    /// 密码不对：抖一下、密码框下面一行红字说还能试几次，再把焦点放回密码框
+    func rejected(attemptsLeft: Int) {
+        errorLabel.stringValue = attemptsLeft <= 1 ? "密码不对，再错一次就先锁屏。" : "密码不对，还能试 \(attemptsLeft) 次。"
+        errorLabel.isHidden = false
         if let layer = contentView?.layer {
             let shake = CAKeyframeAnimation(keyPath: "position.x")
             shake.values = [0, -10, 10, -6, 6, 0]
@@ -160,7 +164,11 @@ final class UnlockPanel: NSPanel {
         hintLabel.stringValue = ctx == nil ? "输入密码" : "触控 ID 或输入密码"
         hint.addArrangedSubview(hintLabel)
 
-        for v in [avatar, name, box, hint] { stack.addArrangedSubview(v) }
+        errorLabel.font = .systemFont(ofSize: 11)
+        errorLabel.textColor = .systemRed
+        errorLabel.isHidden = true
+
+        for v in [avatar, name, box, errorLabel, hint] { stack.addArrangedSubview(v) }
         guard let content = contentView else { return }
         content.addSubview(stack)
         NSLayoutConstraint.activate([

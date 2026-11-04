@@ -4,9 +4,11 @@
 //  1. 遮罩窗口放进层级 400 的私有空间（SkyLightSpace），盖住一切；
 //     私有 API 失效时退回 level = CGShieldingWindowLevel()+1（2147483629）+ guardLevel。
 //     一旦它卡住，用户按什么都没用，只能 kill -9。所以必须有三条退出路径：
-//       a) 全局按键监听 → 任意键关闭（对应界面上那句 "Press any key ..."）
-//       b) 全局鼠标监听 → 任意点击关闭
-//       c) 看门狗 → a/b 不可用连续超过 N 秒就强制关（防止监听失效时锁死）
+//       a) 全局按键监听 → 任意键撤下（离开模式下先锁屏或先验证，见幕布上那行提示）
+//       b) 全局鼠标监听 → 任意点击撤下（同上）
+//       c) 看门狗 → a/b 不可用连续超过 N 秒就先锁屏再撤（防止监听失效时锁死）
+//     a/b 靠辅助功能权限（CGEvent tap）。没有这个权限时离开模式和预览都不盖（N2）：
+//     幕布盖住菜单栏、点击穿透到下层，人只能等看门狗的 120 秒。系统锁屏时盖的那层不受影响（输密码解锁就撤）。
 //  2. 绝不在主线程上同步等待截图结果。SCScreenshotManager 的完成回调
 //     需要主线程派发，主线程被阻塞就是永久死锁。全部 async/await。
 
@@ -45,6 +47,11 @@ final class OverlayController {
     }
     /// 菜单栏图标跟着切换「锁上 / 打开」
     var onModeChange: ((CurtainMode?) -> Void)?
+    /// 没有辅助功能权限、拒绝盖上时（N2）：AppDelegate 弹提示
+    var onMissingAccessibility: (() -> Void)?
+
+    /// 离开模式 / 预览要辅助功能：没有它，按键和点击撤不下来
+    static var canCover: Bool { AXIsProcessTrusted() }
     /// 刚显示的 1 秒内不认真人输入（点菜单那一下的余波、触控板惯性滚动），但照样吞掉
     private var armedAt = Date.distantPast
     private let power = PowerGuard()
@@ -187,8 +194,15 @@ final class OverlayController {
     func enterAway() { show(.away) }
 
     // MARK: - 显示
-    func show(_ mode: CurtainMode) {
-        guard windows.isEmpty else { return }
+    /// 返回 false = 没盖（缺辅助功能权限）。已经盖着时不改模式，算盖着
+    @discardableResult
+    func show(_ mode: CurtainMode) -> Bool {
+        guard windows.isEmpty else { return true }
+        if mode != .lock, !Self.canCover {
+            NSLog("refused to cover (%@): accessibility permission missing", "\(mode)")
+            onMissingAccessibility?()
+            return false
+        }
         self.mode = mode
         armedAt = Date().addingTimeInterval(1)
         if mode == .away { power.engage(); awayUnlock = Prefs.awayUnlock }
@@ -197,6 +211,7 @@ final class OverlayController {
         NSLog("overlay shown (%@)", "\(mode)")
         installExitMonitors()
         startWatchdog()
+        return true
     }
 
     /// 给当前每块屏建窗、上屏，壁纸异步补上；建完把当前布局记为基线
@@ -285,8 +300,11 @@ final class OverlayController {
     // MARK: - 控制接口（ControlServer 调用）
     func handleCommand(_ cmd: String) async -> [String: Any] {
         switch cmd {
-        case "away":    show(.away)        // 已在显示时不改模式，回复里的 mode 是实际状态
-        case "preview": show(.preview)
+        case "away", "preview":
+            // 已在显示时不改模式，回复里的 mode 是实际状态
+            guard show(cmd == "away" ? .away : .preview) else {
+                return ["ok": false, "running": true, "mode": "none", "error": CoverRefusal.message]
+            }
         case "hide":    await safeHide()
         case "status":  break
         default:        return ["ok": false, "error": "未知命令 \(cmd)，可用：away / preview / hide / status"]
@@ -478,7 +496,7 @@ final class OverlayController {
                     Task { await self.lockThenHide() }
                 } else {
                     panel?.setBusy(false)
-                    panel?.rejected()
+                    panel?.rejected(attemptsLeft: Self.unlockMaxFailures - self.unlockFailures)
                 }
             }
         }
@@ -575,7 +593,7 @@ final class OverlayController {
         return true
     }
 
-    /// 紧急退出（菜单/快捷键用）
+    /// 菜单「撤下幕布」：直接撤（D1：幕布盖着时它在幕布下面，真人点不到；脚本 / 看不见时才用得上）
     func forceHide() { hide() }
 
     /// 配对的手机撤下幕布（PhonePairing 已经验过签名、新鲜、边沿和距离）：
@@ -636,7 +654,7 @@ final class OverlayController {
         let art = Prefs.curtainArt
         // 图案中心：水平居中，竖直方向按 offsetY 往上挪（Auto Layout 的 y 朝下，屏幕坐标的 y 朝上）
         let artView = buildArt(art, center: CGPoint(x: screen.frame.midX, y: screen.frame.midY - art.offsetY))
-        let text = buildText()
+        let text = buildText(for: mode ?? .preview)
 
         for v in [wallpaperView, dim, artView, text] { content.addSubview(v) }
 
@@ -691,10 +709,11 @@ final class OverlayController {
 
     /// 图案下面的标题和提示，设置里可改，空的那行不显示。
     /// 宽度跟着文字走，超过 480pt 换行（原来定死 194pt，默认标题要 214pt，末尾的 "ac" 被裁掉）
-    private func buildText() -> NSView {
+    private func buildText(for mode: CurtainMode) -> NSView {
         let lines: [(String, NSFont)] = [
             (Prefs.curtainTitle, .systemFont(ofSize: 15, weight: .medium)),
-            (Prefs.curtainSubtitle, .systemFont(ofSize: 12, weight: .semibold)),
+            (Prefs.curtainSubtitle(for: mode, unlock: mode == .away ? awayUnlock : Prefs.awayUnlock),
+             .systemFont(ofSize: 12, weight: .semibold)),
         ]
         let labels = lines.compactMap { text, font -> NSTextField? in
             let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -717,8 +736,9 @@ final class OverlayController {
     }
 
     // MARK: - 壁纸采集（菜单用，异步）
-    func grabWallpaperNow() {
+    func grabWallpaperNow(_ done: @escaping () -> Void = {}) {
         Task { @MainActor in
+            defer { done() }
             await WallpaperCapture.invalidate()
             for (i, screen) in NSScreen.screens.enumerated() {
                 let ok = await WallpaperCapture.refreshOne(screen: screen)
@@ -726,4 +746,9 @@ final class OverlayController {
             }
         }
     }
+}
+
+/// N2：没辅助功能时拒绝盖上的那句话（Camo §16.8）
+enum CoverRefusal {
+    static let message = "先给 LockCurtain 辅助功能权限。要不然盖上以后，键盘鼠标都撤不下来。"
 }
