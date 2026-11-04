@@ -100,7 +100,7 @@ private struct PhoneRow: View {
                 let on = pairing.anyPhoneConnected
                 HStack(spacing: 5) {
                     Circle().fill(on ? Color(nsColor: .systemGreen) : Color(nsColor: .systemGray)).frame(width: 8, height: 8)
-                    Text(on ? "已连上" : "没连上").font(.system(size: 13)).foregroundStyle(.secondary)
+                    Text(on ? PhonePath.connectedText(pairing.connectedPath) : "没连上").font(.system(size: 13)).foregroundStyle(.secondary)
                 }
                 Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(.tertiary)
             }

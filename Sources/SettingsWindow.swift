@@ -540,17 +540,24 @@ private struct PermissionsPane: View {
 
 // MARK: - 手机（A1）
 
+extension NetworkAddressEntry: Identifiable {
+    var id: String { "\(interface)|\(host)" }
+}
+
 struct PhonePane: View {
     @ObservedObject var pairing: PhonePairing
     let openPairing: () -> Void
     @State private var confirming: PhonePairing.PhoneInfo?
+    /// 刚拷贝过的那一行地址（「已拷贝」亮 1.5 秒）
+    @State private var copiedAddress: String?
 
     private static let footer = "手机能做的：盖上幕布；你走近、手机解锁着时撤下幕布；开关保持唤醒。"
 
     var body: some View {
         VStack(spacing: 0) {
             if let banner { banner.padding([.horizontal, .top], 20) }
-            if pairing.phones.isEmpty { empty } else { list }
+            // 没有配对的手机时是空状态页；但走网络的开关还开着的话照样露出来，不然关不掉
+            if pairing.phones.isEmpty && !pairing.networkEnabled { empty } else { list }
         }
         .alert("撤销这台手机的配对？", isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
                presenting: confirming) { phone in
@@ -612,13 +619,16 @@ struct PhonePane: View {
 
     private var list: some View {
         Form {
-            Section {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    ForEach(pairing.phones) { phone in row(phone, now: context.date) }
+            if !pairing.phones.isEmpty {
+                Section {
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        ForEach(pairing.phones) { phone in row(phone, now: context.date) }
+                    }
+                } header: {
+                    Text("已配对的手机")
                 }
-            } header: {
-                Text("已配对的手机")
             }
+            networkSection
             Section {
                 Button("配对手机…", action: openPairing)
             } footer: {
@@ -626,6 +636,57 @@ struct PhonePane: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: 走网络
+
+    /// 开关 + 打开后每个本机地址一行（等宽 ip:port + 拷贝）。文案来自 Camo copy v15.5 §18.2
+    private var networkSection: some View {
+        Section {
+            Toggle("让手机走网络连这台电脑", isOn: Binding(get: { pairing.networkEnabled },
+                                                    set: { pairing.setNetworkEnabled($0) }))
+            if pairing.networkEnabled {
+                switch pairing.networkStatus {
+                case .failed:
+                    // COPY-TODO: 监听没起来的提示 Camo 还没给文案（方案里的占位）
+                    Text("网络没开起来").foregroundStyle(.secondary)
+                case .listening(let port):
+                    if pairing.networkAddresses.isEmpty {
+                        // COPY-TODO: 没有可用地址的提示 Camo 还没给文案（方案里的占位）
+                        Text("没有可用的网络地址").foregroundStyle(.secondary)
+                    }
+                    ForEach(pairing.networkAddresses) { entry in
+                        addressRow(entry, port: port)
+                    }
+                case .stopped, .starting:
+                    EmptyView()
+                }
+            }
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("打开以后，手机能盖上幕布、开关保持唤醒。撤下只能靠蓝牙，走网络时撤不了。")
+                    .foregroundStyle(.primary)
+                Text("手机和电脑不在同一个网络也能连，前提是两边都装了 Tailscale 这类工具。不动路由器，也不会自己开端口。")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func addressRow(_ entry: NetworkAddressEntry, port: UInt16) -> some View {
+        let line = entry.text(port: port)
+        return HStack(spacing: 8) {
+            // 网络类型前缀：Wi-Fi / Tailscale 是 Camo 定的；以太网 / 其他在 NetworkAddressEntry.Kind 里还是 COPY-TODO
+            Text(entry.label).foregroundStyle(.secondary)
+            Text(line).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                .lineLimit(1).truncationMode(.middle)
+            Spacer()
+            Button(copiedAddress == line ? "已拷贝" : "拷贝") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(line, forType: .string)
+                copiedAddress = line
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { if copiedAddress == line { copiedAddress = nil } }
+            }
+        }
     }
 
     private func row(_ phone: PhonePairing.PhoneInfo, now: Date) -> some View {
@@ -646,7 +707,7 @@ struct PhonePane: View {
     }
 
     private func status(_ phone: PhonePairing.PhoneInfo, now: Date) -> String {
-        if phone.connected { return "已连上" }
+        if phone.connected { return PhonePath.connectedText(phone.path) }
         guard let seen = phone.lastSeen else { return "没连上" }
         return "没连上 · 上次连上：\(Self.ago(seen, now: now))"
     }

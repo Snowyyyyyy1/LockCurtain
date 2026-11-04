@@ -1,7 +1,9 @@
 // ControlServer.swift —— 本机控制接口：Unix 域套接字 + 命令行
 //
 // 套接字：~/Library/Application Support/LockCurtain/control.sock，权限 0600，
-// 并用 getpeereid 校验对方 uid，只接受当前用户的连接。App 不监听任何网络端口；
+// 并用 getpeereid 校验对方 uid，只接受当前用户的连接。这个控制接口不监听任何网络端口。
+// App 另有一个手机用的 TCP 监听（PhoneNetwork.swift），默认关，用户在「设置 › 手机」里打开才会起；
+// 它和这个套接字没有关系：只认配对过的手机的签名命令，而且只放行盖上幕布、保持唤醒、改名和读状态。
 // 远程控制（SSH、快捷指令「通过 SSH 运行脚本」）都在外面调命令行。
 //
 // 协议：一行命令进，一行 JSON 出。

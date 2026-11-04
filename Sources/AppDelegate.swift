@@ -113,6 +113,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pairing.onLift = { [overlay] in
                 Task { @MainActor in overlay.liftFromPhone() }
             }
+            // 走网络默认关；用户在「设置 › 手机」里打开过才起监听
+            pairing.setNetworkEnabled(Prefs.phoneOverNetwork)
             control.start()
             ruleEngine.start()
             // KVO 也能收到其他进程（defaults write）的修改，didChangeNotification 只管本进程

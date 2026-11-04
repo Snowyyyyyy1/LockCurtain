@@ -25,6 +25,8 @@ enum PrefKey {
     /// 遮罩文字：图案下面的标题和提示，空字符串 = 不显示这一行
     static let curtainTitle = "curtainTitle"
     static let curtainSubtitle = "curtainSubtitle"
+    /// 让手机走网络连这台电脑（PhonePairing 的 TCP 监听）。默认关
+    static let phoneOverNetwork = PhonePairing.networkDefaultsKey
 }
 
 enum Prefs {
@@ -45,6 +47,8 @@ enum Prefs {
     static var awayUnlock: AwayUnlock {
         UserDefaults.standard.string(forKey: PrefKey.awayUnlock).flatMap(AwayUnlock.init(rawValue:)) ?? .lockScreen
     }
+    /// 手机能不能走网络连这台电脑（默认关，用户在「设置 › 手机」里打开）。起 / 停监听走 PhonePairing.setNetworkEnabled
+    static var phoneOverNetwork: Bool { UserDefaults.standard.bool(forKey: PrefKey.phoneOverNetwork) }
     static let defaultCurtainTitle = "LockCurtain 正在使用这台电脑"
     /// 老版本的英文默认值：存着的还是它，就当没改过（跟着新的默认走）
     static let legacyDefaultTitle = "LockCurtain is Using Your Mac"

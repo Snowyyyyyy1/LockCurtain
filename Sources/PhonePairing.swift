@@ -41,6 +41,12 @@
 //   * unpair：先回签名的 Ack 0，再删钥匙，再断开
 //   * 每台手机记 name / pairedAt / lastSeen（UserDefaults，不是秘密），钥匙在钥匙串
 //
+// 走网络（可选，默认关，「设置 › 手机」里打开）：PhonePairing 另外拥有一个 NetworkGateway（PhoneNetwork.swift，TCP 监听），
+// 建在同一个 PairingAuthority 上（同一份钥匙、同一份计数）。网络上只放行 away / awake:* / name: / 读状态，
+// 撤下、解除配对、预览、设置、配对一律只走蓝牙。网关的命令回调接到和蓝牙命令一样的处理函数：away 走 canCover、
+// awake:* 走 onKeepAwake、name: 走同一个存名字的函数；幕布 / 保持唤醒状态变了，蓝牙和网络两边都报。
+// 一台手机两条链路都连着时，界面上算蓝牙（PhonePath.resolve）。
+//
 // 日志：~/Library/Logs/LockCurtain/ble.log（调试版 LockCurtain Debug/），每步一行；反复出现的（健康检查 / 退避 / RSSI / 问询）只在状态变了时写、或每分钟最多一行。
 // 满 2 MB 轮转成 .log.1（只留一个）。不写码、不写钥匙。
 // CBCentralManager 的回调都投递到 main 队列，所以这里的 @Published 永远在主线程上改。
@@ -49,6 +55,32 @@ import AppKit
 import Combine
 import CoreBluetooth
 import Foundation
+
+/// 手机现在走哪条链路连着。两条都连着时算蓝牙
+enum PhonePath: Equatable {
+    case bluetooth
+    case network
+
+    static func resolve(bluetooth: Bool, network: Bool) -> PhonePath? {
+        bluetooth ? .bluetooth : network ? .network : nil
+    }
+
+    /// 几台手机各自的链路合成一个：都一样就是它；不一样（或没有）就是 nil，界面上只写「已连上」
+    static func common(_ paths: [PhonePath]) -> PhonePath? {
+        guard let first = paths.first, paths.allSatisfy({ $0 == first }) else { return nil }
+        return first
+    }
+
+    /// 「已连上」后面带链路。path 为 nil 时只写「已连上」
+    // COPY-TODO confirm with Camo: 「已连上 · 网络」「已连上 · 蓝牙」这个写法 Mac 端还没定稿（手机端是「已连接 · 蓝牙/网络」）
+    static func connectedText(_ path: PhonePath?) -> String {
+        switch path {
+        case .bluetooth?: return "已连上 · 蓝牙"
+        case .network?: return "已连上 · 网络"
+        case nil: return "已连上"
+        }
+    }
+}
 
 final class PhonePairing: NSObject, ObservableObject {
     enum Phase: Equatable {
@@ -73,6 +105,8 @@ final class PhonePairing: NSObject, ObservableObject {
         var pairedAt: Date?
         var lastSeen: Date?
         var connected: Bool
+        /// 连着时走哪条链路（蓝牙和网络都连着算蓝牙）；没连着是 nil
+        var path: PhonePath? = nil
     }
 
     static let serviceUUID = CBUUID(string: "E9A1B2C3-D4E5-4F60-8A7B-1C2D3E4F5A6B")
@@ -117,12 +151,25 @@ final class PhonePairing: NSObject, ObservableObject {
     /// 手机名最长字节数（protocol v3）
     private static let maxNameBytes = 60
 
+    /// 「走网络」开关在 UserDefaults 里的 key（Prefs.phoneOverNetwork 用同一个）；默认关
+    static let networkDefaultsKey = "phoneOverNetwork"
+
+    @Published private(set) var networkEnabled = false
+    @Published private(set) var networkStatus: NetworkGateway.Status = .stopped
+    /// 本机的网络地址（开着才有）；加上 networkPort 就是手机里要填的 ip:port
+    @Published private(set) var networkAddresses: [NetworkAddressEntry] = []
+    @Published private(set) var networkPort: UInt16?
+    /// 走网络连着、认过身份的手机
+    @Published private(set) var networkPeers: [NetworkGateway.Peer] = []
+
     /// 手机发来的命令（away / hide …），由 AppDelegate 接到原来的命令通道上
     var onCommand: ((String) async -> Void)?
     /// 手机撤下幕布（条件都满足了）：撤 LockCurtain 的遮罩，和离开模式里「验证」通过一样，不碰系统锁屏
     var onLift: (() -> Void)?
 
-    private lazy var authority = PairingAuthority(store: KeychainPairingStore(), log: { Self.log($0) })
+    private let authority: PairingAuthority
+    private let defaults: UserDefaults
+    private let gateway: NetworkGateway
     private var central: CBCentralManager?
     private var wantsBluetooth = false
     private var windowOpen = false
@@ -182,16 +229,24 @@ final class PhonePairing: NSObject, ObservableObject {
     /// 暂时不理的外设（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
     private var ignored = TimedIgnoreList<UUID>()
 
-    override init() {
+    /// store / defaults / networkPort / networkLoopbackOnly 只有自测会换（内存钥匙、独立的 UserDefaults、本机随机端口）
+    init(store: PairingRecordStore = KeychainPairingStore(), defaults: UserDefaults = .standard,
+         networkPort: NetworkGateway.PortChoice = .persisted, networkLoopbackOnly: Bool = false) {
+        let authority = PairingAuthority(store: store, log: { Self.log($0) })
+        self.authority = authority
+        self.defaults = defaults
+        self.gateway = NetworkGateway(authority: authority, port: networkPort, loopbackOnly: networkLoopbackOnly,
+                                      defaults: defaults)
         super.init()
-        UserDefaults.standard.removeObject(forKey: Self.legacyPairedKey)
+        defaults.removeObject(forKey: Self.legacyPairedKey)
+        wireGateway()
         refreshPhones()
     }
 
     // MARK: - 每台手机的记录
 
     private func metadata() -> [String: [String: Any]] {
-        UserDefaults.standard.dictionary(forKey: Self.phoneInfoKey) as? [String: [String: Any]] ?? [:]
+        defaults.dictionary(forKey: Self.phoneInfoKey) as? [String: [String: Any]] ?? [:]
     }
 
     private func updateMetadata(_ phoneID: UUID, _ change: (inout [String: Any]) -> Void) {
@@ -199,25 +254,27 @@ final class PhonePairing: NSObject, ObservableObject {
         var entry = all[phoneID.uuidString] ?? [:]
         change(&entry)
         all[phoneID.uuidString] = entry
-        UserDefaults.standard.set(all, forKey: Self.phoneInfoKey)
+        defaults.set(all, forKey: Self.phoneInfoKey)
         refreshPhones()
     }
 
     private func forgetMetadata(_ phoneID: UUID) {
         var all = metadata()
         all[phoneID.uuidString] = nil
-        UserDefaults.standard.set(all, forKey: Self.phoneInfoKey)
+        defaults.set(all, forKey: Self.phoneInfoKey)
     }
 
     /// 钥匙串里的手机 + 存的名字 / 时间 + 现在连没连着 → phones
     func refreshPhones() {
         let meta = metadata()
-        let connected = Set(peers.values.compactMap(\.phoneID))
+        let bluetooth = Set(peers.values.compactMap(\.phoneID))
+        let network = Set(networkPeers.map(\.phoneID))
         let list = authority.pairedPhoneIDs.map { id -> PhoneInfo in
             let m = meta[id.uuidString] ?? [:]
             let name = (m["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "iPhone"
+            let path = PhonePath.resolve(bluetooth: bluetooth.contains(id), network: network.contains(id))
             return PhoneInfo(id: id, name: name, pairedAt: m["pairedAt"] as? Date, lastSeen: m["lastSeen"] as? Date,
-                             connected: connected.contains(id))
+                             connected: path != nil, path: path)
         }.sorted { ($0.pairedAt ?? .distantPast, $0.id.uuidString) < ($1.pairedAt ?? .distantPast, $1.id.uuidString) }
         if list != phones { phones = list }
     }
@@ -228,6 +285,9 @@ final class PhonePairing: NSObject, ObservableObject {
 
     /// 连上的手机里有没有认过身份的
     var anyPhoneConnected: Bool { phones.contains { $0.connected } }
+
+    /// 连着的手机走的链路：都是蓝牙 / 都是网络就是它，混着（或没连着）是 nil
+    var connectedPath: PhonePath? { PhonePath.common(phones.compactMap(\.path)) }
 
     var isPaired: Bool { authority.isPaired }
 
@@ -283,6 +343,8 @@ final class PhonePairing: NSObject, ObservableObject {
     /// 别的手机不受影响
     func unpair(_ phoneID: UUID) {
         let notice = authority.revoke(phoneID)
+        // 走网络连着的也收到签名的撤销通知，发完断开
+        gateway.notifyRevoked(phoneID, notice: notice)
         for peer in peers.values where peer.phoneID == phoneID {
             peer.phoneID = nil
             if let notice {
@@ -306,10 +368,10 @@ final class PhonePairing: NSObject, ObservableObject {
     private func forget(_ phoneID: UUID) {
         gates[phoneID] = nil
         if !isPaired {
-            UserDefaults.standard.removeObject(forKey: Self.knownPeripheralsKey)
+            defaults.removeObject(forKey: Self.knownPeripheralsKey)
             identifierBackoff.removeAll()
         } else {
-            UserDefaults.standard.set(KnownPeripherals.encode(KnownPeripherals.forget(knownEntries(), phoneID: phoneID)),
+            defaults.set(KnownPeripherals.encode(KnownPeripherals.forget(knownEntries(), phoneID: phoneID)),
                                       forKey: Self.knownPeripheralsKey)
         }
         forgetMetadata(phoneID)
@@ -327,6 +389,7 @@ final class PhonePairing: NSObject, ObservableObject {
             if closed { gates[id]?.covered(at: now) } else { gates[id]?.uncovered() }
         }
         Self.log("lift: curtain \(closed ? "covered" : "uncovered")")
+        gateway.reportCurtain(closed: closed)
         for peer in peers.values {
             if let id = peer.phoneID, let message = authority.stateMessage(closed: closed, for: id) {
                 send(message, to: peer)
@@ -336,6 +399,12 @@ final class PhonePairing: NSObject, ObservableObject {
 
     /// 保持唤醒变了（不管谁改的）：告诉已连上、认过身份的手机
     func reportKeepAwake() {
+        reportKeepAwakeOverBluetooth()
+        gateway.reportKeepAwake()
+    }
+
+    /// 只报给蓝牙上的手机（网络手机发的 awake: 命令，网关自己已经报给网络手机了）
+    private func reportKeepAwakeOverBluetooth() {
         for peer in peers.values { sendKeepAwake(to: peer) }
     }
 
@@ -483,7 +552,7 @@ final class PhonePairing: NSObject, ObservableObject {
     }
 
     private func knownEntries() -> [KnownPeripherals.Entry] {
-        KnownPeripherals.parse(UserDefaults.standard.stringArray(forKey: Self.knownPeripheralsKey) ?? [])
+        KnownPeripherals.parse(defaults.stringArray(forKey: Self.knownPeripheralsKey) ?? [])
     }
 
     private func remember(_ peripheral: CBPeripheral, as phoneID: UUID) {
@@ -494,7 +563,7 @@ final class PhonePairing: NSObject, ObservableObject {
         if !dropped.isEmpty {
             Self.log("known peripherals: forgetting older identifier(s) \(dropped.map(\.uuidString).joined(separator: ", ")) (keep last \(KnownPeripherals.keepPerPhone) per phone)")
         }
-        UserDefaults.standard.set(KnownPeripherals.encode(new), forKey: Self.knownPeripheralsKey)
+        defaults.set(KnownPeripherals.encode(new), forKey: Self.knownPeripheralsKey)
     }
 
     // MARK: - 退避 / 健康检查
@@ -533,7 +602,7 @@ final class PhonePairing: NSObject, ObservableObject {
         let now = Date()
         // 连着的手机：至少每分钟记一次「上次连上」
         let meta = metadata()
-        for id in Set(peers.values.compactMap(\.phoneID)) {
+        for id in Set(peers.values.compactMap(\.phoneID)).union(networkPeers.map(\.phoneID)) {
             let last = meta[id.uuidString]?["lastSeen"] as? Date ?? .distantPast
             if now.timeIntervalSince(last) >= 55 { touchLastSeen(id) }
         }
@@ -573,6 +642,11 @@ final class PhonePairing: NSObject, ObservableObject {
                 guard let self else { return }
                 Self.log("system \(note.name == NSWorkspace.didWakeNotification ? "wake" : "screens wake"): resuming")
                 self.resume(fresh: true)
+                // 走网络的监听睡眠后没起来：再起一次；网卡可能变了，地址重新列
+                if self.networkEnabled {
+                    if case .failed = self.gateway.status { self.gateway.stop(); self.gateway.start() }
+                    self.gateway.refreshAddresses()
+                }
             })
         }
     }
@@ -674,6 +748,86 @@ final class PhonePairing: NSObject, ObservableObject {
             }
         default:
             Self.log("message of unknown kind (\(message.count) bytes) from \(who) ignored")
+        }
+    }
+
+    // MARK: - 走网络
+
+    /// 打开 / 关掉「让手机走网络连这台电脑」：存进 UserDefaults，起 / 停监听。关掉会断开所有网络手机
+    func setNetworkEnabled(_ enabled: Bool) {
+        defaults.set(enabled, forKey: Self.networkDefaultsKey)
+        guard enabled != networkEnabled else {
+            // 已经开着但监听失败了（比如睡眠醒来以后）：再起一次
+            if enabled, case .failed = gateway.status { gateway.stop(); gateway.start() }
+            return
+        }
+        networkEnabled = enabled
+        if enabled {
+            Self.log("phone network: switched on")
+            startHealthTimer()
+            observeWake()
+            gateway.start()
+            networkStatus = .starting
+        } else {
+            Self.log("phone network: switched off")
+            gateway.stop()
+            networkStatus = .stopped
+            networkPort = nil
+            networkAddresses = []
+            networkPeers = []
+            refreshPhones()
+        }
+    }
+
+    /// 网关的回调（都在主队列）：状态 / 地址 / 连着的手机；命令接到和蓝牙命令同一批处理函数
+    private func wireGateway() {
+        gateway.log = { Self.log("net: " + $0) }
+        gateway.maxNameBytes = Self.maxNameBytes
+        gateway.canCover = { [weak self] in self?.canCover() ?? false }
+        gateway.curtainClosed = { [weak self] in self?.curtainClosed ?? false }
+        gateway.keepAwakeState = { [weak self] in self?.keepAwakeState() ?? (.off, 0, "") }
+        gateway.onCommand = { [weak self] command, phoneID in self?.handleNetworkCommand(command, phoneID: phoneID) }
+        gateway.onStatusChanged = { [weak self] in
+            guard let self, self.networkEnabled else { return }
+            self.networkStatus = self.gateway.status
+            self.networkPort = self.gateway.port
+        }
+        gateway.onAddressesChanged = { [weak self] in
+            guard let self, self.networkEnabled else { return }
+            self.networkAddresses = self.gateway.addresses
+        }
+        gateway.onPeersChanged = { [weak self] in
+            guard let self else { return }
+            let before = Set(self.networkPeers.map(\.phoneID))
+            self.networkPeers = self.networkEnabled ? self.gateway.peers : []
+            // 走网络的手机断了：和蓝牙一样记一次「上次连上」
+            for id in before.subtracting(self.networkPeers.map(\.phoneID)) where self.authority.pairedPhoneIDs.contains(id) {
+                self.touchLastSeen(id)
+            }
+            self.refreshPhones()
+        }
+        gateway.onPeerIdentified = { [weak self] id in self?.touchLastSeen(id) }
+    }
+
+    /// 网络上放行的命令（网关已经验过签名、查过白名单、先回过收据）：away / awake:* / name:。
+    /// 和蓝牙一样的处理；这里再查一次 NetworkPolicy，万一网关放过别的也不执行
+    private func handleNetworkCommand(_ command: String, phoneID: UUID) {
+        guard NetworkPolicy.allows(command: command) else {
+            Self.log("net: command from \(phoneID.uuidString) not allowed over network; ignored")
+            return
+        }
+        if command.hasPrefix("name:") {
+            applyName(command, phoneID: phoneID)
+            return
+        }
+        let lower = command.lowercased()
+        if lower.hasPrefix("awake:") {
+            // 网关自己会把新的保持唤醒状态推给网络手机；这里只补上蓝牙那边
+            if applyKeepAwake(lower, phoneID: phoneID) { reportKeepAwakeOverBluetooth() }
+            return
+        }
+        if lower == "away" {
+            Task { @MainActor in await self.onCommand?(lower) }
         }
     }
 
@@ -782,20 +936,13 @@ final class PhonePairing: NSObject, ObservableObject {
     private func handle(_ command: String, phoneID: UUID, peer: Peer) {
         // 手机名区分大小写，先于下面的 lowercased 处理
         if command.hasPrefix("name:") {
-            let trimmed = String(command.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = String(decoding: PairingCrypto.utf8Prefix(trimmed, maxBytes: Self.maxNameBytes), as: UTF8.self)
-            Self.log("phone \(phoneID.uuidString) name: \(name)")
-            updateMetadata(phoneID) { $0["name"] = name }
+            applyName(command, phoneID: phoneID)
             return
         }
         let lower = command.lowercased()
         if lower.hasPrefix("awake:") {
-            // 收据已经先发了；改保持唤醒（改的时候不报），再把结果报给所有连着的手机
-            handlingAwake = true
-            let known = onKeepAwake?(lower) ?? false
-            handlingAwake = false
-            Self.log("phone \(phoneID.uuidString) keep-awake command \(lower)\(known ? "" : " (unknown, ignored)")")
-            if known { reportKeepAwake() }
+            // 收据已经先发了；改保持唤醒（改的时候不报），再把结果报给所有连着的手机（蓝牙 + 网络）
+            if applyKeepAwake(lower, phoneID: phoneID) { reportKeepAwake() }
             return
         }
         switch lower {
@@ -807,7 +954,8 @@ final class PhonePairing: NSObject, ObservableObject {
         case "unpair":
             // 顺序：签名的 Ack 0 已经在 receive 里先排进写队列，这里才删钥匙，写完再断开
             Self.log("phone \(phoneID.uuidString) asked to unpair")
-            _ = authority.revoke(phoneID)
+            let notice = authority.revoke(phoneID)
+            gateway.notifyRevoked(phoneID, notice: notice)
             peer.phoneID = nil
             forget(phoneID)
             peer.disconnectAfterWrites = true
@@ -818,6 +966,23 @@ final class PhonePairing: NSObject, ObservableObject {
         default:
             break
         }
+    }
+
+    /// name:<手机名>（蓝牙和网络共用）：存起来给「手机」页显示。手机名区分大小写
+    private func applyName(_ command: String, phoneID: UUID) {
+        let trimmed = String(command.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = String(decoding: PairingCrypto.utf8Prefix(trimmed, maxBytes: Self.maxNameBytes), as: UTF8.self)
+        Self.log("phone \(phoneID.uuidString) name: \(name)")
+        updateMetadata(phoneID) { $0["name"] = name }
+    }
+
+    /// awake:*（蓝牙和网络共用）：改保持唤醒，改的时候 AppDelegate 的 onChange 不报（handlingAwake）。返回认不认识
+    private func applyKeepAwake(_ lower: String, phoneID: UUID) -> Bool {
+        handlingAwake = true
+        let known = onKeepAwake?(lower) ?? false
+        handlingAwake = false
+        Self.log("phone \(phoneID.uuidString) keep-awake command \(lower)\(known ? "" : " (unknown, ignored)")")
+        return known
     }
 
     /// 一条连接第一次认出是哪台手机：这个标识的退避 / 拉黑记录都清掉；
@@ -865,7 +1030,11 @@ final class PhonePairing: NSObject, ObservableObject {
     }
 
     /// 蓝牙这条链路上的每个事件都写一行，卡住时不用猜是物理连接、GATT，还是消息没过来
+    /// 自测把日志接走，不写真的 ble.log
+    static var logOverride: ((String) -> Void)?
+
     static func log(_ text: String) {
+        if let logOverride { logOverride(text); return }
         BLELogFile.shared.write(text)
         NSLog("LockCurtain BLE: %@", text)
     }
