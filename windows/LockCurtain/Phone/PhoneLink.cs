@@ -65,6 +65,9 @@ internal enum PhonePhase
     Revoked,        // 刚撤销过配对
 }
 
+/// 设置 › 手机 那一页的一行
+internal sealed record PhoneInfo(Guid ID, string Name, DateTime? PairedAt, DateTime? LastSeen, bool Connected);
+
 internal sealed class PhoneLink
 {
     public static readonly Guid ServiceUuid = Guid.Parse("E9A1B2C3-D4E5-4F60-8A7B-1C2D3E4F5A6B");
@@ -100,10 +103,23 @@ internal sealed class PhoneLink
     public Func<string, Task>? OnCommand;
     /// 手机撤下幕布（条件都满足了）：只撤 LockCurtain 的遮罩
     public Action? OnLift;
+    /// 手机发来的 awake:*（签名、计数都验过；不要面容验证）：开 / 改 / 停保持唤醒
+    public Action<AwakeRequest>? OnAwake;
+    /// 电脑上保持唤醒的现状，发 KeepAwakeState 时读
+    public Func<KeepAwakeWireState>? KeepAwakeSnapshot;
+    /// 配上的手机、它们连没连着、蓝牙开没开 变了（UI 线程上发）：设置 › 手机、托盘面板、开始指南跟着刷新
+    public event Action? PhonesChanged;
 
     readonly SynchronizationContext ui;
     readonly PairingAuthority authority;
     readonly PhoneDeviceMemory memory = new();
+    readonly PhoneRoster roster = new();
+    /// 每台手机上次写 lastSeen 的时刻：连着时每分钟最多写一次
+    readonly Dictionary<Guid, DateTime> lastSeenWritten = new();
+    static readonly TimeSpan SeenEvery = TimeSpan.FromMinutes(1);
+    /// 发过几轮 KeepAwakeState（awake:* 之后判断要不要单独再回一条）
+    int keepAwakeReports;
+    bool unsupported;
 
     bool wantsBluetooth, initialized, initializing, windowOpen, suspended;
     /// 只在没配过手机（配对窗口模式）时会变 true
@@ -204,6 +220,7 @@ internal sealed class PhoneLink
     {
         this.ui = ui;
         authority = new PairingAuthority(store ?? new DpapiPairingStore(), PhoneLog.Write);
+        roster.Prune(authority.PairedPhoneIDs.ToList());
         tick.Tick += (_, _) => Tick();
         health.Tick += (_, _) => HealthCheck();
         resumeTimer.Tick += (_, _) => OnResumeTimer();
@@ -219,6 +236,43 @@ internal sealed class PhoneLink
     }
 
     public bool IsPaired => authority.IsPaired;
+
+    /// 蓝牙开着没有：null = 还不知道（没初始化）
+    public bool? BluetoothOn => radioOn;
+    /// 这台电脑没有能用的低功耗蓝牙
+    public bool BluetoothUnsupported => unsupported;
+
+    /// 配上的手机（钥匙在存储里的），按配上的先后
+    public IReadOnlyList<PhoneInfo> Phones =>
+        authority.PairedPhoneIDs
+            .Select(id =>
+            {
+                var e = roster.Get(id);
+                return new PhoneInfo(id, e?.Name ?? PhoneName.Default, e?.PairedAt, e?.LastSeen, IsConnected(id));
+            })
+            .OrderBy(p => p.PairedAt ?? DateTime.MinValue).ThenBy(p => p.ID)
+            .ToList();
+
+    bool IsConnected(Guid id) => peers.Values.Any(p => p.PhoneID == id && p.Subscribed && !p.Closed);
+
+    public bool AnyConnected => peers.Values.Any(p => p.PhoneID != null && p.Subscribed && !p.Closed && authority.Store.Load(p.PhoneID.Value) != null);
+
+    void NotifyPhones() => PhonesChanged?.Invoke();
+
+    /// 设置 › 手机 打开时：没配过手机也看一眼蓝牙（开着没有、能不能用），不扫描也不连
+    public void Probe()
+    {
+        if (!initialized) _ = InitializeAsync();
+    }
+
+    /// 这台手机连着：记一下「上次连上」（force：刚认出 / 刚断开时一定写，平时每分钟最多一次）
+    void NoteSeen(Guid id, DateTime now, bool force)
+    {
+        if (authority.Store.Load(id) == null) return;
+        if (!force && lastSeenWritten.TryGetValue(id, out var last) && now - last < SeenEvery) return;
+        lastSeenWritten[id] = now;
+        roster.Seen(id, now);
+    }
 
     static string FormatAddress(ulong a) =>
         string.Join(":", Enumerable.Range(0, 6).Select(i => ((a >> (8 * (5 - i))) & 0xFF).ToString("X2")));
@@ -252,7 +306,9 @@ internal sealed class PhoneLink
             if (problem != null)
             {
                 PhoneLog.Write(problem);
+                unsupported = true;
                 SetPhase(PhonePhase.Unsupported);
+                NotifyPhones();
                 return;
             }
             radio = r;
@@ -269,12 +325,15 @@ internal sealed class PhoneLink
             initialized = true;
             health.Start();
             if (radioOn == false && (windowOpen || Phase == PhonePhase.Idle)) SetPhase(PhonePhase.BluetoothOff);
+            NotifyPhones();
             Resume();
         }
         catch (Exception e)
         {
             PhoneLog.Write($"central: init failed: {e.GetType().Name}: {e.Message}");
+            unsupported = true;
             SetPhase(PhonePhase.Unsupported);
+            NotifyPhones();
         }
         finally { initializing = false; }
     }
@@ -370,6 +429,7 @@ internal sealed class PhoneLink
         }
         memory.Forget();
         gates.Clear();
+        roster.Prune(authority.PairedPhoneIDs.ToList());
         Code = "";
         SetPhase(PhonePhase.Revoked);
         if (!windowOpen)
@@ -378,6 +438,59 @@ internal sealed class PhoneLink
             foreach (var p in peers.Values.ToList())
                 if (!p.DisconnectAfterWrites) Drop(p, "unpaired");
         }
+    }
+
+    /// 撤销一台手机（设置 › 手机 / 托盘菜单「撤销配对…」）：连着的话先收到签名的撤销通知（它会删掉自己的钥匙），
+    /// 再删电脑的钥匙；别的手机不动（protocol v3 §4，不是 UnpairAll）
+    public void Unpair(Guid phoneID)
+    {
+        PhoneLog.Write($"unpair requested on this computer for {Who(phoneID)}");
+        var notice = authority.Revoke(phoneID);
+        foreach (var peer in peers.Values)
+        {
+            if (peer.PhoneID != phoneID) continue;
+            peer.PhoneID = null;
+            if (notice != null)
+            {
+                PhoneLog.Write($"revoke: notifying connected phone {Who(phoneID)}");
+                Send(notice, peer);
+                peer.DisconnectAfterWrites = true;
+            }
+            else Drop(peer, "unpaired");
+        }
+        ForgetPhone(phoneID);
+        if (!IsPaired && !windowOpen)
+        {
+            StopWatcher();
+            foreach (var p in peers.Values.ToList())
+                if (!p.DisconnectAfterWrites) Drop(p, "unpaired");
+        }
+        NotifyPhones();
+    }
+
+    /// 钥匙删掉以后：门、名字、上次连上都扔掉；最后一台也没了就忘掉记得的蓝牙地址
+    void ForgetPhone(Guid phoneID)
+    {
+        gates.Remove(phoneID);
+        lastSeenWritten.Remove(phoneID);
+        roster.Forget(phoneID);
+        if (!IsPaired) memory.Forget();
+    }
+
+    /// 保持唤醒变了（面板、设置、菜单、规则、到点、手机，哪儿来的都一样）：告诉每台认过身份的手机
+    public void ReportKeepAwake()
+    {
+        keepAwakeReports++;
+        foreach (var peer in peers.Values.ToList())
+            if (peer.PhoneID is { } id && peer.Subscribed) SendKeepAwake(peer, id);
+    }
+
+    void SendKeepAwake(Peer peer, Guid id)
+    {
+        var state = KeepAwakeSnapshot?.Invoke() ?? KeepAwakeWireState.Off;
+        if (authority.KeepAwakeStateMessage(state, id) is not { } m) return;
+        PhoneLog.Write($"keep-awake state to {Who(id)}: mode {(byte)state.Mode} ends {state.EndsAt}");
+        Send(m, peer);
     }
 
     /// 幕布状态变了：告诉已连上的手机（签名的）
@@ -899,9 +1012,12 @@ internal sealed class PhoneLink
             RefreshPeerAddresses();
         }
         if (peer.PhoneID is { } id && gates.TryGetValue(id, out var g)) g.ResetRSSI();
+        var wasIdentified = peer.PhoneID != null && peer.Subscribed;
+        if (wasIdentified) NoteSeen(peer.PhoneID!.Value, DateTime.UtcNow, force: true);
         peer.WriteQueue.Clear();
         peer.EarlyChunks.Clear();
         peer.Subscribed = false;
+        if (wasIdentified) ui.Post(_ => NotifyPhones(), null);
         // 取消正在等的 WinRT 调用：CancelAsync 在线程池上跑回调（回调里是 IAsyncInfo.Cancel，跨进程）
         _ = peer.Cts.CancelAsync();
         if (peer.Link is { } link)
@@ -944,6 +1060,7 @@ internal sealed class PhoneLink
         var on = state == RadioState.On;
         if (radioOn == on) return;
         radioOn = on;
+        NotifyPhones();
         if (!on)
         {
             // 蓝牙关掉时不一定逐个回调断开：清掉旧连接，否则重新开蓝牙后以为手机还连着，不再扫也不再连
@@ -1071,6 +1188,7 @@ internal sealed class PhoneLink
         {
             SampleRssi(peer, now);
             Poll(peer);
+            if (peer.PhoneID is { } id) NoteSeen(id, now, force: false);
         }
     }
 
@@ -1200,6 +1318,7 @@ internal sealed class PhoneLink
         }
     }
 
+
     /// 线程池上：写一块，要回执
     static async Task<(string? Error, bool TimedOut)> WriteWork(GattCharacteristic inbox, byte[] chunk, CancellationToken ct)
     {
@@ -1256,6 +1375,7 @@ internal sealed class PhoneLink
                     break;
                 }
                 var phoneID = c.PhoneID!.Value;
+                var newlyIdentified = peer.PhoneID != phoneID;
                 peer.PhoneID = phoneID;
                 ignored.Forgive(peer.Address);
                 memory.Remember(peer.Address);
@@ -1263,10 +1383,14 @@ internal sealed class PhoneLink
                 if (c.ConfirmedPairing)
                 {
                     codeExpiry.Stop();
+                    roster.Paired(phoneID, DateTime.UtcNow);
+                    lastSeenWritten[phoneID] = DateTime.UtcNow;
                     SetPhase(PhonePhase.Paired);
                     Log.Write($"LockCurtain paired with a phone ({Who(phoneID)})");
                 }
+                else if (newlyIdentified) NoteSeen(phoneID, DateTime.UtcNow, force: true);
                 Handle(c.Command, phoneID, peer);
+                if (newlyIdentified || c.ConfirmedPairing) NotifyPhones();
                 break;
             default:
                 PhoneLog.Write($"message of unknown kind ({message.Length} bytes) from {peer.Name} ignored");
@@ -1276,22 +1400,47 @@ internal sealed class PhoneLink
 
     void Handle(string command, Guid phoneID, Peer peer)
     {
+        // 名字照原样存（不改大小写）
+        if (command.StartsWith(PhoneName.Prefix, StringComparison.Ordinal))
+        {
+            if (PhoneName.Clean(command[PhoneName.Prefix.Length..]) is { } name)
+            {
+                roster.SetName(phoneID, name);
+                PhoneLog.Write($"phone {Who(phoneID)} name updated ({System.Text.Encoding.UTF8.GetByteCount(name)} bytes)");
+                NotifyPhones();
+            }
+            return;
+        }
         switch (command.ToLowerInvariant())
         {
             case "ping":
-                // 握手确认 / 重连时表明身份：把现在的幕布状态告诉它
+                // 握手确认 / 重连时表明身份：把现在的幕布状态告诉它，紧跟着保持唤醒的现状（protocol v3 §3）
                 if (authority.StateMessage(curtainClosed, phoneID) is { } state) Send(state, peer);
+                SendKeepAwake(peer, phoneID);
                 break;
             case "unpair":
+                // 收据（签名的 Ack 0）已经在 Receive 里先排进写队列；再删钥匙，写完断开
                 PhoneLog.Write($"phone {Who(phoneID)} asked to unpair");
                 authority.Revoke(phoneID);
-                gates.Remove(phoneID);
                 peer.PhoneID = null;
-                if (!IsPaired) memory.Forget();
+                ForgetPhone(phoneID);
                 peer.DisconnectAfterWrites = true;
                 _ = Pump(peer);
                 if (!ShouldRun) StopWatcher();
                 Changed?.Invoke();
+                NotifyPhones();
+                break;
+            case var awake when awake.StartsWith(AwakeRequest.Prefix, StringComparison.Ordinal):
+                if (AwakeRequest.Parse(awake) is not { } request)
+                {
+                    PhoneLog.Write($"command \"{awake}\" from {Who(phoneID)} not understood; ignored");
+                    break;
+                }
+                PhoneLog.Write($"keep-awake request from {Who(phoneID)}: {awake}");
+                var before = keepAwakeReports;
+                OnAwake?.Invoke(request);
+                // 保持唤醒变了就已经发给了所有手机；没变（比如本来就关着又收到 awake:off）也回这台一条现状
+                if (keepAwakeReports == before && peer.PhoneID == phoneID && !peer.Closed) SendKeepAwake(peer, phoneID);
                 break;
             case "away":
                 if (OnCommand is { } run) _ = run("away");

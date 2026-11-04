@@ -4,7 +4,8 @@
 //   LockCurtain.exe --relaunch-after <pid>   旧版（≤1.0.1）就地换文件更新后会这样叫：先等 pid 退出，
 //                                       再看旁边有没有 LockCurtainApp.exe——有就正常起主程序；
 //                                       没有（说明是旧更新器只换了半截）就跑更新包里的 install.ps1 自愈
-//   LockCurtain.exe away|hide|preview|status|settings   发给正在运行的实例，输出一行 JSON
+//   LockCurtain.exe --send away|hide|preview|status|settings   发给正在运行的实例，输出一行 JSON（设置 › 远程控制教的写法）
+//   LockCurtain.exe away|hide|preview|status|settings          同上，不带 --send 的旧写法照样认（解析见 CtlArgs.cs）
 // 主程序是 uiAccess，普通进程 CreateProcess 它会被拒（0x800702E4），只能 ShellExecute，所以要有这个启动器。
 using System.Diagnostics;
 using System.IO.Compression;
@@ -19,19 +20,19 @@ static class CtlProgram
 
     static int Main(string[] args)
     {
-        if (args.Length == 0 || args.Contains("--launch")) return Launch();
+        var parsed = CtlArgs.Parse(args);
+        if (parsed.Action == CtlAction.Launch) return Launch();
 
-        var rel = Array.IndexOf(args, "--relaunch-after");
-        if (rel >= 0)
+        if (parsed.Action == CtlAction.Relaunch)
         {
-            if (rel + 1 < args.Length && int.TryParse(args[rel + 1], out var pid))
+            if (parsed.Pid is { } pid)
                 try { using var p = Process.GetProcessById(pid); p.WaitForExit(15_000); } catch { }
             // 旧版（1.0.0/1.0.1）的就地换文件更新只换了 LockCurtain.exe（现在是本启动器）和 WinSparkle.dll，
             // 没有 LockCurtainApp.exe 和 install.ps1。没有主程序 = 这种半截状态，跑 install.ps1 自愈；否则正常起。
             return File.Exists(Path.Combine(Dir, AppExe)) ? Launch() : SelfHeal();
         }
 
-        var cmd = args[0];
+        var cmd = parsed.Command;
         var reply = ControlProtocol.TrySend(cmd, 300);
         if (reply == null)
         {

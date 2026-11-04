@@ -28,9 +28,12 @@ internal enum Kind : byte
     Presence = 0x0C,
     LiftNow = 0x0D,
     LiftResult = 0x0E,
+    /// 电脑 → 手机：保持唤醒的现状（protocol v3）
+    KeepAwakeState = 0x0F,
 }
 
-internal enum AckStatus : byte { Accepted = 0, UnknownOrBadSignature = 1, Replay = 2, Malformed = 3 }
+/// MissingPermission（protocol v3）：没做，电脑缺一个权限（Mac 没给辅助功能时拒绝盖上）。和 Accepted 一样带签名
+internal enum AckStatus : byte { Accepted = 0, UnknownOrBadSignature = 1, Replay = 2, Malformed = 3, MissingPermission = 4 }
 internal enum PresenceStatus : byte { Locked = 0, Unlocked = 1, Off = 2 }
 internal enum LiftStatus : byte { Lifted = 0, TooFar = 1, Refused = 2, NotCovered = 3 }
 internal enum PairRejectReason : byte { WrongCode = 1, NoCode = 2 }
@@ -109,7 +112,7 @@ internal sealed record Ack(Guid PhoneID, ulong Counter, AckStatus Status, byte[]
     {
         PairingCrypto.Check(b, Kind.Ack);
         if (b.Length != 27 && b.Length != 27 + 32) throw new WireException("wrongLength");
-        if (b[26] > 3) throw new WireException("wrongLength");
+        if (b[26] > 4) throw new WireException("wrongLength");
         return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), (AckStatus)b[26], b.Length == 59 ? b[27..] : null);
     }
 }
@@ -316,14 +319,17 @@ internal static class PairingCrypto
 
     public static bool VerifyCommand(CommandEnvelope e, byte[] key) => HmacValid(e.Mac, e.SignedPartBytes, key);
 
+    /// 带签名的收据：0（收下）和 4（缺权限，没做）。别的状态不签（电脑不认识这台手机 / 签名不对时也没法签）
+    public static bool IsSignedAckStatus(AckStatus s) => s is AckStatus.Accepted or AckStatus.MissingPermission;
+
     public static byte[] MakeAck(Guid phoneID, ulong counter, AckStatus status, byte[]? key)
     {
         var signed = Ack.SignedPart(phoneID, counter, status);
-        return status != AckStatus.Accepted || key == null ? signed : Bytes.Concat(signed, Hmac(signed, key));
+        return !IsSignedAckStatus(status) || key == null ? signed : Bytes.Concat(signed, Hmac(signed, key));
     }
 
     public static bool VerifyAck(Ack ack, byte[] key) =>
-        ack.Status == AckStatus.Accepted && ack.Mac != null && HmacValid(ack.Mac, Ack.SignedPart(ack.PhoneID, ack.Counter, ack.Status), key);
+        IsSignedAckStatus(ack.Status) && ack.Mac != null && HmacValid(ack.Mac, Ack.SignedPart(ack.PhoneID, ack.Counter, ack.Status), key);
 
     // MARK: - 幕布状态 / 撤销
 
@@ -345,6 +351,45 @@ internal static class PairingCrypto
 
     public static bool VerifyRevoke(byte[] b, Guid phoneID, byte[] key) =>
         Is(b, Kind.Revoke) && b.Length == 2 + 16 + 32 && Id(b, 2) == phoneID && HmacValid(b[18..], b[..18], key);
+
+    // MARK: - 保持唤醒的现状（protocol v3，kind 0x0F）
+    //   ver | 0x0F | phoneID(16) | seq(8, BE) | mode(1) | endsAt(8, BE unix 秒, 0 = 没有) | len(1) | appName(UTF-8, ≤ 64) | mac(32)
+    //   mode：0 关 · 1 定时长 · 2 一直 · 3 到电脑上定的时刻 · 4 某个程序开着时（appName）
+    //   seq 和 State（0x05）用同一个按手机递增的计数
+
+    public const int MaxKeepAwakeAppBytes = 64;
+    public const byte MaxKeepAwakeMode = 4;
+
+    /// 按 UTF-8 截到最多 maxBytes 字节，不切开一个字（代理对 / 多字节字符整个留或整个丢）
+    public static byte[] Utf8Prefix(string s, int maxBytes)
+    {
+        var bytes = Encoding.UTF8.GetBytes(s);
+        if (bytes.Length <= maxBytes) return bytes;
+        var end = maxBytes;
+        while (end > 0 && (bytes[end] & 0xC0) == 0x80) end--;
+        return bytes[..end];
+    }
+
+    public static byte[] MakeKeepAwakeState(Guid phoneID, ulong seq, byte mode, ulong endsAt, string appName, byte[] key)
+    {
+        var app = Utf8Prefix(appName, MaxKeepAwakeAppBytes);
+        var signed = Bytes.Concat(Header(Kind.KeepAwakeState), IdBytes(phoneID), BigEndian(seq), [mode], BigEndian(endsAt),
+                                  [(byte)app.Length], app);
+        return Bytes.Concat(signed, Hmac(signed, key));
+    }
+
+    public static (ulong Seq, byte Mode, ulong EndsAt, string AppName)? OpenKeepAwakeState(byte[] b, Guid phoneID, byte[] key)
+    {
+        const int head = 2 + 16 + 8 + 1 + 8;
+        if (!Is(b, Kind.KeepAwakeState) || b.Length < head + 1 + 32) return null;
+        var len = b[head];
+        if (len > MaxKeepAwakeAppBytes || b.Length != head + 1 + len + 32) return null;
+        if (Id(b, 2) != phoneID || !HmacValid(b[(head + 1 + len)..], b[..(head + 1 + len)], key)) return null;
+        string app;
+        try { app = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(b, head + 1, len); }
+        catch (DecoderFallbackException) { return null; }
+        return (UInt64(b, 18), b[26], UInt64(b, 27), app);
+    }
 
     // MARK: - 手机撤下幕布
 

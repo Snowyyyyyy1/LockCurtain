@@ -6,6 +6,8 @@
 //     换了 Windows 账户或重装系统，DPAPI 解不开，就当没配过（手机那边重新输码）。
 //   %LOCALAPPDATA%\LockCurtain\phone-link.json     不是秘密：配过的手机最后一次的蓝牙地址（重连用），
 //     和这台手机后台广播时苹果「溢出区」里的位图（见 PhoneLink.cs）。
+//   %LOCALAPPDATA%\LockCurtain\phones.json         不是秘密：每台配上的手机的名字（手机发的 name:）、配上的时刻、上次连着的时刻
+//     （设置 › 手机 那一页显示用，protocol v3 §4）。钥匙还是只在 phone-pairing.bin 里；这里多出来的记录不算配对。
 
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -148,6 +150,96 @@ internal sealed class PhoneDeviceMemory
             }));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+}
+
+/// 每台手机的名字 / 配上的时刻 / 上次连着的时刻（不是秘密）。时间都是 UTC
+internal sealed class PhoneRoster
+{
+    internal sealed class Entry
+    {
+        public string? Name { get; set; }
+        public DateTime? PairedAt { get; set; }
+        public DateTime? LastSeen { get; set; }
+    }
+
+    readonly string path;
+    readonly Dictionary<string, Entry> entries;
+
+    public PhoneRoster(string? path = null)
+    {
+        this.path = path ?? Path.Combine(Log.Dir, "phones.json");
+        try
+        {
+            entries = File.Exists(this.path)
+                ? JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(this.path)) ?? new()
+                : new();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            entries = new();
+        }
+    }
+
+    public Entry? Get(Guid id) => entries.GetValueOrDefault(PairingCrypto.IdString(id));
+
+    Entry Ensure(Guid id)
+    {
+        var key = PairingCrypto.IdString(id);
+        if (!entries.TryGetValue(key, out var e)) entries[key] = e = new Entry();
+        return e;
+    }
+
+    public void SetName(Guid id, string name)
+    {
+        var e = Ensure(id);
+        if (e.Name == name) return;
+        e.Name = name;
+        Write();
+    }
+
+    public void Paired(Guid id, DateTime at)
+    {
+        var e = Ensure(id);
+        e.PairedAt = at;
+        e.LastSeen = at;
+        Write();
+    }
+
+    public void Seen(Guid id, DateTime at)
+    {
+        Ensure(id).LastSeen = at;
+        Write();
+    }
+
+    public void Forget(Guid id)
+    {
+        if (entries.Remove(PairingCrypto.IdString(id))) Write();
+    }
+
+    /// 钥匙已经没了的手机（比如 DPAPI 解不开）：记录也删掉
+    public void Prune(IReadOnlyCollection<Guid> paired)
+    {
+        var keep = paired.Select(PairingCrypto.IdString).ToHashSet();
+        var stale = entries.Keys.Where(k => !keep.Contains(k)).ToList();
+        if (stale.Count == 0) return;
+        foreach (var k in stale) entries.Remove(k);
+        Write();
+    }
+
+    void Write()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, JsonSerializer.Serialize(entries));
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            PhoneLog.Write($"phones.json write failed: {e.Message}");
+        }
     }
 }
 

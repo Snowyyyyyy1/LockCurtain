@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="../../LockCurtain/Phone/Protocol/*.cs" />
     <Compile Include="../../LockCurtain/Phone/ReconnectPolicy.cs" />
+    <Compile Include="../../LockCurtain/UiText.cs" />
+    <Compile Include="../../LockCurtainCtl/CtlArgs.cs" />
     <None Include="../PhoneVectors/vectors.json" CopyToOutputDirectory="PreserveNewest" Link="vectors.json" />
   </ItemGroup>
 

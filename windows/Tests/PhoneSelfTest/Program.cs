@@ -12,6 +12,7 @@
 //      「现在撤下」不看「走近撤下」开关。
 // 全部通过返回 0，有失败返回 1。
 
+using System.Text;
 using System.Text.Json;
 using LockCurtain.Phone;
 
@@ -204,6 +205,98 @@ Console.WriteLine("== 命令 / 收据 / 状态 / 撤销 / 问询 / 回答 ==");
     var v1 = PairingCrypto.PhoneStart("123456", phoneID)!.Value.Request.Encoded();
     v1[0] = 1;
     Check(PairingCrypto.KindOf(v1) == null, "版本 1 的配对请求不认");
+}
+
+// MARK: - protocol v3
+Console.WriteLine("== protocol v3：保持唤醒 / 手机名 / 缺权限收据 ==");
+{
+    var m = root.GetProperty("messages");
+    var key = B(m, "key");
+    var other = B(m, "otherKey");
+    var phoneID = Guid.Parse(S(m, "phoneID"));
+    foreach (var c in m.GetProperty("commandsV3").EnumerateArray())
+    {
+        var counter = ulong.Parse(S(c, "counter"));
+        var e = CommandEnvelope.Decode(B(c, "sealed"));
+        Check(Eq(PairingCrypto.SealCommand(S(c, "command"), phoneID, counter, key), B(c, "sealed")) && e.Command == S(c, "command")
+              && PairingCrypto.VerifyCommand(e, key), $"v3 命令「{S(c, "command")}」：字节一样、验签");
+    }
+    {
+        var a = m.GetProperty("ackMissingPermission");
+        var counter = ulong.Parse(S(a, "counter"));
+        var bytes = PairingCrypto.MakeAck(phoneID, counter, AckStatus.MissingPermission, key);
+        var d = Ack.Decode(B(a, "bytes"));
+        Check(Eq(bytes, B(a, "bytes")) && d.Status == AckStatus.MissingPermission && PairingCrypto.VerifyAck(d, key)
+              && !PairingCrypto.VerifyAck(d, other), "收据 status 4（缺权限）：字节一样、带签名");
+    }
+    foreach (var s in m.GetProperty("keepAwakeStates").EnumerateArray())
+    {
+        var seq = ulong.Parse(S(s, "seq"));
+        var mode = (byte)s.GetProperty("mode").GetInt32();
+        var ends = ulong.Parse(S(s, "endsAt"));
+        var bytes = PairingCrypto.MakeKeepAwakeState(phoneID, seq, mode, ends, S(s, "appNameIn"), key);
+        Check(Eq(bytes, B(s, "bytes")) && PairingCrypto.OpenKeepAwakeState(bytes, phoneID, key) == (seq, mode, ends, S(s, "appName"))
+              && PairingCrypto.OpenKeepAwakeState(bytes, phoneID, other) == null && PairingCrypto.OpenKeepAwakeState(bytes, Guid.NewGuid(), key) == null,
+              $"KeepAwakeState mode {mode}（app {Encoding.UTF8.GetByteCount(S(s, "appNameIn"))} 字节）：字节一样，别的手机 / 钥匙验不过");
+    }
+
+    Check(AwakeRequest.Parse("awake:off") == new AwakeRequest(AwakeRequestKind.Off)
+          && AwakeRequest.Parse("awake:always") == new AwakeRequest(AwakeRequestKind.Always)
+          && AwakeRequest.Parse("awake:1h") == new AwakeRequest(AwakeRequestKind.For, TimeSpan.FromHours(1))
+          && AwakeRequest.Parse("awake:2h") == new AwakeRequest(AwakeRequestKind.For, TimeSpan.FromHours(2))
+          && AwakeRequest.Parse("awake:5h") == new AwakeRequest(AwakeRequestKind.For, TimeSpan.FromHours(5)),
+          "awake:off / always / 1h / 2h / 5h 都认");
+    Check(AwakeRequest.Parse("awake:3h") == null && AwakeRequest.Parse("awake:") == null && AwakeRequest.Parse("away") == null,
+          "不认识的 awake:xxx 当没收到");
+    var end = new DateTime(2027, 1, 15, 8, 0, 0, DateTimeKind.Utc);
+    var endSec = (ulong)new DateTimeOffset(end).ToUnixTimeSeconds();
+    Check(KeepAwakeWireState.Make(KeepAwakeWireMode.Timed, end) == new KeepAwakeWireState(KeepAwakeWireMode.Timed, endSec, "")
+          && KeepAwakeWireState.Make(KeepAwakeWireMode.UntilClock, end, "x") == new KeepAwakeWireState(KeepAwakeWireMode.UntilClock, endSec, "")
+          && KeepAwakeWireState.Make(KeepAwakeWireMode.Always, end, "x") == new KeepAwakeWireState(KeepAwakeWireMode.Always, 0, "")
+          && KeepAwakeWireState.Make(KeepAwakeWireMode.WhileApp, end, "微信") == new KeepAwakeWireState(KeepAwakeWireMode.WhileApp, 0, "微信"),
+          "KeepAwakeState：只有定时长 / 到时刻带 endsAt，只有程序开着时带 appName");
+
+    Check(PhoneName.Clean("  Snowy 的 iPhone\n") == "Snowy 的 iPhone" && PhoneName.Clean(" \t ") == null
+          && Encoding.UTF8.GetByteCount(PhoneName.Clean(new string('应', 40))!) <= PhoneName.MaxBytes
+          && PhoneName.Clean(new string('应', 40)) == new string('应', 20), "手机名：去控制字符和空白，截到 60 字节不切开字");
+
+    // State 和 KeepAwakeState 共用一个严格递增的 seq，同一毫秒里也不重复
+    var seqPc = new PairingAuthority(new MemoryPairingStore(), _ => { });
+    var t = new DateTime(2026, 11, 4, 1, 0, 0, DateTimeKind.Utc);
+    var s1 = seqPc.NextSeq(t);
+    var s2 = seqPc.NextSeq(t);
+    var s3 = seqPc.NextSeq(t.AddSeconds(-30));
+    Check(s1 == (ulong)new DateTimeOffset(t).ToUnixTimeMilliseconds() && s2 == s1 + 1 && s3 == s2 + 1,
+          "seq：毫秒时间，同一毫秒 / 钟往回拨也严格递增");
+}
+
+Console.WriteLine("== 界面上的字 / 启动器命令行 ==");
+{
+    var tz = TimeZoneInfo.CreateCustomTimeZone("UTC+8", TimeSpan.FromHours(8), "UTC+8", "UTC+8");
+    var now = new DateTime(2026, 11, 4, 6, 0, 0, DateTimeKind.Utc);      // 本地 14:00
+    Check(LockCurtain.UiText.Ago(now.AddSeconds(-30), now, tz) == "刚刚" && LockCurtain.UiText.Ago(now.AddMinutes(5), now, tz) == "刚刚"
+          && LockCurtain.UiText.Ago(now.AddMinutes(-7), now, tz) == "7 分钟前"
+          && LockCurtain.UiText.Ago(now.AddHours(-3), now, tz) == "3 小时前"
+          && LockCurtain.UiText.Ago(now.AddHours(-15), now, tz) == "昨天"
+          && LockCurtain.UiText.Ago(now.AddDays(-3), now, tz) == "11 月 1 日",
+          "上次连上：刚刚 / N 分钟前 / N 小时前 / 昨天 / M 月 D 日");
+    Check(LockCurtain.UiText.PhoneTitle("iPhone", now, tz) == "iPhone · 11 月 4 日配上" && LockCurtain.UiText.PhoneTitle("iPhone", null, tz) == "iPhone",
+          "已配对那一行：「iPhone · 11 月 4 日配上」");
+    Check(LockCurtain.UiText.PhoneStatus(true, now, now, tz) == "已连上"
+          && LockCurtain.UiText.PhoneStatus(false, now.AddHours(-3), now, tz) == "没连上 · 上次连上：3 小时前"
+          && LockCurtain.UiText.PhoneStatus(false, null, now, tz) == "没连上", "已连上 / 没连上 · 上次连上：…");
+    Check(LockCurtain.UiText.Duration(TimeSpan.FromSeconds(40)) == "不到 1 分" && LockCurtain.UiText.Duration(TimeSpan.FromMinutes(59.9)) == "59 分"
+          && LockCurtain.UiText.Duration(TimeSpan.FromHours(2)) == "2 小时" && LockCurtain.UiText.Duration(TimeSpan.FromMinutes(80)) == "1 小时 20 分",
+          "时长：不到 1 分 / N 分 / N 小时 / N 小时 M 分");
+
+    Check(LockCurtain.CtlArgs.Parse([]).Action == LockCurtain.CtlAction.Launch && LockCurtain.CtlArgs.Parse(["--launch"]).Action == LockCurtain.CtlAction.Launch,
+          "启动器：没参数 / --launch 起主程序");
+    Check(LockCurtain.CtlArgs.Parse(["--send", "away"]) == new LockCurtain.CtlArgs(LockCurtain.CtlAction.Send, "away")
+          && LockCurtain.CtlArgs.Parse(["away"]) == new LockCurtain.CtlArgs(LockCurtain.CtlAction.Send, "away")
+          && LockCurtain.CtlArgs.Parse(["--send"]) == new LockCurtain.CtlArgs(LockCurtain.CtlAction.Send, "status"),
+          "启动器：--send away 和旧写法 away 一样；--send 后面没命令 = status");
+    Check(LockCurtain.CtlArgs.Parse(["--relaunch-after", "42"]) == new LockCurtain.CtlArgs(LockCurtain.CtlAction.Relaunch, Pid: 42)
+          && LockCurtain.CtlArgs.Parse(["--relaunch-after"]).Pid == null, "启动器：--relaunch-after <pid>");
 }
 
 // MARK: - 分帧

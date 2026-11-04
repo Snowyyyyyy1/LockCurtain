@@ -307,10 +307,23 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
 
     // MARK: - 发给手机的东西
 
-    /// seq 用毫秒时间：只要单调，手机拿它挡重放的旧状态
+    ulong lastSeq;
+
+    /// seq 用毫秒时间，但保证严格递增（同一毫秒里发 State 和 KeepAwakeState 也不重复）：手机拿它挡重放的旧状态。
+    /// State 和 KeepAwakeState 共用这一个计数（protocol v3 §3）
+    public ulong NextSeq(DateTime? now = null)
+    {
+        var ms = (ulong)new DateTimeOffset(DateTime.SpecifyKind(now ?? DateTime.UtcNow, DateTimeKind.Utc)).ToUnixTimeMilliseconds();
+        lastSeq = Math.Max(lastSeq + 1, ms);
+        return lastSeq;
+    }
+
     public byte[]? StateMessage(bool closed, Guid phoneID) =>
-        store.Load(phoneID) is { } r
-            ? PairingCrypto.MakeState(closed, (ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), phoneID, r.Key) : null;
+        store.Load(phoneID) is { } r ? PairingCrypto.MakeState(closed, NextSeq(), phoneID, r.Key) : null;
+
+    /// 保持唤醒的现状（kind 0x0F），只发给确认配上的手机
+    public byte[]? KeepAwakeStateMessage(KeepAwakeWireState state, Guid phoneID) =>
+        store.Load(phoneID) is { } r ? state.Seal(phoneID, NextSeq(), r.Key) : null;
 
     /// 撤销一台：先签好撤销通知再删钥匙
     public byte[]? Revoke(Guid phoneID)
