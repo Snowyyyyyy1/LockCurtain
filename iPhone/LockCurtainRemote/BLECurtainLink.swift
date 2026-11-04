@@ -7,7 +7,7 @@
 // 安全全在 PairingCrypto：配对用 6 位码的 CPace 握手（双向确认），命令带 HMAC 和递增计数。
 //
 // 屏幕上说的话全部来自 Mac 的回报，没有一处是猜的：
-//   * 「已连接」= Mac 订阅了发件箱，并且 Mac 用共享钥匙签了收据（握手 / 身份确认真的成了）；
+//   * 「已连上」= Mac 订阅了发件箱，并且 Mac 用共享钥匙签了收据（握手 / 身份确认真的成了）；
 //   * 配对只有在 Mac 的应答验过、Mac 又签收了第一条命令之后才返回 accepted；
 //   * 幕布状态靠 Mac 签名的状态消息，没收到就是没收到。
 //
@@ -711,7 +711,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         }
     }
 
-    /// 已经配过对的手机：Mac 订阅上来就用签名的 ping 表明身份，Mac 签收了才算已连接。
+    /// 已经配过对的手机：Mac 订阅上来就用签名的 ping 表明身份，Mac 签收了才算已连上。
     /// 没签收（收据丢了 / 电脑忙 / App 刚被叫醒）：订阅着、还没确认，就每 confirmRetry 秒再发一次
     private func startConfirmLink(reason: String) {
         confirmTask?.cancel()
@@ -736,7 +736,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
                     self.markReady()
                     return
                 case .rejected, .failed, .notAllowedOnNetwork:
-                    // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连接，过一会儿再试。
+                    // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连上，过一会儿再试。
                     self.publish { $0.connection = .notConnected }
                     // 不认这把钥匙的中心可能是撤销过的旧电脑：用待撤销的旧钥匙试一次（这次连接里每份只试一次）
                     if result == .rejected, let current = self.mac, current.identifier == central {
@@ -780,7 +780,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         return "name:" + trimmed
     }
 
-    /// 收到 Mac 验过签名的消息（收据 / 状态 / 问询）：它一定认得我们，算已连接
+    /// 收到 Mac 验过签名的消息（收据 / 状态 / 问询）：它一定认得我们，算已连上
     private func noteVerifiedFromMac(_ what: String) {
         guard isPaired, mac != nil, !ready else { return }
         Self.linkLog.info("verified \(what, privacy: .public) from the computer: marking ready")
@@ -930,7 +930,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         let verified = PhoneKeychain.loadLink().map {
             PairingCrypto.verifyAck(ack, key: SymmetricKeyBox($0.key).key)
         } == true
-        // 晚到的收据（前一次 ping 的）也证明电脑认得我们（网络的「已连接」由 PhoneNetClient 的 ready 说了算）
+        // 晚到的收据（前一次 ping 的）也证明电脑认得我们（网络的「已连上」由 PhoneNetClient 的 ready 说了算）
         if verified, path == .bluetooth { noteVerifiedFromMac("ack") }
         guard pendingAcks[ack.counter] != nil else { return }
         if verified {
@@ -1346,12 +1346,12 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private func publish(_ change: (inout CurtainSnapshot) -> Void) {
         var next = snapshot
         change(&next)
-        // 路径跟着现状走（蓝牙优先）；网络通着、蓝牙没通就是「已连接 · 网络」
+        // 路径跟着现状走（蓝牙优先）；网络通着、蓝牙没通就是「已连上 · 网络」
         let path = activePath
         if path == .network {
             next.connection = .connected
         } else if path == nil, snapshot.path == .network, next.connection == .connected {
-            // 网络刚断：不再是已连接
+            // 网络刚断：不再是已连上
             let btOff = manager.map { [.poweredOff, .unauthorized, .unsupported].contains($0.state) } ?? false
             next.connection = !isPaired ? .notPaired : (btOff ? .bluetoothOff : .notConnected)
         }

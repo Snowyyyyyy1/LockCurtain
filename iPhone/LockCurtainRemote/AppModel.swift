@@ -103,7 +103,7 @@ final class AppModel {
     private(set) var demoMode = false
     private(set) var macName: String?
     private(set) var connection: CurtainConnection = .notPaired
-    /// 已连接时走哪条路（蓝牙优先）；没连上是 nil
+    /// 已连上时走哪条路（蓝牙优先）；没连上是 nil
     private(set) var path: LinkPath?
     /// 网络那一路试得怎么样（设置里「网络地址」那一页用）
     private(set) var networkStatus: NetworkStatus = .none
@@ -307,9 +307,9 @@ final class AppModel {
         switch connection {
         case .connected:
             switch path {
-            case .network: "已连接 · 网络"
-            case .bluetooth: "已连接 · 蓝牙"
-            case nil: "已连接"
+            case .network: "已连上 · 网络"
+            case .bluetooth: "已连上 · 蓝牙"
+            case nil: "已连上"
             }
         case .notConnected: unlinkedMacState?.value ?? "没连上"
         case .bluetoothOff: "蓝牙关了"
