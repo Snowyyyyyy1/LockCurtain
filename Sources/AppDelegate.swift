@@ -31,13 +31,12 @@ func writeStatus(_ s: String) { try? s.write(toFile: statusPath, atomically: tru
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    /// 右键弹的菜单；左键弹面板
-    private var statusMenu = NSMenu()
     private lazy var panel = StatusPanelController(actions: StatusPanelActions(
         enterAway: { [overlay] in overlay.enterAway() },
         preview: { [overlay] in overlay.togglePreview() },
         openPairing: { [weak self] in self?.pairingWindow.show() },
-        openSettings: { [weak self] in self?.settings.show() }), keepAwake: keepAwake)
+        openPhonePage: { [weak self] in self?.settings.show(.phone) },
+        openSettings: { [weak self] in self?.settings.show() }), keepAwake: keepAwake, pairing: pairing)
     private let overlay = OverlayController()
     private let pairing = PhonePairing()
     private lazy var pairingWindow = PairingWindowController(pairing: pairing)
@@ -49,11 +48,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var ruleEngine = RuleEngine(store: rules) { [overlay] _ in overlay.enterAway() }
     private lazy var settings = SettingsWindowController(store: rules, actions: AppActions(
         enterAway: { [overlay] in overlay.enterAway() },
-        grabWallpaper: { [overlay] in overlay.grabWallpaperNow() }))
+        grabWallpaper: { [overlay] done in overlay.grabWallpaperNow(done) },
+        openPairing: { [weak self] in self?.pairingWindow.show() },
+        openStartGuide: { [weak self] in self?.startGuide.show() },
+        requestBluetooth: { [pairing] in pairing.prepare() }), pairing: pairing, keepAwake: keepAwake)
+    private lazy var startGuide = StartGuideController(pairing: pairing) { [weak self] in self?.pairingWindow.show() }
+    /// N2 的提示框正开着：手机连发几次 away 也只弹一个
+    private var missingAXAlertShowing = false
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSLog("LockCurtain launched")
         removeLegacyWallpaperDumps()
+        LogFolder.removeLegacyTmpLog()
 
         switch RunMode.shared {
         case .status:
@@ -87,7 +93,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             // 已经配过对的手机要能随时找回来，所以这时就开始找它（第一次配对才弹蓝牙权限）
             if pairing.isPaired { pairing.prepare() }
-            keepAwake.onChange = { [weak self] in self?.updateStatusIcon() }
+            // N2：没辅助功能不让盖（盖上以后键鼠撤不下来）；手机那头收到 Ack 4
+            overlay.onMissingAccessibility = { [weak self] in self?.showMissingAccessibility() }
+            pairing.canCover = { OverlayController.canCover }
+            // 保持唤醒：手机能开关，Mac 上不管谁改了都报给连着的手机（手机命令处理中不报，处理完统一报一次）
+            pairing.onKeepAwake = { [keepAwake] cmd in keepAwake.apply(phoneCommand: cmd) }
+            pairing.keepAwakeState = { [keepAwake] in keepAwake.wireState }
+            keepAwake.onChange = { [weak self] in
+                guard let self else { return }
+                self.updateStatusIcon()
+                if !self.pairing.handlingAwake { self.pairing.reportKeepAwake() }
+            }
             keepAwake.restore()
             overlay.watchLockState()
             pairing.onCommand = { [weak self] cmd in _ = await self?.handleCommand(cmd) }
@@ -108,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ]
             applyAppearance()
             writeStatus(collectStatus("normal"))
+            startGuide.showIfNeeded()
         }
     }
 
@@ -199,19 +216,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openSettings() { settings.show() }
     @objc private func openPairing() { pairingWindow.show() }
 
-    /// 撤销配对：丢了手机、别人用过这台机器时一键断开
-    @objc private func revokePairing() {
-        guard pairing.isPaired else { return }
+    /// 撤销配对（A1：按手机撤，别的手机不动）。菜单项的 representedObject 是那台手机的 ID
+    @objc private func revokePairing(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
         let alert = NSAlert()
         alert.messageText = "撤销这台手机的配对？"
-        alert.informativeText = "撤销后要在这台手机上重新输码，才能再盖上幕布。"
+        alert.informativeText = "撤销后，这台手机要重新输码才能再盖上幕布。其他手机的配对不受影响。"
         alert.addButton(withTitle: "取消")
         alert.addButton(withTitle: "撤销配对")
         NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertSecondButtonReturn {
-            pairing.unpairAll()
-            pairingWindow.show()
-        }
+        // 撤销完不弹「已撤销」：那一行消失就是答案（Camo §16.1）
+        if alert.runModal() == .alertSecondButtonReturn { pairing.unpair(id) }
+    }
+
+    /// N2：没辅助功能权限，不盖（Camo §16.8）
+    private func showMissingAccessibility() {
+        guard !missingAXAlertShowing else { return }
+        missingAXAlertShowing = true
+        defer { missingAXAlertShowing = false }
+        let alert = NSAlert()
+        alert.messageText = CoverRefusal.message
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "打开设置")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn { SystemPermissions.requestAccessibility() }
     }
     @objc private func checkForUpdates() { Updater.shared.checkForUpdates() }
 
@@ -329,46 +357,88 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem = item
         updateStatusIcon()
-        let menu = NSMenu()
-
-        let away = NSMenuItem(title: "进入离开模式", action: #selector(enterAway), keyEquivalent: "")
-        away.target = self; menu.addItem(away)
-
-        let pv = NSMenuItem(title: "预览幕布", action: #selector(toggleOverlay), keyEquivalent: "")
-        pv.target = self; menu.addItem(pv)
-
-        let pair = NSMenuItem(title: "配对手机…", action: #selector(openPairing), keyEquivalent: "")
-        pair.target = self; menu.addItem(pair)
-
-        let revoke = NSMenuItem(title: "撤销配对", action: #selector(revokePairing), keyEquivalent: "")
-        revoke.target = self; menu.addItem(revoke)
-
-        let fh = NSMenuItem(title: "紧急撤下幕布", action: #selector(forceHideOverlay), keyEquivalent: "")
-        fh.target = self; menu.addItem(fh)
-
-        menu.addItem(.separator())
-        let st = NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ",")
-        st.target = self; menu.addItem(st)
-        if Updater.shared.isAvailable {
-            let up = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "")
-            up.target = self; menu.addItem(up)
-        }
-
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "退出", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-
-        statusMenu = menu
         item.button?.target = self
         item.button?.action = #selector(statusItemClicked)
         item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
     }
 
-    /// 左键弹面板；右键或按住 ⌃ 点按弹原来的菜单
+    /// 右键菜单（Colo A3 的顺序，Camo v14.3 §14.1 / §16.10 的字）。每次弹之前现搭：勾、置灰、手机状态都是当下的
+    private func buildStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        func add(_ title: String, _ action: Selector?, key: String = "", enabled: Bool = true, to m: NSMenu? = nil) -> NSMenuItem {
+            let it = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            it.target = action == nil ? nil : self
+            it.isEnabled = enabled && action != nil
+            (m ?? menu).addItem(it)
+            return it
+        }
+
+        _ = add("盖上幕布", #selector(enterAway))
+        add("预览幕布", #selector(toggleOverlay)).state = overlay.mode == .preview ? .on : .off
+        // 没盖时置灰（D1：盖着时幕布在菜单栏上面，这一项其实点不到；留着给预览之外的情形和一致性）
+        _ = add("撤下幕布", #selector(forceHideOverlay), enabled: overlay.mode != nil)
+        menu.addItem(.separator())
+
+        let awakeItem = NSMenuItem(title: "保持唤醒", action: nil, keyEquivalent: "")
+        let awake = NSMenu()
+        awake.autoenablesItems = false
+        if let until = keepAwake.until {
+            _ = add(KeepAwakeText.short(until, clockTime: keepAwake.clockTime), nil, enabled: false, to: awake)
+            _ = add("停止", #selector(stopKeepAwake), to: awake)
+        } else {
+            add("一直", #selector(startKeepAwake(_:)), to: awake).tag = 0
+            for h in [1, 2, 5] { add("\(h) 小时", #selector(startKeepAwake(_:)), to: awake).tag = h }
+            _ = add("到指定时间…", #selector(pickKeepAwakeTime), to: awake)
+            awake.addItem(.separator())
+            let appsItem = NSMenuItem(title: "某个 app 开着时", action: nil, keyEquivalent: "")
+            let apps = NSMenu()
+            apps.autoenablesItems = false
+            let running = KeepAwakeText.runningApps()
+            if running.isEmpty { _ = add("现在没有", nil, enabled: false, to: apps) }
+            for app in running {
+                let it = add(app.localizedName ?? "pid \(app.processIdentifier)", #selector(keepAwakeWhileApp(_:)), to: apps)
+                it.representedObject = app
+            }
+            appsItem.submenu = apps
+            awake.addItem(appsItem)
+        }
+        awakeItem.submenu = awake
+        menu.addItem(awakeItem)
+        menu.addItem(.separator())
+
+        let phones = pairing.phones
+        let phoneState = phones.isEmpty ? "未配对" : pairing.anyPhoneConnected ? "已连上" : "没连上"
+        _ = add("手机：\(phoneState)", nil, enabled: false)
+        _ = add("配对手机…", #selector(openPairing))
+        if phones.count == 1 {
+            add("撤销配对…", #selector(revokePairing(_:))).representedObject = phones[0].id
+        } else if phones.count > 1 {
+            // 多台时变子菜单，列出每台（A3）
+            let revokeItem = NSMenuItem(title: "撤销配对", action: nil, keyEquivalent: "")
+            let sub = NSMenu()
+            sub.autoenablesItems = false
+            for p in phones { add(p.name + "…", #selector(revokePairing(_:)), to: sub).representedObject = p.id }
+            revokeItem.submenu = sub
+            menu.addItem(revokeItem)
+        }
+        menu.addItem(.separator())
+
+        _ = add("设置…", #selector(openSettings), key: ",")
+        if Updater.shared.isAvailable { _ = add("检查更新…", #selector(checkForUpdates)) }
+        _ = add("打开日志文件夹", #selector(openLogFolder))
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: "退出 LockCurtain", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(quit)
+        return menu
+    }
+
+    /// 左键弹面板；右键或按住 ⌃ 点按弹菜单
     @objc private func statusItemClicked() {
         guard let item = statusItem, let button = item.button else { return }
         let e = NSApp.currentEvent
         if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true {
-            item.menu = statusMenu      // 临时挂上弹出来，再摘掉，否则左键也会弹菜单
+            item.menu = buildStatusMenu()   // 临时挂上弹出来，再摘掉，否则左键也会弹菜单
             button.performClick(nil)
             item.menu = nil
         } else {
@@ -380,4 +450,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleOverlay() { overlay.togglePreview() }
     @objc private func enterAway() { overlay.enterAway() }
+    @objc private func openLogFolder() { LogFolder.open() }
+
+    @objc private func stopKeepAwake() { keepAwake.stop() }
+    /// tag 0 = 一直；1 / 2 / 5 = 小时
+    @objc private func startKeepAwake(_ sender: NSMenuItem) {
+        keepAwake.start(sender.tag == 0 ? .forever : .date(Date().addingTimeInterval(Double(sender.tag) * 3600)))
+    }
+    @objc private func keepAwakeWhileApp(_ sender: NSMenuItem) {
+        guard let app = sender.representedObject as? NSRunningApplication else { return }
+        keepAwake.start(.appQuits(app.processIdentifier, name: app.localizedName ?? "pid \(app.processIdentifier)"))
+    }
+    /// 「到指定时间…」：打开 设置 › 保持唤醒，直接露出选钟点那一行
+    @objc private func pickKeepAwakeTime() {
+        settings.nav.pickTime = true
+        settings.show(.keepAwake)
+    }
 }

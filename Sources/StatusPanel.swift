@@ -1,6 +1,7 @@
-// StatusPanel.swift —— 菜单栏左键弹出的面板：常用操作 + 保持唤醒和谁在阻止睡眠 + 过去 24 小时
+// StatusPanel.swift —— 菜单栏左键弹出的面板：常用操作 + 手机一行 + 保持唤醒和谁在阻止睡眠 + 过去 24 小时
 //
-// 右键还是原来的菜单（紧急关闭、退出都在那里）。
+// 右键是菜单（撤下幕布、保持唤醒、配对 / 撤销配对、退出 LockCurtain 都在那里，见 AppDelegate.buildStatusMenu）。
+// 「手机」那一行（A2）：已连上 / 没连上；没配对时右边是「配对手机」按钮，按钮行里不再有配对。整行点开 设置 › 手机。
 // 阻止睡眠的列表放在 TimelineView 里每 2 秒重读一次；面板关掉后视图不再渲染，也就不再读。
 // 保持唤醒的剩余时间跟着同一个 TimelineView 刷新。
 // 过去 24 小时要跑 pmset（3～4 秒），每次打开面板时在后台读，5 分钟内不重读
@@ -12,6 +13,7 @@ struct StatusPanelActions {
     let enterAway: () -> Void
     let preview: () -> Void
     let openPairing: () -> Void
+    let openPhonePage: () -> Void
     let openSettings: () -> Void
 }
 
@@ -20,7 +22,7 @@ final class StatusPanelController {
     private let popover = NSPopover()
     private let ledger = SleepLedgerStore()
 
-    init(actions: StatusPanelActions, keepAwake: KeepAwake) {
+    init(actions: StatusPanelActions, keepAwake: KeepAwake, pairing: PhonePairing) {
         popover.behavior = .transient
         // 先收起面板再执行：进离开模式、预览会马上盖住屏幕
         let close = { [popover] in popover.performClose(nil) }
@@ -28,8 +30,9 @@ final class StatusPanelController {
             enterAway: { close(); actions.enterAway() },
             preview: { close(); actions.preview() },
             openPairing: { close(); actions.openPairing() },
+            openPhonePage: { close(); actions.openPhonePage() },
             openSettings: { close(); actions.openSettings() },
-            ledger: ledger, keepAwake: keepAwake))
+            ledger: ledger, keepAwake: keepAwake, pairing: pairing))
         host.sizingOptions = [.preferredContentSize]
         popover.contentViewController = host
     }
@@ -52,22 +55,24 @@ private struct StatusPanelView: View {
     let enterAway: () -> Void
     let preview: () -> Void
     let openPairing: () -> Void
+    let openPhonePage: () -> Void
     let openSettings: () -> Void
     @ObservedObject var ledger: SleepLedgerStore
     @ObservedObject var keepAwake: KeepAwake
+    @ObservedObject var pairing: PhonePairing
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Button(action: enterAway) { Label("进入离开模式", systemImage: "figure.walk.departure") }
+                Button(action: enterAway) { Label("盖上幕布", systemImage: "figure.walk.departure") }
                     .buttonStyle(.borderedProminent)
                 Button("预览幕布", action: preview)
-                Button("配对手机", action: openPairing)
                 Spacer()
                 Button(action: openSettings) { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)
                     .help("设置…")
             }
+            PhoneRow(pairing: pairing, openPairing: openPairing, openPhonePage: openPhonePage)
             TimelineView(.periodic(from: .now, by: 2)) { _ in
                 SleepBlockersCard(snapshot: SleepBlockers.snapshot(), keepAwake: keepAwake)
             }
@@ -75,6 +80,37 @@ private struct StatusPanelView: View {
         }
         .padding(14)
         .frame(width: 360)
+    }
+}
+
+/// 「手机」一行（A2）
+private struct PhoneRow: View {
+    @ObservedObject var pairing: PhonePairing
+    let openPairing: () -> Void
+    let openPhonePage: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "iphone").font(.system(size: 16)).frame(width: 20)
+            Text("手机").font(.system(size: 13))
+            Spacer()
+            if pairing.phones.isEmpty {
+                Button("配对手机", action: openPairing).controlSize(.small)
+            } else {
+                let on = pairing.anyPhoneConnected
+                HStack(spacing: 5) {
+                    Circle().fill(on ? Color(nsColor: .systemGreen) : Color(nsColor: .systemGray)).frame(width: 8, height: 8)
+                    Text(on ? "已连上" : "没连上").font(.system(size: 13)).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(.tertiary)
+            }
+        }
+        .frame(height: 28)
+        .padding(.horizontal, 4)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: openPhonePage)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 }
 
@@ -143,50 +179,17 @@ private struct SleepBlockersCard: View {
 
     private var keepAwakeMenu: some View {
         Menu("保持唤醒") {
-            Button("一直") { keepAwake.start(.forever) }
-            ForEach([1, 2, 5], id: \.self) { h in
-                Button("\(h) 小时") { keepAwake.start(.date(Date().addingTimeInterval(Double(h) * 3600))) }
-            }
-            Button("到指定时间…") {
-                // 默认是一小时以后的第一个整点
-                endTime = Calendar.current.nextDate(after: Date().addingTimeInterval(3600), matching: DateComponents(minute: 0),
-                                                    matchingPolicy: .nextTime) ?? Date()
+            KeepAwakeMenuItems(keepAwake: keepAwake) {
+                endTime = KeepAwakeText.defaultEndTime()
                 pickingTime = true
-            }
-            Divider()
-            Menu("某个 app 开着时") {
-                let apps = NSWorkspace.shared.runningApplications
-                    .filter { $0.activationPolicy == .regular && $0.processIdentifier != getpid() }
-                    .sorted { ($0.localizedName ?? "") < ($1.localizedName ?? "") }
-                if apps.isEmpty { Text("现在没有") }
-                ForEach(apps, id: \.processIdentifier) { app in
-                    let name = app.localizedName ?? "pid \(app.processIdentifier)"
-                    Button(name) { keepAwake.start(.appQuits(app.processIdentifier, name: name)) }
-                }
             }
         }
         .fixedSize()
-        .help("不盖幕布，只让 Mac 不睡；屏幕照样会熄灭")
+        .help("不盖幕布，只让电脑不睡；屏幕照样会熄灭")
     }
 
     private var timePicker: some View {
-        HStack(spacing: 8) {
-            Text("保持唤醒到").font(.system(size: 13))
-            DatePicker("", selection: $endTime, displayedComponents: .hourAndMinute)
-                .labelsHidden()
-                .fixedSize()
-            Spacer()
-            Button("取消") { pickingTime = false }
-            Button("开始") {
-                // 选的钟点今天已经过了就是明天
-                let hm = Calendar.current.dateComponents([.hour, .minute], from: endTime)
-                if let end = Calendar.current.nextDate(after: Date(), matching: hm, matchingPolicy: .nextTime) {
-                    keepAwake.start(.date(end))
-                }
-                pickingTime = false
-            }
-            .buttonStyle(.borderedProminent)
-        }
+        KeepAwakeTimePicker(keepAwake: keepAwake, endTime: $endTime) { pickingTime = false }
     }
 
     private func keepAwakeRow(_ until: KeepAwake.Until) -> some View {
@@ -207,17 +210,7 @@ private struct SleepBlockersCard: View {
         }
     }
 
-    private static func detail(_ until: KeepAwake.Until) -> String {
-        switch until {
-        case .forever:
-            return "直到你点停止；屏幕照样会熄灭"
-        case .date(let end):
-            let day = Calendar.current.isDateInToday(end) ? "" : "明天"
-            return "到\(day) \(end.formatted(date: .omitted, time: .shortened))，还剩 \(duration(end.timeIntervalSinceNow))"
-        case .appQuits(_, let name):
-            return "\(name) 退出就结束"
-        }
-    }
+    private static func detail(_ until: KeepAwake.Until) -> String { KeepAwakeText.detail(until) }
 }
 
 private struct KindBadge: View {
@@ -241,13 +234,7 @@ private struct KindBadge: View {
 private let sleepColor = Color(nsColor: .systemIndigo)
 private let activeColor = Color(nsColor: .systemGreen).opacity(0.75)
 
-/// 3 小时 5 分 / 45 分 / 不到 1 分
-private func duration(_ seconds: Double) -> String {
-    let m = Int(seconds / 60)
-    if m < 1 { return "不到 1 分" }
-    if m < 60 { return "\(m) 分" }
-    return m % 60 == 0 ? "\(m / 60) 小时" : "\(m / 60) 小时 \(m % 60) 分"
-}
+private func duration(_ seconds: Double) -> String { KeepAwakeText.duration(seconds) }
 
 private struct SleepHistoryCard: View {
     @ObservedObject var store: SleepLedgerStore
@@ -290,8 +277,12 @@ private struct SleepHistoryCard: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else if let e = store.error {
-                Text("读不到电源日志：\(e)").font(.callout).foregroundStyle(.secondary)
+            } else if store.error != nil {
+                // D12：读不到时能再读一次（错误细节写日志，不上界面）
+                HStack(spacing: 6) {
+                    Text("没读到。").font(.callout).foregroundStyle(.secondary)
+                    Button("再读一次") { store.refresh() }.controlSize(.small)
+                }
             } else {
                 Text("正在读取电源日志…").font(.callout).foregroundStyle(.secondary)
             }

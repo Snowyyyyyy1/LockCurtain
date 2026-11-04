@@ -58,7 +58,15 @@ private struct PairingView: View {
         VStack(spacing: 16) {
             switch pairing.phase {
             case .waiting, .idle:
-                codeBlock
+                if pairing.codeInvalidated {
+                    // D3a：错满 5 次，码作废；「换一个码」照常能按
+                    Text("这 6 位作废了。")
+                        .font(.title3.bold())
+                        .frame(height: 60)
+                        .padding(.top, 4)
+                } else {
+                    codeBlock
+                }
                 Text("输入后两台就认上了，以后同一台手机再来不用输码。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -108,16 +116,6 @@ private struct PairingView: View {
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-
-            case .revoked:
-                Image(systemName: "checkmark.circle")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.secondary)
-                Text("已经撤销了。")
-                    .font(.title3.bold())
-                Text("手机那边会回到没配对。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
 
             case .unsupported:
                 Image(systemName: "exclamationmark.triangle")

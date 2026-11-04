@@ -9,6 +9,8 @@ private let weekdaysMondayFirst = [2, 3, 4, 5, 6, 7, 1]
 struct RulesPane: View {
     @ObservedObject var store: RuleStore
     @State private var editing: CurtainRule?
+    /// 右键「删除」先问一句（D8）
+    @State private var deleting: CurtainRule?
 
     var body: some View {
         Form {
@@ -27,7 +29,7 @@ struct RulesPane: View {
                         Button("编辑") { editing = rule }
                     }
                     .contextMenu {
-                        Button("删除", role: .destructive) { store.rules.removeAll { $0.id == rule.id } }
+                        Button("删除", role: .destructive) { deleting = rule }
                     }
                 }
             } header: {
@@ -45,6 +47,16 @@ struct RulesPane: View {
             }
         }
         .formStyle(.grouped)
+        .alert("删除这条规则？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+               presenting: deleting) { rule in
+            Button("取消", role: .cancel) { deleting = nil }
+            Button("删除", role: .destructive) {
+                store.rules.removeAll { $0.id == rule.id }
+                deleting = nil
+            }
+        } message: { _ in
+            Text("删掉以后，这条规则不再自动盖上幕布。")
+        }
         .sheet(item: $editing) { rule in
             // 新不新看列表里有没有：另存一个 @State 的话，body 没读它，sheet 里拿到的是旧值
             RuleEditor(rule: rule, isNew: !store.rules.contains { $0.id == rule.id }) { saved in
@@ -69,6 +81,7 @@ private struct RuleEditor: View {
     let onSave: (CurtainRule) -> Void
     let onDelete: () -> Void
     let onCancel: () -> Void
+    @State private var confirmingDelete = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,7 +106,7 @@ private struct RuleEditor: View {
             .formStyle(.grouped)
 
             HStack {
-                if !isNew { Button("删除规则", role: .destructive, action: onDelete) }
+                if !isNew { Button("删除规则", role: .destructive) { confirmingDelete = true } }
                 Spacer()
                 Button("取消", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
                 Button(isNew ? "添加" : "保存") { onSave(rule) }
@@ -103,6 +116,12 @@ private struct RuleEditor: View {
             .padding()
         }
         .frame(width: 500, height: 560)
+        .alert("删除这条规则？", isPresented: $confirmingDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive, action: onDelete)
+        } message: {
+            Text("删掉以后，这条规则不再自动盖上幕布。")
+        }
     }
 
     // 空闲
@@ -119,14 +138,15 @@ private struct RuleEditor: View {
 
     // 进程
     @ViewBuilder private var processSection: some View {
-        Toggle("某个 app 或进程在运行", isOn: Binding(
+        Toggle("某个 app 开着", isOn: Binding(
             get: { rule.processes != nil },
             set: { rule.processes = $0 ? [] : nil }))
         if let list = rule.processes {
             IdentityListEditor(list: listBinding(\.processes), placeholder: "进程名，如 claude",
                                menuTitle: "运行中的 app", choices: runningApps)
             if list.isEmpty {
-                Text("列表里任意一个在运行即满足。命令行工具（没有 bundle ID）填进程名。")
+                // COPY-TODO: Camo 没给这行说明；按「某个 app 开着」的叫法改了动词
+                Text("列表里任意一个开着就算。命令行工具（没有 bundle ID）填进程名。")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -269,7 +289,7 @@ extension CurtainRule {
     var summary: String {
         var parts: [String] = []
         if let m = idleMinutes { parts.append("空闲 \(m) 分钟") }
-        if let p = processes { parts.append(p.isEmpty ? "进程（未填）" : p.joined(separator: " / ") + " 在运行") }
+        if let p = processes { parts.append(p.isEmpty ? "某个 app 开着（未填）" : p.joined(separator: " / ") + " 开着") }
         if let b = sleepBlockers { parts.append(b.isEmpty ? "有 app 在阻止睡眠" : b.joined(separator: " / ") + " 在阻止睡眠") }
         if let w = timeWindow {
             func hm(_ m: Int) -> String { String(format: "%02d:%02d", m / 60, m % 60) }

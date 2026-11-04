@@ -109,7 +109,13 @@ final class SleepLedgerStore: ObservableObject {
     private var loadedAt: Date?
 
     func refreshIfStale() {
-        guard !isLoading, loadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
+        guard loadedAt.map({ Date().timeIntervalSince($0) > 300 }) ?? true else { return }
+        refresh()
+    }
+
+    /// 马上重读（「再读一次」）
+    func refresh() {
+        guard !isLoading else { return }
         isLoading = true
         Task.detached(priority: .utility) {
             let result = Result { () throws -> SleepLedger in
@@ -127,7 +133,7 @@ final class SleepLedgerStore: ObservableObject {
         isLoading = false
         switch result {
         case .success(let l): ledger = l; error = nil; loadedAt = Date()
-        case .failure(let e): error = "\(e)"
+        case .failure(let e): error = "\(e)"; NSLog("SleepLedger: 读不到电源日志：%@", "\(e)")
         }
     }
 }
