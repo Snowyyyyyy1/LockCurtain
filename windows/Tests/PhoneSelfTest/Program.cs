@@ -442,6 +442,16 @@ Console.WriteLine("== 重连退避 ==");
     ign.Forgive(7);
     Check(!ign.Contains(7, t0) && ign.Ignore(7, t0) == Sec(30), "不理：认出身份后从头算");
 
+    // 认得的、配过对的手机说不出身份：8 s 断，静默 3 s → 5 s 封顶，不再翻倍；别的地址照旧长拉黑
+    Check(NoIdentifyPolicy.KindOf(true, true) == NoIdentifyKind.KnownPaired && NoIdentifyPolicy.KindOf(true, false) == NoIdentifyKind.Timed
+          && NoIdentifyPolicy.KindOf(false, true) == NoIdentifyKind.Timed && NoIdentifyPolicy.KnownIdentifyTimeout == Sec(8), "说不出身份：认得 + 配过对 8 秒就断，别的照旧");
+    var hold = NoIdentifyPolicy.MakeKnownHoldList<ulong>();
+    var holds = Enumerable.Range(0, 50).Select(_ => hold.Ignore(9, t0).TotalSeconds).ToArray();
+    Check(holds.Take(3).SequenceEqual(new double[] { 3, 5, 5 }) && holds.All(h => h >= 3 && h <= 5), "说不出身份（认得 + 配过对）：静默 3 s → 5 s 封顶，反复 50 次不翻倍");
+    Check(hold.Contains(9, t0.AddSeconds(4.9)) && !hold.Contains(9, t0.AddSeconds(5)), "说不出身份（认得 + 配过对）：到点放出来，永远限时");
+    hold.Forgive(9);
+    Check(hold.Ignore(9, t0) == Sec(3), "说不出身份（认得 + 配过对）：认出身份后从头算");
+
     byte[] Bits(params int[] on) { var b = new byte[16]; foreach (var i in on) b[i / 8] |= (byte)(1 << (i % 8)); return b; }
     var ours = 42;
     var learned = OverflowBitmap.Intersect(null, Bits(ours, 3, 77));

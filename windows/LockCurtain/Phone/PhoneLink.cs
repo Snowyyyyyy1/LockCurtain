@@ -205,6 +205,10 @@ internal sealed class PhoneLink
     readonly Dictionary<ulong, Peer> peers = new();
     /// 暂时不理的地址（窗口关着时订阅上了却说不出自己是谁）；到点自动放出来
     readonly TimedIgnoreList<ulong> ignored = new();
+    /// 认得的手机（memory.Address）说不出身份后的短静默（3 s → 5 s 封顶），到点自动放出来；别的地址走上面那份长的
+    readonly TimedIgnoreList<ulong> knownHold = NoIdentifyPolicy.MakeKnownHoldList<ulong>();
+
+    bool IsIgnored(ulong address, DateTime now) => ignored.Contains(address, now) || knownHold.Contains(address, now);
     /// 每个地址最近收到的广播 RSSI（只记相关的：我们的服务 / 溢出区 / 连着的）
     readonly Dictionary<ulong, List<(int Rssi, DateTime At)>> adverts = new();
     readonly Dictionary<ulong, DateTime> lastCandidateTry = new();
@@ -362,6 +366,7 @@ internal sealed class PhoneLink
         Code = fresh;
         windowOpen = true;
         ignored.Clear();
+        knownHold.Clear();
         lastCandidateTry.Clear();
         if (stoppedAfterEarlyDrops)
         {
@@ -684,7 +689,7 @@ internal sealed class PhoneLink
         // 我们的广播（手机 App 在前台）：手机就在附近、App 在跑，退避全清零
         if (ours && IsPaired && !HasIdentifiedPeer && (knownBackoff.Step > 0 || earlyDrops.Drops > 0)) ResetBackoffs("our advertisement seen");
 
-        if (!ShouldRun || peers.ContainsKey(address) || ignored.Contains(address, at)) return;
+        if (!ShouldRun || peers.ContainsKey(address) || IsIgnored(address, at)) return;
         // 已经有一台验明身份的手机连着、窗口也没开：不用再连别的
         if (!windowOpen && HasIdentifiedPeer) return;
         string reason;
@@ -973,7 +978,7 @@ internal sealed class PhoneLink
         Drop(peer, null);
         var now = DateTime.UtcNow;
 
-        if (!ownCancel && !wasReady && ShouldRun && !ignored.Contains(peer.Address, now))
+        if (!ownCancel && !wasReady && ShouldRun && !IsIgnored(peer.Address, now))
         {
             var (outcome, delay) = earlyDrops.NoteDrop(IsPaired, now);
             switch (outcome)
@@ -995,7 +1000,7 @@ internal sealed class PhoneLink
             }
         }
         if (!ShouldRun) return;
-        if (!ignored.Contains(peer.Address, now) && wasIdentified && IsPaired) ConnectKnown("pending reconnect after drop");
+        if (!IsIgnored(peer.Address, now) && wasIdentified && IsPaired) ConnectKnown("pending reconnect after drop");
         StartWatcher();
     }
 
@@ -1034,19 +1039,45 @@ internal sealed class PhoneLink
         foreach (var p in peers.Values.ToList()) Drop(p, null);
     }
 
-    /// 窗口关着时订阅上一台说不出身份的手机：等 IdentifyTimeout，还不说就断开、这个地址暂时不理（30 s → … → 5 min，到点放出来）
+    /// 窗口关着时订阅上一台说不出身份的手机：认得（memory.Address）+ 配过对的等 8 s，还不说就断开、静默 3 s → 5 s（封顶）再连；
+    /// 别的地址等 IdentifyTimeout，断开、这个地址暂时不理（30 s → … → 5 min，到点放出来）。见 NoIdentifyPolicy（和 Mac 一样）
     void ScheduleIdentifyCheck(Peer peer)
     {
-        var t = new System.Windows.Forms.Timer { Interval = (int)IdentifyTimeout.TotalMilliseconds };
+        var knownPaired = NoIdentifyPolicy.KindOf(IsPaired, memory.Address == peer.Address) == NoIdentifyKind.KnownPaired;
+        var timeout = knownPaired ? NoIdentifyPolicy.KnownIdentifyTimeout : IdentifyTimeout;
+        var t = new System.Windows.Forms.Timer { Interval = (int)timeout.TotalMilliseconds };
         t.Tick += (_, _) =>
         {
             t.Stop();
             t.Dispose();
             if (peer.Closed || peer.PhoneID != null || windowOpen) return;
-            var d = ignored.Ignore(peer.Address, DateTime.UtcNow);
-            PhoneLog.Write($"peripheral {peer.Name} did not identify within {(int)IdentifyTimeout.TotalSeconds}s of subscribing; ignoring it for {d.TotalSeconds:0}s");
+            if (knownPaired)
+            {
+                var hold = knownHold.Ignore(peer.Address, DateTime.UtcNow);
+                PhoneLog.Write($"hold: known paired peripheral {peer.Name} did not identify within {(int)timeout.TotalSeconds}s of subscribing; short hold {hold.TotalSeconds:0}s (max {NoIdentifyPolicy.KnownHoldCap.TotalSeconds:0}s), then reconnecting");
+                ScheduleHoldResume(peer.Address, hold);
+            }
+            else
+            {
+                var d = ignored.Ignore(peer.Address, DateTime.UtcNow);
+                PhoneLog.Write($"ignore: peripheral {peer.Name} did not identify within {(int)timeout.TotalSeconds}s of subscribing; ignoring it for {d.TotalSeconds:0}s");
+            }
             Drop(peer, null);
             StartWatcher();
+        };
+        t.Start();
+    }
+
+    /// 短静默到点：接着连记得的地址（扫到我们的广播也会连，这里是兜底，保证一直有东西在重试）
+    void ScheduleHoldResume(ulong address, TimeSpan after)
+    {
+        var t = new System.Windows.Forms.Timer { Interval = (int)(after.TotalMilliseconds + 100) };
+        t.Tick += (_, _) =>
+        {
+            t.Stop();
+            t.Dispose();
+            if (!ShouldRun || peers.ContainsKey(address) || IsIgnored(address, DateTime.UtcNow)) return;
+            ConnectKnown("pending reconnect after short hold");
         };
         t.Start();
     }
@@ -1072,6 +1103,7 @@ internal sealed class PhoneLink
         {
             if (Phase == PhonePhase.BluetoothOff) SetPhase(windowOpen ? (Code.Length > 0 ? PhonePhase.Waiting : PhonePhase.CodeDead) : PhonePhase.Idle);
             ignored.Clear();
+            knownHold.Clear();
             lastCandidateTry.Clear();
             ResetBackoffs("bluetooth on");
             Resume();
@@ -1112,6 +1144,7 @@ internal sealed class PhoneLink
         DropAll("system resume");
         StopWatcher();
         ignored.Clear();
+        knownHold.Clear();
         lastCandidateTry.Clear();
         ResetBackoffs("system resume");
         Resume();
@@ -1130,10 +1163,11 @@ internal sealed class PhoneLink
             suspended = false;
             suspendedAt = null;
             ignored.Clear();
+            knownHold.Clear();
             lastCandidateTry.Clear();
             ResetBackoffs("stale suspend cleared");
         }
-        var released = ignored.Expire(now);
+        var released = ignored.Expire(now).Concat(knownHold.Expire(now)).ToList();
         if (released.Count > 0) PhoneLog.Write($"health: ignore expired for {string.Join(", ", released.Select(FormatAddress))}");
         if (!initialized || radioOn != true || !ShouldRun) return;
         if (watcher is { } w)
@@ -1378,6 +1412,7 @@ internal sealed class PhoneLink
                 var newlyIdentified = peer.PhoneID != phoneID;
                 peer.PhoneID = phoneID;
                 ignored.Forgive(peer.Address);
+                knownHold.Forgive(peer.Address);
                 memory.Remember(peer.Address);
                 Send(c.Ack!, peer);
                 if (c.ConfirmedPairing)

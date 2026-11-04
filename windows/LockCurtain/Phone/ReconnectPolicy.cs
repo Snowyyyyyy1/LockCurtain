@@ -1,8 +1,10 @@
 // ReconnectPolicy.cs —— 断线重连的退避规则（纯函数，不碰蓝牙；和 Mac 的 Sources/ReconnectPolicy.swift 同一套）
 //
-// 不变式（三端一样）：配过对 + 蓝牙开着 + 没连上 ⇒ 总有东西在一直重试，只是间隔翻倍、最长 5 分钟；
+// 不变式（三端一样）：配过对 + 蓝牙开着 + 没连上 ⇒ 总有东西在一直重试，只是间隔拉开、最长 5 分钟；
 // 配过对时没有任何「永久停手」。只有「没配过、开着配对窗口」时，连续早断 5 次还是硬停（等重新打开窗口）。
 // 退避只拉开「失败的连接尝试」之间的间隔：扫描器一直开着，一看到手机的广播就马上连、退避清零。
+// 认得的、配过对的手机订阅上了却不表明身份：8 s 就断开，只静默 3 s → 5 s（NoIdentifyPolicy，不翻倍成长拉黑），
+// 手机 App 一打开几秒内就连上；别的地址照旧 30 s → … → 5 min。
 //
 // 自测：windows/Tests/PhoneSelfTest（「重连退避」那一节）。
 
@@ -81,9 +83,13 @@ internal sealed class EarlyDropPolicy
 }
 
 /// 暂时不理的地址：每次再被拉黑时间翻倍（30 s → 5 min），到点自动放出来；认出身份清零
-internal sealed class TimedIgnoreList<TKey> where TKey : notnull
+internal sealed class TimedIgnoreList<TKey>(TimeSpan baseDelay, TimeSpan cap) where TKey : notnull
 {
     public static readonly TimeSpan Base = TimeSpan.FromSeconds(30);
+
+    /// 默认 30 s → 5 min；认得的手机用短档（NoIdentifyPolicy.MakeKnownHoldList）
+    public TimedIgnoreList() : this(Base, Reconnect.Cap) { }
+
     readonly Dictionary<TKey, DateTime> until = new();
     readonly Dictionary<TKey, int> strikes = new();
 
@@ -91,7 +97,7 @@ internal sealed class TimedIgnoreList<TKey> where TKey : notnull
     {
         var n = strikes.GetValueOrDefault(key);
         strikes[key] = n + 1;
-        var d = Reconnect.Delay(n, Base, Reconnect.Cap);
+        var d = Reconnect.Delay(n, baseDelay, cap);
         until[key] = now + d;
         return d;
     }
@@ -120,6 +126,22 @@ internal sealed class TimedIgnoreList<TKey> where TKey : notnull
     }
 
     public int Count => until.Count;
+}
+
+internal enum NoIdentifyKind { KnownPaired, Timed }
+
+/// 认得的、配过对的手机订阅上了却不表明身份（手机 App 没在跑，系统替它留着服务）：只做短周期，不长拉黑
+/// （和 Mac 的 NoIdentifyPolicy 一样；Windows 没有「没有服务」那条路，也没有「永久不理」）。
+/// 认得 + 配过对：订阅上 8 s 还不说就断开，静默 3 s → 5 s（封顶 5 s，不翻倍到更长）再连；别的地址照旧 30 s → … → 5 min。
+internal static class NoIdentifyPolicy
+{
+    public static readonly TimeSpan KnownIdentifyTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan KnownHoldBase = TimeSpan.FromSeconds(3);
+    public static readonly TimeSpan KnownHoldCap = TimeSpan.FromSeconds(5);
+
+    public static NoIdentifyKind KindOf(bool paired, bool known) => paired && known ? NoIdentifyKind.KnownPaired : NoIdentifyKind.Timed;
+
+    public static TimedIgnoreList<TKey> MakeKnownHoldList<TKey>() where TKey : notnull => new(KnownHoldBase, KnownHoldCap);
 }
 
 /// 苹果「溢出区」位图（16 字节）。手机后台广播时，位图里除了我们服务的那几位，还有别的后台 App 的位：
