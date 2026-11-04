@@ -122,9 +122,6 @@ enum Transport: Equatable {
 /// 走网络时手机能做什么：默认拒绝，只有明确列出来的才放行。
 /// 规则在接收这一侧，不靠签名里带什么标记，所以蓝牙上签的撤下 / 解除配对被拿到网络上重放也是拒绝
 enum NetworkPolicy {
-    /// 网络命令的传输标记：n1:<32 位十六进制 nonce>:<命令>
-    static let noncePrefix = "n1:"
-
     /// 命令（已去掉 n1: 标记）网络上是否允许。ping、away、awake:off|1h|2h|5h|always、name:*
     static func allows(command: String) -> Bool {
         if command.hasPrefix("name:") { return true }
@@ -132,45 +129,6 @@ enum NetworkPolicy {
         case "ping", "away", "awake:off", "awake:1h", "awake:2h", "awake:5h", "awake:always": return true
         default: return false
         }
-    }
-
-    /// 网络命令字符串 → (nonce?, 命令)；有 n1: 前缀但格式不对返回 nil
-    static func unwrap(_ command: String) -> (nonce: Data?, command: String)? {
-        guard command.hasPrefix(noncePrefix) else { return (nil, command) }
-        let rest = command.dropFirst(noncePrefix.count)
-        let hex = rest.prefix(PairingCrypto.nonceLength * 2)
-        guard hex.count == PairingCrypto.nonceLength * 2,
-              rest.dropFirst(hex.count).first == ":",
-              let nonce = Self.data(hex: String(hex)) else { return nil }
-        return (nonce, String(rest.dropFirst(hex.count + 1)))
-    }
-
-    /// 手机：把命令包上 nonce（ping 不用）
-    static func wrap(_ command: String, nonce: Data) -> String {
-        noncePrefix + hex(nonce) + ":" + command
-    }
-
-    static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
-
-    static func data(hex: String) -> Data? {
-        let chars = Array(hex.utf8)
-        guard chars.count % 2 == 0 else { return nil }
-        func nibble(_ c: UInt8) -> UInt8? {
-            switch c {
-            case 48...57: return c - 48
-            case 97...102: return c - 87
-            case 65...70: return c - 55
-            default: return nil
-            }
-        }
-        var out = Data()
-        var i = 0
-        while i < chars.count {
-            guard let hi = nibble(chars[i]), let lo = nibble(chars[i + 1]) else { return nil }
-            out.append(hi << 4 | lo)
-            i += 2
-        }
-        return out
     }
 }
 
@@ -392,7 +350,7 @@ final class PairingAuthority {
         var command = envelope.command
         if transport == .network {
             // 签名和计数已过（计数已记），再看白名单：签了名的撤下也一样拒绝
-            let parsed = NetworkPolicy.unwrap(envelope.command)
+            let parsed = NetworkCommand.unwrap(envelope.command)
             let inner = parsed?.command ?? envelope.command
             guard let parsed, NetworkPolicy.allows(command: inner) else {
                 log("network command from \(id.uuidString) refused: not on the allow-list")

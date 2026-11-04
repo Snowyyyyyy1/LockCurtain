@@ -75,13 +75,13 @@ func runNetworkTests() {
         netExpect(!NetworkPolicy.allows(command: c), "白名单：「\(c)」拒绝（默认拒绝）")
     }
     let nonce = PairingCrypto.makeNonce()
-    let wrapped = NetworkPolicy.wrap("away", nonce: nonce)
-    netExpect(wrapped.count == 3 + 32 + 1 + 4 && NetworkPolicy.unwrap(wrapped)?.nonce == nonce
-              && NetworkPolicy.unwrap(wrapped)?.command == "away", "n1: 包装：nonce 和命令拆得回来")
-    netExpect(NetworkPolicy.unwrap("away")?.nonce == nil && NetworkPolicy.unwrap("n1:zz:away") == nil
-              && NetworkPolicy.unwrap("n1:" + String(repeating: "a", count: 31) + ":away") == nil
-              && NetworkPolicy.unwrap("n1:" + String(repeating: "a", count: 32) + "away") == nil, "n1: 包装：格式不对返回 nil")
-    netExpect(NetworkPolicy.unwrap("n1:" + NetworkPolicy.hex(nonce) + ":name:a:b")?.command == "name:a:b", "n1: 包装：命令里再有冒号没关系")
+    let wrapped = NetworkCommand.wrap("away", nonce: nonce)
+    netExpect(wrapped.count == 3 + 32 + 1 + 4 && NetworkCommand.unwrap(wrapped)?.nonce == nonce
+              && NetworkCommand.unwrap(wrapped)?.command == "away", "n1: 包装：nonce 和命令拆得回来")
+    netExpect(NetworkCommand.unwrap("away")?.nonce == nil && NetworkCommand.unwrap("n1:zz:away") == nil
+              && NetworkCommand.unwrap("n1:" + String(repeating: "a", count: 31) + ":away") == nil
+              && NetworkCommand.unwrap("n1:" + String(repeating: "a", count: 32) + "away") == nil, "n1: 包装：格式不对返回 nil")
+    netExpect(NetworkCommand.unwrap("n1:" + NetworkCommand.hex(nonce) + ":name:a:b")?.command == "name:a:b", "n1: 包装：命令里再有冒号没关系")
 
     // 权威端：via: .network
     var authLog: [String] = []
@@ -119,33 +119,33 @@ func runNetworkTests() {
     netExpect(pingOK, "网络命令：签名的 ping 收下，不要 nonce")
     // away 用 nonce
     let n1 = pollNonce()!
-    let away = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: n1)), via: .network)
+    let away = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: n1)), via: .network)
     var awayOK = false
     if case .accepted(let c, _, _, _, _) = away { awayOK = c == "away" }
     netExpect(awayOK && ackStatus(away) == .accepted, "网络命令：n1:<nonce>:away 收下，交出去的是 away")
     // 同一个 nonce 再用：Ack 2
-    let reuse = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: n1)), via: .network)
+    let reuse = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: n1)), via: .network)
     netExpect(reason(reuse) == .badNonce && ackStatus(reuse) == .replay, "网络命令：nonce 用第二次 → Ack 2")
     // 没带 nonce
     let bare = mac.handleCommand(seal("away"), via: .network)
     netExpect(reason(bare) == .badNonce && ackStatus(bare) == .replay, "网络命令：away 不带 nonce → Ack 2")
     // 没发过的 nonce
-    let fake = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: PairingCrypto.makeNonce())), via: .network)
+    let fake = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: PairingCrypto.makeNonce())), via: .network)
     netExpect(reason(fake) == .badNonce, "网络命令：Mac 没发过的 nonce → Ack 2")
     // 过期
     let n2 = pollNonce()!
     now = now.addingTimeInterval(PairingAuthority.networkNonceLifetime + 1)
-    let stale = mac.handleCommand(seal(NetworkPolicy.wrap("awake:1h", nonce: n2)), via: .network)
+    let stale = mac.handleCommand(seal(NetworkCommand.wrap("awake:1h", nonce: n2)), via: .network)
     netExpect(reason(stale) == .badNonce && ackStatus(stale) == .replay, "网络命令：过期的 nonce → Ack 2")
     // 同时留几个，超过上限最旧的作废
     let many = (0..<(PairingAuthority.networkNonceLimit + 1)).map { _ in pollNonce()! }
-    let oldest = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: many[0])), via: .network)
-    let newest = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: many.last!)), via: .network)
+    let oldest = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: many[0])), via: .network)
+    let newest = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: many.last!)), via: .network)
     netExpect(reason(oldest) == .badNonce && ackStatus(newest) == .accepted, "网络命令：每台手机只留最近 \(PairingAuthority.networkNonceLimit) 个 nonce")
     // name / awake
     let n3 = pollNonce()!
     var nameOK = false
-    if case .accepted(let c, _, _, _, _) = mac.handleCommand(seal(NetworkPolicy.wrap("name:小明的 iPhone", nonce: n3)), via: .network) {
+    if case .accepted(let c, _, _, _, _) = mac.handleCommand(seal(NetworkCommand.wrap("name:小明的 iPhone", nonce: n3)), via: .network) {
         nameOK = c == "name:小明的 iPhone"
     }
     netExpect(nameOK, "网络命令：name: 收下，大小写不动")
@@ -155,14 +155,14 @@ func runNetworkTests() {
         let n = pollNonce()!
         let before = store.load(phone)!.lastCounter
         for wrapIt in [false, true] {
-            let o = mac.handleCommand(seal(wrapIt ? NetworkPolicy.wrap(cmd, nonce: n) : cmd), via: .network)
+            let o = mac.handleCommand(seal(wrapIt ? NetworkCommand.wrap(cmd, nonce: n) : cmd), via: .network)
             netExpect(reason(o) == .networkForbidden && ackStatus(o) == .notAllowedOnNetwork
                       && (ackOf(o).map { PairingCrypto.verifyAck($0, key: pkey) } == true),
                       "网络命令：签了名的 \(cmd)\(wrapIt ? "（带 nonce）" : "") → 签名的 Ack 5")
         }
         netExpect(store.load(phone)!.lastCounter == before + 2, "网络命令：\(cmd) 的计数照记（重放不了）")
         // 没被禁止的 nonce 没被耗掉
-        let ok = mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: n)), via: .network)
+        let ok = mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: n)), via: .network)
         netExpect(ackStatus(ok) == .accepted, "网络命令：被拒的 \(cmd) 没耗掉 nonce")
     }
     // 同一条蓝牙上签的 hide 拿到网络上也拒绝，在蓝牙上则照旧收下
@@ -237,7 +237,7 @@ func runNetworkTests() {
     // 撤销之后 nonce 作废
     let nr = pollNonce()!
     _ = mac.revoke(phone)
-    netExpect(reason(mac.handleCommand(seal(NetworkPolicy.wrap("away", nonce: nr)), via: .network)) == .unknownPhone, "撤销之后：这台手机的网络命令被拒")
+    netExpect(reason(mac.handleCommand(seal(NetworkCommand.wrap("away", nonce: nr)), via: .network)) == .unknownPhone, "撤销之后：这台手机的网络命令被拒")
 }
 runNetworkTests()
 

@@ -779,3 +779,51 @@ enum NetFraming {
         }
     }
 }
+
+
+// MARK: - 网络命令的 nonce 包装
+
+/// 走网络的命令字符串：除 ping 外是 n1:<32 位十六进制 nonce>:<命令>（nonce 在签名里，单次有效）。Mac 和 iPhone 共用
+enum NetworkCommand {
+    /// 传输标记
+    static let noncePrefix = "n1:"
+
+    /// 网络命令字符串 → (nonce?, 命令)；有 n1: 前缀但格式不对返回 nil
+    static func unwrap(_ command: String) -> (nonce: Data?, command: String)? {
+        guard command.hasPrefix(noncePrefix) else { return (nil, command) }
+        let rest = command.dropFirst(noncePrefix.count)
+        let hex = rest.prefix(PairingCrypto.nonceLength * 2)
+        guard hex.count == PairingCrypto.nonceLength * 2,
+              rest.dropFirst(hex.count).first == ":",
+              let nonce = data(hex: String(hex)) else { return nil }
+        return (nonce, String(rest.dropFirst(hex.count + 1)))
+    }
+
+    /// 手机：把命令包上 nonce（ping 不用）
+    static func wrap(_ command: String, nonce: Data) -> String {
+        noncePrefix + hex(nonce) + ":" + command
+    }
+
+    static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
+
+    static func data(hex: String) -> Data? {
+        let chars = Array(hex.utf8)
+        guard chars.count % 2 == 0 else { return nil }
+        func nibble(_ c: UInt8) -> UInt8? {
+            switch c {
+            case 48...57: return c - 48
+            case 97...102: return c - 87
+            case 65...70: return c - 55
+            default: return nil
+            }
+        }
+        var out = Data()
+        var i = 0
+        while i < chars.count {
+            guard let hi = nibble(chars[i]), let lo = nibble(chars[i + 1]) else { return nil }
+            out.append(hi << 4 | lo)
+            i += 2
+        }
+        return out
+    }
+}
