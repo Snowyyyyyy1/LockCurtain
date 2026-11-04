@@ -24,7 +24,8 @@
 //   手机 → Mac  Command   = ver | 0x03 | phoneID(16) | counter(8, 大端) | len(1) | command(UTF-8) | mac(32)
 //               mac = HMAC-SHA256(sharedKey, 前面所有字节)；counter 必须严格递增
 //   Mac  → 手机 Ack       = ver | 0x06 | phoneID(16) | counter(8) | status(1) [| mac(32)，只有 status=0 才带]
-//               status 0 = 收下了（签名，手机据此确认握手真的成了），1 = 不认识/签名错，2 = 旧计数，3 = 格式错
+//               status 0 = 收下了（签名，手机据此确认握手真的成了），1 = 不认识/签名错，2 = 旧计数，3 = 格式错，
+//               4 = 没做：电脑缺权限（Mac 没给辅助功能，不肯盖；和 0 一样签名，老手机见到非 0 就当没做）
 //   Mac  → 手机 State     = ver | 0x05 | phoneID(16) | seq(8) | state(1: 0 开着 / 1 盖着) | mac(32)
 //   Mac  → 手机 Revoke    = ver | 0x04 | phoneID(16) | mac(32)   撤销通知，签名后 Mac 才删钥匙
 //
@@ -40,6 +41,13 @@
 //               counter 是被回复的那条 Presence / LiftNow 的计数；status 0 = 撤下了，1 = 太远，2 = 没撤（别的原因），
 //               3 = 幕布本来就没盖着（老手机不认识 3，验不过就当没收到，等超时）
 //               Presence 只在撤下了的时候回；LiftNow 每次都回
+//
+// 保持唤醒（协议 v3，版本 1，新类型；老手机不认识就丢掉）：
+//   手机 → 电脑 Command 字符串 awake:off / awake:1h / awake:2h / awake:5h / awake:always，name:<手机名>
+//   电脑 → 手机 KeepAwakeState = ver | 0x0F | phoneID(16) | seq(8, 大端) | mode(1) | endsAt(8, 大端 unix 秒，0 = 没有)
+//                                | len(1) | appName(UTF-8, ≤ 64 字节) | mac(32)
+//               mode 0 关 / 1 定时（endsAt 结束）/ 2 一直 / 3 到电脑上定的时刻（endsAt）/ 4 某个 app 开着时（appName）
+//               seq 和 State 共用同一个每台手机的递增计数
 //
 // 分帧（PairingFraming）：任何一条消息按传输层的单包上限切块，每块前面 1 字节头：
 //   bit7 = 最后一块，低 7 位 = 块序号（模 128）。
@@ -73,11 +81,12 @@ enum PairingCrypto {
         case presence = 0x0C
         case liftNow = 0x0D
         case liftResult = 0x0E
+        case keepAwakeState = 0x0F
 
         var isHandshake: Bool {
             switch self {
             case .pairRequest, .pairResponse, .pairReject, .pairConfirm, .pairAccepted, .pairAbort: return true
-            case .command, .revoke, .state, .ack, .poll, .presence, .liftNow, .liftResult: return false
+            case .command, .revoke, .state, .ack, .poll, .presence, .liftNow, .liftResult, .keepAwakeState: return false
             }
         }
 
@@ -296,13 +305,18 @@ enum PairingCrypto {
         case unknownOrBadSignature = 1
         case replay = 2
         case malformed = 3
+        /// 没做：电脑缺权限（Mac 没给辅助功能时不盖）。和 accepted 一样带签名
+        case missingPermission = 4
+
+        /// 带签名的两种：收下了 / 缺权限没做
+        var isSigned: Bool { self == .accepted || self == .missingPermission }
     }
 
     struct Ack: Equatable {
         var phoneID: UUID
         var counter: UInt64
         var status: AckStatus
-        /// 只有 accepted 才签名
+        /// 只有 accepted / missingPermission 才签名
         var mac: Data?
 
         static func signedPart(phoneID: UUID, counter: UInt64, status: AckStatus) -> Data {
@@ -443,13 +457,14 @@ enum PairingCrypto {
 
     static func makeAck(phoneID: UUID, counter: UInt64, status: AckStatus, key: SymmetricKey?) -> Data {
         let signed = Ack.signedPart(phoneID: phoneID, counter: counter, status: status)
-        guard status == .accepted, let key else { return signed }
+        guard status.isSigned, let key else { return signed }
         return signed + hmac(signed, key: key)
     }
 
-    /// 手机：只有带对签名的 accepted 才算真收下
+    /// 手机：签名对不对。只有带对签名的 accepted（收下了）和 missingPermission（缺权限没做）会过；
+    /// 调用方自己再看 status：verifyAck 过了、status 是 accepted 才算真收下
     static func verifyAck(_ ack: Ack, key: SymmetricKey) -> Bool {
-        guard ack.status == .accepted, let mac = ack.mac else { return false }
+        guard ack.status.isSigned, let mac = ack.mac else { return false }
         return hmacValid(mac, for: Ack.signedPart(phoneID: ack.phoneID, counter: ack.counter, status: ack.status), key: key)
     }
 
@@ -479,6 +494,55 @@ enum PairingCrypto {
         guard (try? check(b, .revoke)) != nil, b.count == 2 + 16 + 32,
               uuid(b[2..<18]) == phoneID else { return false }
         return hmacValid(Data(b[18...]), for: Data(b[0..<18]), key: key)
+    }
+
+    // MARK: - 保持唤醒状态（v3）
+
+    enum KeepAwakeMode: UInt8 {
+        case off = 0
+        /// endsAt = 什么时候结束
+        case timed = 1
+        case always = 2
+        /// 到电脑上定的时刻（endsAt）
+        case untilTime = 3
+        /// 某个 app 开着时（appName）
+        case whileApp = 4
+    }
+
+    static let maxAppNameBytes = 64
+
+    /// 截到不超过 limit 字节，不切断 UTF-8 字符
+    static func utf8Prefix(_ text: String, maxBytes limit: Int) -> Data {
+        var out = Data()
+        for ch in text {
+            let d = Data(String(ch).utf8)
+            guard out.count + d.count <= limit else { break }
+            out.append(d)
+        }
+        return out
+    }
+
+    static func makeKeepAwakeState(phoneID: UUID, seq: UInt64, mode: UInt8, endsAt: UInt64, appName: String,
+                                   key: SymmetricKey) -> Data {
+        let name = utf8Prefix(appName, maxBytes: maxAppNameBytes)
+        let signed = header(.keepAwakeState) + bytes(phoneID) + bigEndian(seq) + Data([mode]) + bigEndian(endsAt)
+            + Data([UInt8(name.count)]) + name
+        return signed + hmac(signed, key: key)
+    }
+
+    /// 手机：验电脑报来的保持唤醒状态；签名不对、不是给这台手机的、格式不对就是 nil。
+    /// 不认识的 mode 也原样交出去（调用方自己决定怎么显示）
+    static func openKeepAwakeState(_ data: Data, phoneID: UUID, key: SymmetricKey)
+        -> (seq: UInt64, mode: UInt8, endsAt: UInt64, appName: String)? {
+        let b = [UInt8](data)
+        let head = 2 + 16 + 8 + 1 + 8 + 1
+        guard (try? check(b, .keepAwakeState)) != nil, b.count >= head + 32 else { return nil }
+        let len = Int(b[head - 1])
+        guard len <= maxAppNameBytes, b.count == head + len + 32,
+              uuid(b[2..<18]) == phoneID,
+              hmacValid(Data(b[(head + len)...]), for: Data(b[0..<(head + len)]), key: key),
+              let name = String(bytes: b[head..<(head + len)], encoding: .utf8) else { return nil }
+        return (uint64(b[18..<26]), b[26], uint64(b[27..<35]), name)
     }
 
     // MARK: - 手机撤下幕布

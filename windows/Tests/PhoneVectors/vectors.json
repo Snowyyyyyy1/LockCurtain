@@ -2582,6 +2582,12 @@
     ]
   },
   "messages" : {
+    "ackMissingPermission" : {
+      "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d041703485fbe59001346ee1bf413d7d8983a7248530bd02f53d579bd373a752fbb",
+      "counter" : "77",
+      "signed" : true,
+      "status" : 4
+    },
     "acks" : [
       {
         "bytes" : "01066f9619ff8b86d011b42d00c04fc964ff000000000000004d007608428d55714461e60096ed028806b9923a89f02b74824dd82d677f6185df13",
@@ -2629,6 +2635,96 @@
         "command" : "",
         "counter" : "3",
         "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff000000000000000300d6c1bab3fb48b2fac6ad26a26834fa7102cab426812b1c7c6ee33d0ca49ddd5a"
+      }
+    ],
+    "commandsV3" : [
+      {
+        "command" : "awake:off",
+        "counter" : "20",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000014096177616b653a6f6666f77fe11df3d4b1b62af96e826340fbcb8b66241c6df8081e17bef5917b5d9c73"
+      },
+      {
+        "command" : "awake:1h",
+        "counter" : "21",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000015086177616b653a316858040fb562f6d7b4099816c5febfc1ae617cfc85b34056d828df22821e814826"
+      },
+      {
+        "command" : "awake:2h",
+        "counter" : "22",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000016086177616b653a32683ec8d45a28ecb04336ac3893c8d7ff56d504a17a490c26f410fa2937599c47b0"
+      },
+      {
+        "command" : "awake:5h",
+        "counter" : "23",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff0000000000000017086177616b653a3568b5f8fb564bfe1f36322801740e517d91aef600276fc3bfc1e8f308e8388d7547"
+      },
+      {
+        "command" : "awake:always",
+        "counter" : "24",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff00000000000000180c6177616b653a616c776179736eef3342869792fa4d1d948589ba1cd15e5624c9fe6f409f4d59078719cdff0a"
+      },
+      {
+        "command" : "name:iPhone",
+        "counter" : "25",
+        "sealed" : "01036f9619ff8b86d011b42d00c04fc964ff00000000000000190b6e616d653a6950686f6e65ec1ba545acea003ad2a9b4ef623c943d7718489515df6bd0b8ac118d21fee0fe"
+      }
+    ],
+    "keepAwakeStates" : [
+      {
+        "appName" : "",
+        "appNameIn" : "",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c507c000000000000000000003d08f7d2b330cedb3a5b7c8e2bf136ad23c2e97d416af3804ae08dd9866173c7",
+        "endsAt" : "0",
+        "mode" : 0,
+        "seq" : "1800000000124"
+      },
+      {
+        "appName" : "",
+        "appNameIn" : "",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c507d01000000006b49e010001ac4b7f483ae3fb260b517cd90c514670ed560bc51cec5ef4c0efdf10b8f81aa",
+        "endsAt" : "1800003600",
+        "mode" : 1,
+        "seq" : "1800000000125"
+      },
+      {
+        "appName" : "",
+        "appNameIn" : "",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c507e020000000000000000002618d597ad7333a0fc0f60c3c009f7662bf3b62d2b19c6f3459bf59338b3d1be",
+        "endsAt" : "0",
+        "mode" : 2,
+        "seq" : "1800000000126"
+      },
+      {
+        "appName" : "",
+        "appNameIn" : "",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c507f03000000006b4a4988004a29a399e55461e7b4a8564051d8cf58277137402a8927073d9b58e2bb9876ad",
+        "endsAt" : "1800030600",
+        "mode" : 3,
+        "seq" : "1800000000127"
+      },
+      {
+        "appName" : "Xcode",
+        "appNameIn" : "Xcode",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c50800400000000000000000558636f64650343a22b0e3d95596d1529788a792632fcdc9dc9b6a63f14d49f60064c5c87cf",
+        "endsAt" : "0",
+        "mode" : 4,
+        "seq" : "1800000000128"
+      },
+      {
+        "appName" : "微信",
+        "appNameIn" : "微信",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c508104000000000000000006e5beaee4bfa149c91d4579255dab470042b36e0e9ec8c2e5e375de8e5c8134e4c9e4145542dd",
+        "endsAt" : "0",
+        "mode" : 4,
+        "seq" : "1800000000129"
+      },
+      {
+        "appName" : "应用应用应用应用应用应用应用应用应用应用应",
+        "appNameIn" : "应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用应用",
+        "bytes" : "010f6f9619ff8b86d011b42d00c04fc964ff000001a3185c50820400000000000000003fe5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba94e794a8e5ba946675afbf06c25b1d754db5b4c48c6950daa7e47b8a04b2927149fc9510c0e50d",
+        "endsAt" : "0",
+        "mode" : 4,
+        "seq" : "1800000000130"
       }
     ],
     "key" : "161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8ef",

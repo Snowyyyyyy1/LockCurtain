@@ -172,6 +172,29 @@ msgs["liftNow"] = ["counter": "13", "bytes": hex(PairingCrypto.sealLiftNow(nonce
 msgs["liftResults"] = [PairingCrypto.LiftStatus.lifted, .tooFar, .refused, .notCovered].map { s -> [String: Any] in
     ["status": Int(s.rawValue), "counter": "13", "bytes": hex(PairingCrypto.makeLiftResult(s, counter: 13, phoneID: phoneA, key: key))]
 }
+// 协议 v3（单独的键，老的 C# 测试读 "acks" 时只认 0–3）：缺权限的收据带签名、保持唤醒状态、新的命令字符串
+msgs["ackMissingPermission"] = [
+    "status": 4, "counter": "77", "signed": true,
+    "bytes": hex(PairingCrypto.makeAck(phoneID: phoneA, counter: 77, status: .missingPermission, key: key)),
+]
+msgs["keepAwakeStates"] = [
+    (UInt8(0), UInt64(0), "", UInt64(1800000000124)),
+    (1, 1_800_003_600, "", 1800000000125),
+    (2, 0, "", 1800000000126),
+    (3, 1_800_030_600, "", 1800000000127),
+    (4, 0, "Xcode", 1800000000128),
+    (4, 0, "微信", 1800000000129),
+    (4, 0, String(repeating: "应用", count: 40), 1800000000130),   // 240 字节，截到 63（不切断字符）
+].map { mode, endsAt, app, seq -> [String: Any] in
+    let bytes = PairingCrypto.makeKeepAwakeState(phoneID: phoneA, seq: seq, mode: mode, endsAt: endsAt, appName: app, key: key)
+    let opened = PairingCrypto.openKeepAwakeState(bytes, phoneID: phoneA, key: key)!
+    return ["mode": Int(mode), "endsAt": String(endsAt), "appNameIn": app, "appName": opened.appName,
+            "seq": String(seq), "bytes": hex(bytes)]
+}
+msgs["commandsV3"] = [("awake:off", 20), ("awake:1h", 21), ("awake:2h", 22), ("awake:5h", 23), ("awake:always", 24), ("name:iPhone", 25)]
+    .map { c, n -> [String: Any] in
+        ["command": c, "counter": String(n), "sealed": hex(PairingCrypto.sealCommand(c, phoneID: phoneA, counter: UInt64(n), key: key)!)]
+    }
 root["messages"] = msgs
 
 // 分帧

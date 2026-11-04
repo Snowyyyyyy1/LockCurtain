@@ -146,6 +146,41 @@ enum PairingSelfTest {
         // 13. 收据 / 状态 / 撤销
         let unsignedOK = PairingCrypto.Ack(phoneID: phoneID, counter: 5, status: .accepted, mac: nil)
         expect(!PairingCrypto.verifyAck(unsignedOK, key: key), "收据：不带签名的「收下」不算数")
+        // 13b. v3：缺权限的收据（status 4）带签名，手机能验过，但不算「收下」
+        let perm = PairingCrypto.makeAck(phoneID: phoneID, counter: 6, status: .missingPermission, key: key)
+        let permAck = try? PairingCrypto.Ack(decoding: perm)
+        expect(perm.count == 59 && permAck?.status == .missingPermission && permAck?.mac != nil
+               && permAck.map { PairingCrypto.verifyAck($0, key: key) } == true,
+               "收据 v3：status 4（缺权限）带签名、能验过")
+        expect(permAck.map { PairingCrypto.verifyAck($0, key: otherKey) } == false
+               && !PairingCrypto.verifyAck(PairingCrypto.Ack(phoneID: phoneID, counter: 6, status: .missingPermission, mac: nil), key: key),
+               "收据 v3：status 4 别的钥匙 / 不带签名验不过")
+        expect(PairingCrypto.makeAck(phoneID: phoneID, counter: 6, status: .replay, key: key).count == 27,
+               "收据 v3：1–3 照旧不签")
+
+        // 13c. v3：保持唤醒状态（0x0F）
+        let kaID = phoneID
+        let ka = PairingCrypto.makeKeepAwakeState(phoneID: kaID, seq: 42, mode: PairingCrypto.KeepAwakeMode.whileApp.rawValue,
+                                                  endsAt: 0, appName: "Xcode", key: key)
+        let kaOpened = PairingCrypto.openKeepAwakeState(ka, phoneID: kaID, key: key)
+        expect(PairingCrypto.kind(of: ka) == .keepAwakeState && kaOpened?.seq == 42 && kaOpened?.mode == 4
+               && kaOpened?.endsAt == 0 && kaOpened?.appName == "Xcode",
+               "保持唤醒状态：签了能打开，字段一样")
+        let kaTimed = PairingCrypto.makeKeepAwakeState(phoneID: kaID, seq: 43, mode: 1, endsAt: 1_800_000_000, appName: "", key: key)
+        expect(PairingCrypto.openKeepAwakeState(kaTimed, phoneID: kaID, key: key).map { $0.endsAt == 1_800_000_000 && $0.mode == 1 } == true,
+               "保持唤醒状态：定时带结束时间")
+        expect(PairingCrypto.openKeepAwakeState(ka, phoneID: UUID(), key: key) == nil
+               && PairingCrypto.openKeepAwakeState(ka, phoneID: kaID, key: otherKey) == nil,
+               "保持唤醒状态：别的手机 / 别的钥匙验不过")
+        var kaBad = [UInt8](ka); kaBad[26] = 2
+        expect(PairingCrypto.openKeepAwakeState(Data(kaBad), phoneID: kaID, key: key) == nil, "保持唤醒状态：改了 mode 验不过")
+        let longName = String(repeating: "应用", count: 40)   // 240 字节
+        let kaLong = PairingCrypto.makeKeepAwakeState(phoneID: kaID, seq: 44, mode: 4, endsAt: 0, appName: longName, key: key)
+        let longOpened = PairingCrypto.openKeepAwakeState(kaLong, phoneID: kaID, key: key)
+        expect(longOpened.map { Data($0.appName.utf8).count <= 64 && longName.hasPrefix($0.appName) && !$0.appName.isEmpty } == true,
+               "保持唤醒状态：app 名截到 64 字节以内、不切断字符")
+        expect(PairingCrypto.openState(ka, phoneID: kaID, key: key) == nil, "保持唤醒状态：不会被当成幕布状态")
+
         let state = mac.stateMessage(closed: true, for: phoneID)!
         expect(PairingCrypto.openState(state, phoneID: phoneID, key: key)?.closed == true, "状态：签名的「盖上」能验过")
         expect(PairingCrypto.openState(state, phoneID: UUID(), key: key) == nil, "状态：发给别的手机的不认")
