@@ -3,6 +3,7 @@
 // 钥匙串（kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly，不进备份、不跟到别的设备）：
 //   * account "phoneID"：这台手机的身份 UUID（第一次用时生成）
 //   * account "link"   ：共享钥匙 + 这台 Mac 的标识 + 发送计数（每次发命令前先把新计数写进来）
+//   * account "pendingUnpair"：撤销了、旧电脑还不知道的那几份（JSON 列表，见 PendingUnpair.swift）
 //
 // 卸载 App 时 iOS 不一定清钥匙串，所以第一次启动先看 Application Support 里有没有标记文件：
 // 没有就把这个 App 能看到的钥匙串条目全删掉，再写标记。删了重装 = 从没配过对。
@@ -20,6 +21,7 @@ enum PhoneKeychain {
     static var service: String { (Bundle.main.bundleIdentifier ?? "lockcurtain-remote") + ".pairing" }
     private static let linkAccount = "link"
     private static let phoneIDAccount = "phoneID"
+    private static let pendingUnpairAccount = "pendingUnpair"
     private static let markerName = "installed.marker"
 
     // MARK: - 第一次启动清钥匙串
@@ -72,6 +74,60 @@ enum PhoneKeychain {
         record.counter += 1
         guard saveLink(record) else { return nil }
         return (record, record.counter)
+    }
+
+    // MARK: - 待撤销（protocol-v3 §5）
+
+    static func loadPendingUnpair() -> PendingUnpairBook {
+        let records = read(pendingUnpairAccount).flatMap { try? JSONDecoder().decode([PendingUnpairRecord].self, from: $0) }
+        return PendingUnpairBook(records: records ?? [])
+    }
+
+    @discardableResult
+    static func savePendingUnpair(_ book: PendingUnpairBook) -> Bool {
+        if book.isEmpty {
+            let status = SecItemDelete(query(pendingUnpairAccount) as CFDictionary)
+            return status == errSecSuccess || status == errSecItemNotFound
+        }
+        guard let data = try? JSONEncoder().encode(book.records) else { return false }
+        return write(data, account: pendingUnpairAccount)
+    }
+
+    static var hasPendingUnpair: Bool { !loadPendingUnpair().isEmpty }
+
+    /// 撤销配对 / 换电脑：现在这份挪进待撤销列表（先写进列表，再删 link，中途被杀也不丢），返回挪过去的那份
+    @discardableResult
+    static func moveLinkToPendingUnpair() -> PendingUnpairRecord? {
+        guard let link = loadLink() else { return nil }
+        var book = loadPendingUnpair()
+        let record = book.add(link)
+        guard savePendingUnpair(book) else {
+            // 存不进去也照样撤销：界面和命令都不能再碰旧电脑
+            deleteLink()
+            return nil
+        }
+        deleteLink()
+        return record
+    }
+
+    /// 发 unpair 前：这一份的计数加一并先写进钥匙串，写成功才返回
+    static func reservePendingCounter(_ id: UUID) -> (record: PendingUnpairRecord, counter: UInt64)? {
+        var book = loadPendingUnpair()
+        guard let reserved = book.reserveCounter(for: id), savePendingUnpair(book) else { return nil }
+        return reserved
+    }
+
+    static func removePendingUnpair(_ id: UUID) {
+        var book = loadPendingUnpair()
+        book.remove(id)
+        savePendingUnpair(book)
+    }
+
+    static func removePendingUnpair(macIdentifier: String) {
+        var book = loadPendingUnpair()
+        let before = book.records.count
+        book.removeAll(macIdentifier: macIdentifier)
+        if book.records.count != before { savePendingUnpair(book) }
     }
 
     // MARK: - 底层

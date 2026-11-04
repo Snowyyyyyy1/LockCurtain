@@ -21,7 +21,7 @@ struct OnboardingView: View {
                         .multilineTextAlignment(.center)
                         .accessibilityAddTraits(.isHeader)
 
-                    Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                    Text("在电脑上打开 LockCurtain 设置里的「手机」，点「配对手机」，把 6 位码输进来。")
                         .font(.body)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)

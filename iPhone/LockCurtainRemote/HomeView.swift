@@ -37,11 +37,12 @@ struct HomeView: View {
 
                 Section {
                     macRow
+                    keepAwakeRow
                     if AppModel.autoCoverVisible {
                         autoRow
                     }
                 } footer: {
-                    macFooterAX
+                    withKeepAwakeFootnote { macFooterAX }
                 }
                 .id("mac")
             } else {
@@ -54,11 +55,12 @@ struct HomeView: View {
                 Section {
                     curtainRow
                     macRow
+                    keepAwakeRow
                     if AppModel.autoCoverVisible {
                         autoRow
                     }
                 } footer: {
-                    standardFooter
+                    withKeepAwakeFootnote { standardFooter }
                 }
                 .id("status")
             }
@@ -122,6 +124,10 @@ struct HomeView: View {
         .sensoryFeedback(.warning, trigger: model.didTimeOut) { _, isTimedOut in
             isTimedOut
         }
+        .sensoryFeedback(.warning, trigger: model.coverMissingPermission) { _, refused in
+            refused
+        }
+        .sensoryFeedback(.selection, trigger: model.keepAwakeSuccessCount)
         .sensoryFeedback(.impact(weight: .light), trigger: model.liftTapCount)
         .sensoryFeedback(.impact(weight: .light), trigger: model.findAgainTapCount)
         .sensoryFeedback(.warning, trigger: model.liftWarningCount)
@@ -183,6 +189,70 @@ struct HomeView: View {
             } label: {
                 Label("这台电脑", systemImage: "laptopcomputer")
             }
+        }
+    }
+
+    /// 保持唤醒（ux-audit A4 / copy §16.3）：整行是一个 Menu，值是电脑报来的状态；不要面容
+    private var keepAwakeRow: some View {
+        TimelineView(.periodic(from: .now, by: 15)) { _ in
+            let now = clockNow
+            let isOn = model.keepAwakeIsOn(at: now)
+            Menu {
+                if isOn {
+                    Button("关掉") { model.setKeepAwake(.off) }
+                    Divider()
+                }
+                Button("1 小时") { model.setKeepAwake(.oneHour) }
+                Button("2 小时") { model.setKeepAwake(.twoHours) }
+                Button("5 小时") { model.setKeepAwake(.fiveHours) }
+                Button("一直") { model.setKeepAwake(.always) }
+            } label: {
+                HStack(spacing: 8) {
+                    Label {
+                        Text("保持唤醒")
+                            .foregroundStyle(model.canSetKeepAwake ? Color.primary : Color.secondary)
+                    } icon: {
+                        Image(systemName: "cup.and.saucer")
+                            .foregroundStyle(model.canSetKeepAwake ? Color.accentColor : Color.secondary)
+                    }
+                    Spacer(minLength: 8)
+                    if model.isSendingKeepAwake {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Text(model.keepAwakeDisplayValue(at: now))
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .contentTransition(.numericText())
+                    }
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(.rect)
+            }
+            // Menu 会把整行染成主题色：值和箭头要和别的行一样是次要色
+            .tint(.primary)
+            .disabled(!model.canSetKeepAwake || model.isSendingKeepAwake)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("保持唤醒")
+            .accessibilityValue(model.keepAwakeVoiceValue(at: now))
+            .accessibilityHint(model.canSetKeepAwake ? "轻点两下选择时长" : "")
+            .accessibilityAddTraits(.isButton)
+        }
+    }
+
+    /// 保持唤醒没送到：紧贴在那一行下面（它是分组最后一行，所以放在分组 footer 的最上面）
+    @ViewBuilder
+    private func withKeepAwakeFootnote(@ViewBuilder _ rest: () -> some View) -> some View {
+        if model.keepAwakeDidFail {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("没送到，再试一次")
+                rest()
+            }
+        } else {
+            rest()
         }
     }
 
@@ -326,7 +396,7 @@ struct HomeView: View {
         } else {
             switch model.connection {
             case .notPaired:
-                Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                Text("在电脑上打开 LockCurtain 设置里的「手机」，点「配对手机」，把 6 位码输进来。")
             case .bluetoothOff:
                 Text(AppModel.UnlinkedMacState.bluetoothOff.footer)
             case .notConnected, .connected:
@@ -384,6 +454,13 @@ struct HomeView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .transition(.opacity)
+                    } else if model.coverMissingPermission {
+                        // N2：电脑签名说缺权限、没盖（copy §16.8）；按钮照旧是「盖上幕布」
+                        Text("没能盖上：电脑上还缺一个权限。")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .transition(.opacity)
                     } else if showsLiftFooter {
                         // AX 大字：撤下后的那两句在 footer 里
                     } else if model.liftNotice == .alreadyUncovered {
@@ -408,6 +485,7 @@ struct HomeView: View {
         .animation(.smooth(duration: 0.35), value: model.phase)
         .animation(.smooth(duration: 0.35), value: model.isPending)
         .animation(.smooth(duration: 0.35), value: model.didTimeOut)
+        .animation(.smooth(duration: 0.35), value: model.coverMissingPermission)
         .animation(.smooth(duration: 0.35), value: model.connection)
         .animation(.smooth(duration: 0.35), value: model.showsRetryNow(at: now))
         .animation(.smooth(duration: 0.35), value: model.isLifting)

@@ -27,7 +27,65 @@ enum CurtainAuto: Equatable, Sendable {
 enum CoverOutcome: Equatable, Sendable {
     case covered
     case timedOut
+    /// The computer answered (signed Ack status 4) that it is missing a permission and did not cover (N2)
+    case missingPermission
     case unavailable
+}
+
+/// 保持唤醒：电脑报来的状态（protocol-v3 §3 KeepAwakeState）。手机只显示，不自己算。
+enum KeepAwakeState: Equatable, Sendable {
+    case off
+    /// 定时，到 endsAt 结束（「还剩 1 小时 20 分」）
+    case timed(endsAt: Date)
+    case always
+    /// 到电脑上定的时刻（「到 18:30」）
+    case untilTime(Date)
+    /// 某个 app 开着时（「Xcode 开着时」）
+    case whileApp(String)
+
+    /// 现在算不算开着（定时的已经过点了就算关）
+    func isOn(at now: Date) -> Bool {
+        switch self {
+        case .off: false
+        case .timed(let end), .untilTime(let end): end > now
+        case .always, .whileApp: true
+        }
+    }
+
+    /// 电脑报来的 mode / endsAt / appName → 状态；不认识的 mode 是 nil
+    init?(mode: UInt8, endsAt: UInt64, appName: String) {
+        let end = Date(timeIntervalSince1970: TimeInterval(endsAt))
+        switch mode {
+        case 0: self = .off
+        case 1: self = .timed(endsAt: end)
+        case 2: self = .always
+        case 3: self = .untilTime(end)
+        case 4: self = .whileApp(appName)
+        default: return nil
+        }
+    }
+}
+
+/// 手机菜单里能选的（没有「到指定时间」和「某个 app」：那两种只在电脑上开，Ato 定）
+enum KeepAwakeChoice: String, CaseIterable, Sendable {
+    case off
+    case oneHour = "1h"
+    case twoHours = "2h"
+    case fiveHours = "5h"
+    case always
+
+    /// 发给电脑的签名命令（protocol-v3 §1）
+    var command: String { "awake:" + rawValue }
+
+    /// 时长（演示里用）
+    var duration: TimeInterval? {
+        switch self {
+        case .oneHour: 3600
+        case .twoHours: 7200
+        case .fiveHours: 18000
+        case .off, .always: nil
+        }
+    }
 }
 
 /// Result of one 「现在撤下」 request, as reported (signed) by the Mac.
@@ -44,7 +102,9 @@ enum LiftOutcome: Equatable, Sendable {
 }
 
 /// 「走近撤下」: stored on the phone in UserDefaults, default on. When off the
-/// phone answers the Mac's polls with "off" and 现在撤下 is hidden.
+/// phone answers the Mac's polls with "off" (walking up no longer lifts), but
+/// 现在撤下 stays on screen and still works — only the two lines above it change
+/// (design v2.7 / copy §12).
 enum LiftSetting {
     static let key = "lc.liftOnApproach"
 
@@ -84,6 +144,8 @@ struct CurtainSnapshot: Equatable, Sendable {
     /// Bumped each time the Mac reports the curtain uncovered right after a
     /// lift this phone caused (walk-up or 现在撤下).
     var phoneLiftCount: Int = 0
+    /// 电脑报来的保持唤醒状态；nil = 这次还没报过（老电脑不报：手机那一行就是「—」、点不动）
+    var keepAwake: KeepAwakeState?
 }
 
 /// The only door between the UI and a curtain. HomeView, SettingsView and
@@ -113,6 +175,10 @@ protocol CurtainLink: AnyObject {
     /// Ask the Mac to report the curtain state again (after a lift that
     /// didn't happen), so the screen never sticks on a stale state.
     func requestState()
+
+    /// 保持唤醒：发签名命令 awake:…，等电脑签收（不要面容）。true = 电脑签名收下了；
+    /// 新的状态随后由电脑的 KeepAwakeState 报回来，界面只照那个显示。
+    func setKeepAwake(_ choice: KeepAwakeChoice) async -> Bool
 }
 
 #if DEBUG
@@ -153,5 +219,6 @@ final class DebugForcedCurtainLink: CurtainLink {
     func setAutoEnabled(_ isOn: Bool) {}
     func liftNow() async -> LiftOutcome { .unavailable }
     func requestState() {}
+    func setKeepAwake(_ choice: KeepAwakeChoice) async -> Bool { false }
 }
 #endif

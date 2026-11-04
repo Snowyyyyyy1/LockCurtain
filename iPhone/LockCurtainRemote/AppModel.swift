@@ -107,6 +107,17 @@ final class AppModel {
     private(set) var auto: CurtainAuto = .off
     private(set) var isCovering = false
     private(set) var didTimeOut = false
+    /// 电脑签名回答「缺权限，没盖」（N2）：底栏那一行换成「没能盖上：电脑上还缺一个权限。」
+    private(set) var coverMissingPermission = false
+
+    /// 保持唤醒：电脑报来的状态（nil = 没报过）
+    private(set) var keepAwake: KeepAwakeState?
+    /// 保持唤醒命令发出去、还没签收：值的位置换成小转圈
+    private(set) var isSendingKeepAwake = false
+    /// 5 秒没签收：行下面一行「没送到，再试一次」
+    private(set) var keepAwakeDidFail = false
+    /// 签收了就加一（.sensoryFeedback(.selection)）
+    private(set) var keepAwakeSuccessCount = 0
     private(set) var isAway = false
     private(set) var lastEventText = "没连上"
     private(set) var lastEventDate = Date()
@@ -154,6 +165,8 @@ final class AppModel {
     @ObservationIgnored private var liftTask: Task<Void, Never>?
     @ObservationIgnored private var liftTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var demoLiftTask: Task<Void, Never>?
+    @ObservationIgnored private var keepAwakeTask: Task<Void, Never>?
+    @ObservationIgnored private var keepAwakeTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var lastPhoneLiftCount = 0
     /// Bumped on every 「再找一次」 tap (light impact haptic)
     private(set) var findAgainTapCount = 0
@@ -221,6 +234,8 @@ final class AppModel {
         // 已经配过对的手机，一打开就该去找这台 Mac；不然主屏永远停在「没连上」
         // （-lcForceLinkState 的假连接不在这里启动：「没连上」要停在没广播的样子，等「再找一次」）
         if paired && !demoMode && forcedLink == nil { link.activate() }
+        // 没配着、但还有撤销了没告诉旧电脑的：安静地广播，等旧电脑来连（protocol-v3 §5，界面上什么都不说）
+        if !paired, forcedLink == nil, let ble = link as? BLECurtainLink { ble.activateForPendingUnpair() }
         Self.current = self
         #if DEBUG
         // 截图用：-lcDisconnectedFor <秒> —— 假装已经断开这么久（看 ②③④ 段）；带上 -lcEverConnected 就当连上过
@@ -289,6 +304,100 @@ final class AppModel {
         case .bluetoothOff: "蓝牙关了"
         case .notPaired: "没配对"
         }
+    }
+
+    // MARK: - 保持唤醒（ux-audit A4 / copy §16.3）
+
+    /// 那一行能不能点：连上了、电脑报过保持唤醒状态（老电脑不报就点不动）；演示里总能点
+    var canSetKeepAwake: Bool {
+        connection == .connected && keepAwake != nil
+    }
+
+    func keepAwakeIsOn(at now: Date) -> Bool {
+        keepAwake?.isOn(at: now) ?? false
+    }
+
+    /// 值：关 / 一直 / 到 18:30 / 还剩 1 小时 20 分 / Xcode 开着时；点不动时「—」
+    func keepAwakeDisplayValue(at now: Date) -> String {
+        guard canSetKeepAwake, let keepAwake else { return "—" }
+        return Self.keepAwakeText(keepAwake, now: now)
+    }
+
+    /// VoiceOver 的值：点不动时说为什么（没连上 / 没配对），不念「—」
+    func keepAwakeVoiceValue(at now: Date) -> String {
+        guard canSetKeepAwake else {
+            return connection == .notPaired ? "没配对" : "没连上"
+        }
+        return keepAwakeDisplayValue(at: now)
+    }
+
+    static func keepAwakeText(_ state: KeepAwakeState, now: Date) -> String {
+        switch state {
+        case .off:
+            return "关"
+        case .always:
+            return "一直"
+        case .whileApp(let name):
+            return "\(name) 开着时"
+        case .untilTime(let end):
+            guard end > now else { return "关" }
+            let formatter = DateFormatter()
+            formatter.dateFormat = "HH:mm"
+            return "到 \(formatter.string(from: end))"
+        case .timed(let end):
+            guard end > now else { return "关" }
+            return remainingText(end.timeIntervalSince(now))
+        }
+    }
+
+    /// 「还剩 1 小时 20 分」：分钟往上取整（刚开 1 小时就是「还剩 1 小时」）
+    static func remainingText(_ seconds: TimeInterval) -> String {
+        let minutes = max(1, Int((seconds / 60).rounded(.up)))
+        let h = minutes / 60
+        let m = minutes % 60
+        if h == 0 { return "还剩 \(m) 分" }
+        if m == 0 { return "还剩 \(h) 小时" }
+        return "还剩 \(h) 小时 \(m) 分"
+    }
+
+    /// 选了一项：发签名命令（不要面容）。5 秒没签收：值回到原来（本来就没先改），行下面说「没送到，再试一次」
+    func setKeepAwake(_ choice: KeepAwakeChoice) {
+        guard canSetKeepAwake, !isSendingKeepAwake else { return }
+        isSendingKeepAwake = true
+        keepAwakeDidFail = false
+        keepAwakeTask?.cancel()
+        keepAwakeTimeoutTask?.cancel()
+        keepAwakeTask = Task { [weak self] in
+            guard let self else { return }
+            let ok = await self.link.setKeepAwake(choice)
+            guard !Task.isCancelled, self.isSendingKeepAwake else { return }
+            self.finishKeepAwake(ok)
+        }
+        keepAwakeTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            guard let self, !Task.isCancelled, self.isSendingKeepAwake else { return }
+            self.keepAwakeTask?.cancel()
+            self.finishKeepAwake(false)
+        }
+    }
+
+    private func finishKeepAwake(_ ok: Bool) {
+        keepAwakeTimeoutTask?.cancel()
+        keepAwakeTimeoutTask = nil
+        isSendingKeepAwake = false
+        if ok {
+            keepAwakeDidFail = false
+            keepAwakeSuccessCount += 1
+        } else {
+            keepAwakeDidFail = true
+        }
+    }
+
+    private func resetKeepAwakeSending() {
+        keepAwakeTask?.cancel()
+        keepAwakeTimeoutTask?.cancel()
+        isSendingKeepAwake = false
+        keepAwakeDidFail = false
     }
 
     /// 配过对、不在演示、没连上：现在是哪一段；其他时候是 nil
@@ -360,6 +469,7 @@ final class AppModel {
         showLiftedNote = false
         liftNotice = nil
         didTimeOut = false
+        coverMissingPermission = false
         isCovering = true
         timeoutTask?.cancel()
         coverTask?.cancel()
@@ -491,6 +601,8 @@ final class AppModel {
         TerminationNotice.refresh()
         if paired, !demoMode, let ble = link as? BLECurtainLink {
             ble.resumeConnecting()
+        } else if !paired, let ble = (link as? BLECurtainLink) ?? parkedLink {
+            ble.activateForPendingUnpair()
         }
     }
 
@@ -529,6 +641,8 @@ final class AppModel {
         timeoutTask?.cancel()
         isCovering = false
         didTimeOut = false
+        coverMissingPermission = false
+        resetKeepAwakeSending()
 
         demoLiftTask?.cancel()
         liftTask?.cancel()
@@ -554,6 +668,8 @@ final class AppModel {
             }
             if paired {
                 if let ble = link as? BLECurtainLink { ble.resumeConnecting() } else { link.activate() }
+            } else if let ble = link as? BLECurtainLink {
+                ble.activateForPendingUnpair()
             }
             if !paired {
                 showDemoExitNotice = true
@@ -611,16 +727,18 @@ final class AppModel {
         }
     }
 
-    /// 撤销配对：连着 Mac 就先发一条签名的 unpair 让 Mac 也删钥匙，再删手机自己的钥匙
+    /// 撤销配对（protocol-v3 §5）：界面马上回到没配对，对那台电脑什么都不再发；
+    /// 钥匙挪进待撤销，连着就当场、没连着就等它下次来时，用它签一条 unpair（见 BLECurtainLink.unpair）
     func unpair() {
         paired = false
         justPaired = false
         macName = nil
+        resetKeepAwakeSending()
         UserDefaults.standard.removeObject(forKey: Keys.macName)
         if let ble = (link as? BLECurtainLink) ?? parkedLink {
             ble.unpair()
         } else {
-            PhoneKeychain.deleteLink()
+            PhoneKeychain.moveLinkToPendingUnpair()
             if !demoMode {
                 adopt(BLECurtainLink(paired: false, macName: nil))
             }
@@ -658,6 +776,11 @@ final class AppModel {
         if snapshot.phase != phase || snapshot.connection != connection {
             liftNotice = nil      // the too-far / no-answer line lasts until the state changes
         }
+        if snapshot.connection != connection {
+            coverMissingPermission = false
+            if snapshot.connection != .connected { resetKeepAwakeSending() }
+        }
+        keepAwake = snapshot.keepAwake
         if snapshot.phoneLiftCount != lastPhoneLiftCount {
             if snapshot.phoneLiftCount > lastPhoneLiftCount, snapshot.phase == .open,
                snapshot.connection == .connected,
@@ -709,6 +832,11 @@ final class AppModel {
             didTimeOut = true
             if phase == .closing { phase = .open }
             recordEvent(text: "没有回应")
+        case .missingPermission:
+            didTimeOut = false
+            coverMissingPermission = true
+            if phase == .closing { phase = .open }
+            recordEvent(text: "没盖上")
         case .unavailable:
             didTimeOut = false
         }

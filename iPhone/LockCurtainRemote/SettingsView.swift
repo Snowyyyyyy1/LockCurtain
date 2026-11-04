@@ -44,7 +44,7 @@ struct SettingsView: View {
                 isPresented: $showUnpairConfirmation,
                 titleVisibility: .visible
             ) {
-                Button("撤销", role: .destructive) {
+                Button("撤销配对", role: .destructive) {
                     model.unpair()
                     dismiss()
                 }
@@ -102,7 +102,7 @@ struct SettingsView: View {
         } footer: {
             VStack(alignment: .leading, spacing: 8) {
                 if !model.demoMode && !model.paired {
-                    Text("在电脑上打开 LockCurtain，点「配对手机」，把 6 位码输进来。")
+                    Text("在电脑上打开 LockCurtain 设置里的「手机」，点「配对手机」，把 6 位码输进来。")
                 }
                 Text("断开以后要重新连，打开 LockCurtain 等十几秒；连上以后锁屏、切后台都不会断，不用一直开着。")
             }

@@ -26,6 +26,15 @@
 // 不记时间、不靠解锁通知。「现在撤下」等下一条问询，用它的 nonce 回 LiftNow（代替那一次的 Presence）。
 // 撤不撤由 Mac 判断（签名、计数、nonce、先锁过、距离），手机只如实回答。
 //
+// 保持唤醒（protocol-v3）：awake:off|1h|2h|5h|always 和盖上幕布一样是签名命令（不要面容）；电脑签收后再发一条签名的
+// KeepAwakeState（0x0F），界面只照它显示。连上（ready）以后发一次 name:<手机名>。
+//
+// 撤销配对 / 换电脑之后旧电脑还不知道的那几份（pendingUnpair）：怎么认出旧电脑、什么回答才删，见 PendingUnpair.swift 开头。
+// 这里的做法：
+//   * 现在配着的那台照旧用现在的钥匙确认身份；被它拒了（Ack 1）的中心，或者手机没配着时来连的中心，才用旧钥匙发 unpair 试。
+//   * 已经和现在这台连好时又来的中心（以及换电脑时多出来的中心）记成「旁路」：只收发撤销配对那一条，别的一概不理。
+//   * 有待撤销的就一直（安静地）广播，即使什么都没配着；没有了、又只是为它广播的，就停。
+//
 // 服务 / 特征 UUID 必须和 Mac 端 PhonePairing 一致。
 
 import CoreBluetooth
@@ -113,6 +122,36 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private var pendingStagedAck: (counter: UInt64, cont: CheckedContinuation<Bool, Never>)?
     private var stagedAckTimeout: Task<Void, Never>?
     private var lastStateSeq: UInt64 = 0
+    /// KeepAwakeState 自己记一份 seq（和 State 共用电脑那边同一个递增计数，这里按类型各防各的重放）
+    private var lastAwakeSeq: UInt64 = 0
+
+    // 待撤销（protocol-v3 §5）
+    /// 旁路中心：不是现在这台、也不是来配对的那台；只为撤销配对那一条收发
+    private final class SideCentral {
+        let central: CBCentral
+        var assembler = PairingFraming.Assembler()
+        init(_ central: CBCentral) { self.central = central }
+    }
+    private var sideCentrals: [UUID: SideCentral] = [:]
+    /// 每台中心上正在等回答的那条 unpair
+    private struct PendingAttempt {
+        let recordID: UUID
+        let key: Data
+        let counter: UInt64
+        let cont: CheckedContinuation<PendingUnpairOutcome, Never>
+        let timeout: Task<Void, Never>
+    }
+    private var pendingAttempts: [UUID: PendingAttempt] = [:]
+    /// 这次连接里每台中心上试过哪几份（断开 / 重新订阅就清）
+    private var pendingTried: [UUID: Set<UUID>] = [:]
+    /// 正在跑撤销流程的中心
+    private var pendingRunning: Set<UUID> = []
+    /// 广播只是为了待撤销（没配着、也没在配对）：待撤销清空了就停
+    private var quietOnly = false
+    /// pair() 进行中：配对那台中心上不插撤销那一条
+    private var pairingActive = false
+    /// 这次连接（ready 以后）发过 name: 没有
+    private var sentNameThisLink = false
 
     private var consecutiveFailures = 0
     /// 连续早断 5 次了。手机这边从不因此停广播（App 在后台会被挂起，计时器醒不过来，停了就再也不广播）；
@@ -131,14 +170,16 @@ final class BLECurtainLink: NSObject, CurtainLink {
     }
     private enum AckResult {
         case ok
+        /// 电脑签名回 Ack 4：缺权限，没做（N2）
+        case missingPermission
         case rejected
         case failed
     }
 
     private var pendingReply: CheckedContinuation<Reply, Never>?
     private var replyTimeout: Task<Void, Never>?
-    private var pendingAck: (counter: UInt64, cont: CheckedContinuation<AckResult, Never>)?
-    private var ackTimeout: Task<Void, Never>?
+    /// 等签名收据的命令，按计数分开（name: / awake: / ping 可能同时在路上）
+    private var pendingAcks: [UInt64: (cont: CheckedContinuation<AckResult, Never>, timeout: Task<Void, Never>)] = [:]
     private var pendingCover: CheckedContinuation<CoverOutcome, Never>?
     private var coverTimeout: Task<Void, Never>?
     /// 「现在撤下」：等下一条问询；sentCounter = 已经发出去的 LiftNow 的计数，等 Mac 的结果
@@ -164,12 +205,24 @@ final class BLECurtainLink: NSObject, CurtainLink {
     // MARK: - CurtainLink
 
     func activate() {
+        quietOnly = false
+        startLink(showPowerAlert: true)
+    }
+
+    /// 什么都没配着、只有待撤销的：安静地广播（不弹蓝牙框，界面上什么都不说），等旧电脑来连
+    func activateForPendingUnpair() {
+        guard PhoneKeychain.hasPendingUnpair else { return }
+        if !wantsAdvertising { quietOnly = !isPaired }
+        startLink(showPowerAlert: isPaired)
+    }
+
+    private func startLink(showPowerAlert: Bool) {
         wantsAdvertising = true
         publishAdvertising()
         startEnsureTimer()
         if manager == nil {
             manager = CBPeripheralManager(delegate: self, queue: .main,
-                                          options: [CBPeripheralManagerOptionShowPowerAlertKey: true,
+                                          options: [CBPeripheralManagerOptionShowPowerAlertKey: showPowerAlert,
                                                     CBPeripheralManagerOptionRestoreIdentifierKey: Identity.restoreIdentifier])
         } else {
             ensureAdvertising("activate")
@@ -222,6 +275,11 @@ final class BLECurtainLink: NSObject, CurtainLink {
         guard mac != nil, ready, isPaired else { return .unavailable }
         publish { $0.phase = .closing }
         let ack = await sendSigned("away")
+        if ack == .missingPermission {
+            // 电脑签名说缺权限、没盖（N2）：幕布还是开着
+            publish { $0.phase = .open }
+            return .missingPermission
+        }
         guard ack == .ok else { return .timedOut }
         // 状态消息可能比这里先到
         if snapshot.phase == .closed { return .covered }
@@ -238,6 +296,13 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
     func setAutoEnabled(_ isOn: Bool) {
         // 自动盖幕布的判断在 Mac 上，手机只显示；还没有对应的命令
+    }
+
+    /// 保持唤醒：签名命令，5 秒内要电脑签收；新状态由电脑随后的 KeepAwakeState 报回来
+    func setKeepAwake(_ choice: KeepAwakeChoice) async -> Bool {
+        guard mac != nil, ready, isPaired else { return false }
+        Self.linkLog.info("keep-awake command \(choice.command, privacy: .public)")
+        return await sendSigned(choice.command, ackSeconds: 5) == .ok
     }
 
     /// 「现在撤下」（调用方已经过了面容 / 密码）：等 Mac 的下一条问询，用它的 nonce 发签名的 LiftNow，
@@ -266,6 +331,10 @@ final class BLECurtainLink: NSObject, CurtainLink {
     func pair(code: String) async -> PairResult {
         activate()
         if gaveUp { return .connectFailed }
+        pairingActive = true
+        defer { pairingActive = false }
+        // 配对那台中心上正在等的撤销那一条不再等（不往配对的线上插别的）
+        if let id = mac?.identifier { finishPendingAttempt(id, .noAnswer) }
 
         // Mac 还没订阅就等它来（最多 15 秒）
         if mac == nil {
@@ -322,8 +391,11 @@ final class BLECurtainLink: NSObject, CurtainLink {
 
         // 钥匙确认：Mac 收下这条签名的 ping、回一张签名收据，才说配上了
         switch await sendSigned("ping") {
-        case .ok:
+        case .ok, .missingPermission:
             isPaired = true
+            quietOnly = false
+            // 同一台电脑撤了又重新配上：它那边已经换成新钥匙，旧的那份不用再告诉它
+            PhoneKeychain.removePendingUnpair(macIdentifier: macID.uuidString)
             markReady()
             return .accepted
         case .rejected, .failed:
@@ -458,20 +530,33 @@ final class BLECurtainLink: NSObject, CurtainLink {
         pending?.cont.resume(returning: ok)
     }
 
-    /// 新电脑配成了：先用旧钥匙告诉原来那台「解除配对」，再把钥匙换掉，改跟新电脑说话
+    /// 新电脑配成了：原来那份挪进待撤销（protocol-v3 §5），钥匙换成新的，改跟新电脑说话；
+    /// 原来那台要是正连着，就当场用旧钥匙发 unpair（它签收了才删那份；没连着就等它下次来）
     private func adoptReplacement(_ record: PhoneLinkRecord, central: CBCentral) -> Bool {
-        if let old = mac, ready, let reserved = PhoneKeychain.reserveNextCounter(),
-           let data = PairingCrypto.sealCommand("unpair", phoneID: PhoneKeychain.phoneID(), counter: reserved.counter,
-                                                key: SymmetricKeyBox(reserved.record.key).key) {
-            send(data, to: old)
+        guard let oldLink = PhoneKeychain.loadLink() else { return false }
+        // 先把旧的记进待撤销，再覆盖 link；覆盖失败就把刚记的撤回来，什么都不变
+        var book = PhoneKeychain.loadPendingUnpair()
+        let moved = book.add(oldLink)
+        guard PhoneKeychain.savePendingUnpair(book) else { return false }
+        guard PhoneKeychain.saveLink(record) else {
+            PhoneKeychain.removePendingUnpair(moved.id)
+            return false
         }
-        guard PhoneKeychain.saveLink(record) else { return false }
-        // 原来那台的事全部收尾
-        finishAck(.failed)
+        PhoneKeychain.removePendingUnpair(macIdentifier: central.identifier.uuidString)
+        let oldCentral = ready ? mac : nil
+        /// 连着但还没确认身份的那台（不知道是谁）：之后当旁路试一试
+        let unconfirmedCentral = ready ? nil : mac
+        let oldAssembler = assembler
+        // 原来那台的事全部收尾：从这一刻起不再给它发任何命令 / 回任何问询
+        confirmTask?.cancel()
+        confirmTask = nil
+        finishAllAcks(.failed)
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
         lastStateSeq = 0
+        lastAwakeSeq = 0
+        if let oldCentral { dropQueued(for: oldCentral) }
         // 改跟新电脑说话
         mac = central
         macEverSubscribed = true
@@ -479,23 +564,55 @@ final class BLECurtainLink: NSObject, CurtainLink {
         pairingAssembler = PairingFraming.Assembler()
         pairingCentral = nil
         stagedRecord = nil
-        publish { $0.phase = .open }
+        ready = false
+        sentNameThisLink = false
+        publish {
+            $0.phase = .open
+            $0.keepAwake = nil
+        }
         markReady()
         // 让新电脑报一次幕布状态
         requestState()
+        // 原来那台还连着：改成旁路，当场用旧钥匙告诉它（这台刚用旧钥匙确认过，Ack 1 也算它回的）
+        if let oldCentral, oldCentral.identifier != central.identifier {
+            let side = SideCentral(oldCentral)
+            side.assembler = oldAssembler
+            sideCentrals[oldCentral.identifier] = side
+            kickPendingUnpair(on: oldCentral, trusted: moved.id)
+        } else if let unconfirmedCentral, unconfirmedCentral.identifier != central.identifier {
+            dropQueued(for: unconfirmedCentral)
+            attachSide(unconfirmedCentral)
+        }
         return true
     }
 
-    /// 手机这边解除配对：连着就先发一条签名的 unpair（Mac 收到会删它的钥匙），再删自己的钥匙
+    /// 手机这边解除配对（protocol-v3 §5）：界面马上回到没配对、对这台电脑什么都不再发；
+    /// 钥匙挪进待撤销，连着就当场用它签一条 unpair，没连着就安静地广播、等它下次来。电脑签收了才删那份。
     func unpair() {
-        if mac != nil, ready, let reserved = PhoneKeychain.reserveNextCounter(),
-           let data = PairingCrypto.sealCommand("unpair", phoneID: PhoneKeychain.phoneID(), counter: reserved.counter,
-                                                key: SymmetricKeyBox(reserved.record.key).key) {
-            send(data)
-        }
-        PhoneKeychain.deleteLink()
+        let oldCentral = ready ? mac : nil
+        let moved = PhoneKeychain.moveLinkToPendingUnpair()
+        confirmTask?.cancel()
+        confirmTask = nil
+        finishAllAcks(.failed)
+        if let oldCentral { dropQueued(for: oldCentral) }
         forgetLocally()
-        // 没配对就不用一直广播：给那条 unpair 一点时间发出去再停
+        if PhoneKeychain.hasPendingUnpair {
+            quietOnly = true
+            wantsAdvertising = true
+            ensureAdvertising("pending unpair")
+            if let oldCentral, let moved {
+                // 这台刚用这把钥匙确认过身份：它回 Ack 1 也算是旧电脑回的
+                kickPendingUnpair(on: oldCentral, trusted: moved.id)
+            }
+        } else {
+            stopQuietAdvertising()
+        }
+    }
+
+    /// 没配着、也没有待撤销的了：不用再广播（给最后一条消息一点时间发出去再停）
+    private func stopQuietAdvertising() {
+        guard !isPaired else { return }
+        quietOnly = false
         wantsAdvertising = false
         publishAdvertising()
         Task { [weak self] in
@@ -540,16 +657,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
         guard let data = PairingCrypto.sealCommand(command, phoneID: phoneID, counter: counter, key: key.key) else {
             return .failed
         }
-        finishAck(.failed)
         return await withCheckedContinuation { cont in
-            pendingAck = (counter, cont)
-            send(data)
-            ackTimeout?.cancel()
-            ackTimeout = Task { [weak self] in
+            let timeout = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(ackSeconds))
                 guard !Task.isCancelled else { return }
-                self?.finishAck(.failed)
+                self?.finishAck(counter, .failed)
             }
+            pendingAcks[counter] = (cont, timeout)
+            send(data)
         }
     }
 
@@ -573,9 +688,18 @@ final class BLECurtainLink: NSObject, CurtainLink {
                 case .ok:
                     self.markReady()
                     return
+                case .missingPermission:
+                    // 签名的回答：它认得我们
+                    self.markReady()
+                    return
                 case .rejected, .failed:
                     // 不认得我们（可能 Mac 那边撤销过）。没签名的拒绝谁都能伪造，所以不删钥匙，只是不说已连接，过一会儿再试。
                     self.publish { $0.connection = .notConnected }
+                    // 不认这把钥匙的中心可能是撤销过的旧电脑：用待撤销的旧钥匙试一次（这次连接里每份只试一次）
+                    if result == .rejected, let current = self.mac, current.identifier == central {
+                        await self.runPendingUnpair(on: current)
+                        guard !Task.isCancelled, self.mac?.identifier == central, !self.ready else { return }
+                    }
                 }
                 let spent = Date().timeIntervalSince(started)
                 if spent < Self.confirmRetry {
@@ -593,6 +717,17 @@ final class BLECurtainLink: NSObject, CurtainLink {
         if !wasReady { Self.linkLog.info("link ready") }
         resetBackoff("ready")
         publish { $0.connection = .connected }
+        if !wasReady { sendName() }
+    }
+
+    /// 每次连上发一次手机名（protocol-v3 §1：≤ 60 字节，去掉首尾空白）。电脑拿去在「手机」页上显示
+    private func sendName() {
+        guard !sentNameThisLink else { return }
+        sentNameThisLink = true
+        let raw = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = String(decoding: PairingCrypto.utf8Prefix(raw.isEmpty ? "iPhone" : raw, maxBytes: 60), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { [weak self] in _ = await self?.sendSigned("name:" + trimmed) }
     }
 
     /// 收到 Mac 验过签名的消息（收据 / 状态 / 问询）：它一定认得我们，算已连接
@@ -606,12 +741,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
         isPaired = false
         ready = false
         lastStateSeq = 0
+        lastAwakeSeq = 0
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
         publish {
             $0.connection = .notPaired
             $0.macName = nil
+            $0.keepAwake = nil
         }
     }
 
@@ -625,12 +762,14 @@ final class BLECurtainLink: NSObject, CurtainLink {
         cont?.resume(returning: reply)
     }
 
-    private func finishAck(_ result: AckResult) {
-        ackTimeout?.cancel()
-        ackTimeout = nil
-        let pending = pendingAck
-        pendingAck = nil
-        pending?.cont.resume(returning: result)
+    private func finishAck(_ counter: UInt64, _ result: AckResult) {
+        guard let pending = pendingAcks.removeValue(forKey: counter) else { return }
+        pending.timeout.cancel()
+        pending.cont.resume(returning: result)
+    }
+
+    private func finishAllAcks(_ result: AckResult) {
+        for counter in Array(pendingAcks.keys) { finishAck(counter, result) }
     }
 
     private func finishLift(_ outcome: LiftOutcome) {
@@ -674,7 +813,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
         }
     }
 
-    private func receive(_ message: Data) {
+    private func receive(_ message: Data, from central: CBCentral) {
         switch PairingCrypto.kind(of: message) {
         case .pairResponse, .pairReject, .pairAccepted:
             // 换电脑时配对的回话只认新电脑那条线（见 receivePairing）
@@ -683,16 +822,19 @@ final class BLECurtainLink: NSObject, CurtainLink {
         case .ack:
             guard let ack = try? PairingCrypto.Ack(decoding: message),
                   ack.phoneID == PhoneKeychain.phoneID() else { return }
-            let verified = ack.status == .accepted && PhoneKeychain.loadLink().map {
+            // 在回待撤销那条 unpair 的：只给撤销流程
+            if handlePendingAttemptAck(ack, from: central) { return }
+            // verifyAck 对签名的 0 和 4 都会过：都证明电脑认得我们
+            let verified = PhoneKeychain.loadLink().map {
                 PairingCrypto.verifyAck(ack, key: SymmetricKeyBox($0.key).key)
             } == true
             // 晚到的收据（前一次 ping 的）也证明电脑认得我们
             if verified { noteVerifiedFromMac("ack") }
-            guard let pending = pendingAck, ack.counter == pending.counter else { return }
+            guard pendingAcks[ack.counter] != nil else { return }
             if verified {
-                finishAck(.ok)
+                finishAck(ack.counter, ack.status == .missingPermission ? .missingPermission : .ok)
             } else {
-                finishAck(ack.status == .unknownOrBadSignature ? .rejected : .failed)
+                finishAck(ack.counter, ack.status == .unknownOrBadSignature ? .rejected : .failed)
             }
         case .state:
             guard let record = PhoneKeychain.loadLink(),
@@ -708,6 +850,18 @@ final class BLECurtainLink: NSObject, CurtainLink {
                 if liftedByUs { $0.phoneLiftCount += 1 }
             }
             if state.closed { finishCover(.covered) } else { finishLift(.lifted) }
+        case .keepAwakeState:
+            guard let record = PhoneKeychain.loadLink(),
+                  let report = PairingCrypto.openKeepAwakeState(message, phoneID: PhoneKeychain.phoneID(),
+                                                                key: SymmetricKeyBox(record.key).key),
+                  report.seq > lastAwakeSeq else { return }
+            noteVerifiedFromMac("keep-awake state")
+            lastAwakeSeq = report.seq
+            guard let state = KeepAwakeState(mode: report.mode, endsAt: report.endsAt, appName: report.appName) else {
+                Self.linkLog.info("keep-awake state: unknown mode \(report.mode); ignored")
+                return
+            }
+            publish { $0.keepAwake = state }
         case .poll:
             answerPoll(message)
         case .liftResult:
@@ -738,7 +892,11 @@ final class BLECurtainLink: NSObject, CurtainLink {
         case .revoke:
             guard let record = PhoneKeychain.loadLink(),
                   PairingCrypto.verifyRevoke(message, phoneID: PhoneKeychain.phoneID(),
-                                             key: SymmetricKeyBox(record.key).key) else { return }
+                                             key: SymmetricKeyBox(record.key).key) else {
+                // 也许是旧电脑用旧钥匙签的撤销：那份待撤销就可以删了
+                handlePendingRevoke(message, from: central)
+                return
+            }
             PhoneKeychain.deleteLink()
             forgetLocally()
             onRevoked?()
@@ -761,6 +919,127 @@ final class BLECurtainLink: NSObject, CurtainLink {
         default:
             break
         }
+    }
+
+    // MARK: - 待撤销（protocol-v3 §5；怎么认旧电脑见 PendingUnpair.swift）
+
+    /// 旁路中心发来的：只认撤销那一条的收据、以及旧钥匙签的 Revoke
+    private func receiveSide(_ message: Data, from central: CBCentral) {
+        switch PairingCrypto.kind(of: message) {
+        case .ack:
+            guard let ack = try? PairingCrypto.Ack(decoding: message), ack.phoneID == PhoneKeychain.phoneID() else { return }
+            _ = handlePendingAttemptAck(ack, from: central)
+        case .revoke:
+            handlePendingRevoke(message, from: central)
+        default:
+            break
+        }
+    }
+
+    private func handlePendingAttemptAck(_ ack: PairingCrypto.Ack, from central: CBCentral) -> Bool {
+        guard let attempt = pendingAttempts[central.identifier],
+              let outcome = PendingUnpairBook.classify(ack, counter: attempt.counter,
+                                                       phoneID: PhoneKeychain.phoneID(), key: attempt.key) else { return false }
+        finishPendingAttempt(central.identifier, outcome)
+        return true
+    }
+
+    private func handlePendingRevoke(_ message: Data, from central: CBCentral) {
+        let book = PhoneKeychain.loadPendingUnpair()
+        guard let record = book.recordVerifying(revoke: message, phoneID: PhoneKeychain.phoneID()) else { return }
+        Self.linkLog.info("pending unpair: signed revoke from the old computer; record removed")
+        PhoneKeychain.removePendingUnpair(record.id)
+        if pendingAttempts[central.identifier]?.recordID == record.id {
+            finishPendingAttempt(central.identifier, .revoked)
+        }
+        pendingCleared()
+    }
+
+    private func finishPendingAttempt(_ central: UUID, _ outcome: PendingUnpairOutcome) {
+        guard let attempt = pendingAttempts.removeValue(forKey: central) else { return }
+        attempt.timeout.cancel()
+        attempt.cont.resume(returning: outcome)
+    }
+
+    private func finishAllPendingAttempts() {
+        for id in Array(pendingAttempts.keys) { finishPendingAttempt(id, .noAnswer) }
+    }
+
+    /// 这台中心还连着（是现在的 mac，或者旁路）
+    private func isAttached(_ central: UUID) -> Bool {
+        mac?.identifier == central || sideCentrals[central] != nil
+    }
+
+    private func kickPendingUnpair(on central: CBCentral, trusted: UUID? = nil) {
+        guard PhoneKeychain.hasPendingUnpair, !pendingRunning.contains(central.identifier) else { return }
+        Task { [weak self] in await self?.runPendingUnpair(on: central, trusted: trusted) }
+    }
+
+    /// 在这台中心上把还没试过的待撤销一份份试过去。trusted = 已知这台就是它的旧电脑（刚用那把钥匙确认过）
+    private func runPendingUnpair(on central: CBCentral, trusted: UUID? = nil) async {
+        let cid = central.identifier
+        guard !pendingRunning.contains(cid) else { return }
+        pendingRunning.insert(cid)
+        defer { pendingRunning.remove(cid) }
+        while isAttached(cid) {
+            // 配对进行中，那条线上不插别的
+            if pairingActive, mac?.identifier == cid { return }
+            // 现在配着的那台（用现在的钥匙确认过）：绝不往它身上试旧钥匙
+            if isPaired, ready, mac?.identifier == cid { return }
+            var candidates = PhoneKeychain.loadPendingUnpair()
+                .candidates(forCentral: cid.uuidString, alreadyTried: pendingTried[cid, default: []])
+            if let trusted, let index = candidates.firstIndex(where: { $0.id == trusted }) {
+                candidates.insert(candidates.remove(at: index), at: 0)
+            }
+            guard let next = candidates.first else { return }
+            pendingTried[cid, default: []].insert(next.id)
+            let outcome = await sendPendingUnpair(next.id, to: central)
+            // trusted 那份：这台中心就是它的旧电脑，按记录里的标识算
+            let who = next.id == trusted ? next.macIdentifier : cid.uuidString
+            let delete = PendingUnpairBook.shouldDelete(outcome, record: next, central: who)
+            Self.linkLog.info("pending unpair on \(cid.uuidString, privacy: .public): \(String(describing: outcome), privacy: .public)\(delete ? "; record removed" : "")")
+            if delete {
+                PhoneKeychain.removePendingUnpair(next.id)
+                pendingCleared()
+            }
+            guard PendingUnpairBook.continuesAfter(outcome) else { return }
+        }
+    }
+
+    /// 用那份旧钥匙签一条 unpair（计数先写进钥匙串）发给这台中心，等它回答（最多 6 秒）
+    private func sendPendingUnpair(_ id: UUID, to central: CBCentral) async -> PendingUnpairOutcome {
+        guard let reserved = PhoneKeychain.reservePendingCounter(id),
+              let data = PairingCrypto.sealCommand("unpair", phoneID: PhoneKeychain.phoneID(), counter: reserved.counter,
+                                                   key: SymmetricKeyBox(reserved.record.key).key) else { return .other }
+        let cid = central.identifier
+        finishPendingAttempt(cid, .noAnswer)
+        return await withCheckedContinuation { cont in
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(6))
+                guard !Task.isCancelled else { return }
+                self?.finishPendingAttempt(cid, .noAnswer)
+            }
+            pendingAttempts[cid] = PendingAttempt(recordID: id, key: reserved.record.key, counter: reserved.counter,
+                                                  cont: cont, timeout: timeout)
+            send(data, to: central)
+        }
+    }
+
+    /// 删掉了一份：都删完了、广播又只是为它开的，就停
+    private func pendingCleared() {
+        guard !PhoneKeychain.hasPendingUnpair else { return }
+        Self.linkLog.info("pending unpair: none left")
+        if quietOnly, !isPaired { stopQuietAdvertising() }
+    }
+
+    /// 旁路：不是现在这台、也不是来配对的那台，又有待撤销的，就记下来试一试；否则照旧不理
+    private func attachSide(_ central: CBCentral) {
+        guard PhoneKeychain.hasPendingUnpair else { return }
+        if sideCentrals[central.identifier] == nil {
+            sideCentrals[central.identifier] = SideCentral(central)
+            pendingTried[central.identifier] = nil
+        }
+        kickPendingUnpair(on: central)
     }
 
     /// 「现在撤下」没撤下来：用签名的 ping 让 Mac 再报一次幕布状态（老 Mac 也这样回）
@@ -935,10 +1214,13 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         }
         finishStagedAck(false)
         finishReply(.disconnected)
-        finishAck(.failed)
+        finishAllAcks(.failed)
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
+        sideCentrals.removeAll()
+        pendingTried.removeAll()
+        finishAllPendingAttempts()
     }
 
     /// 系统把 App 叫回来时（状态恢复），把之前加过的服务和订阅着的 Mac 接回来
@@ -958,7 +1240,11 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         if let central = outbox?.subscribedCentrals?.first {
             mac = central
             macEverSubscribed = true
-            if isPaired { startConfirmLink(reason: "restored") }
+            if isPaired {
+                startConfirmLink(reason: "restored")
+            } else if let central = mac {
+                kickPendingUnpair(on: central)
+            }
         }
         Self.linkLog.info("state restored (service \(self.serviceState == .added ? "kept" : "missing"), subscribed \(self.mac != nil))")
         // 恢复完：该广播就广播（状态还没到 poweredOn 时，poweredOn 那里会再调一次）
@@ -989,11 +1275,23 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
                            didSubscribeTo characteristic: CBCharacteristic) {
         guard characteristic.uuid == Identity.outbox else { return }
         if central.identifier == pairingCentral?.identifier { return }
+        if sideCentrals[central.identifier] != nil {
+            // 旁路中心重新订阅：新连接，撤销那一条再试一次
+            pendingTried[central.identifier] = nil
+            sideCentrals[central.identifier]?.assembler.reset()
+            kickPendingUnpair(on: central)
+            return
+        }
         if central.identifier == mac?.identifier {
             // 同一台电脑又订阅了一次（它那边是一条新连接，要重新表明身份）：重新确认，不能不理
-            guard isPaired, !replacing else { return }
+            pendingTried[central.identifier] = nil
+            guard isPaired, !replacing else {
+                if !isPaired, !pairingActive { kickPendingUnpair(on: central) }
+                return
+            }
             Self.linkLog.info("same computer subscribed again: re-confirming link")
             ready = false
+            sentNameThisLink = false
             assembler.reset()
             startConfirmLink(reason: "re-subscribe")
             return
@@ -1006,20 +1304,28 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
                     pairingCentral = central
                     pairingEverSubscribed = true
                     pairingAssembler.reset()
+                } else {
+                    attachSide(central)
                 }
                 return
             }
         } else if isPaired && ready && mac != nil {
-            // 已经和配着的那台连好了：别的电脑来连不理它，免得把好好的连接顶掉
+            // 已经和配着的那台连好了：别的电脑来连不顶掉现在的连接；有待撤销的就当旁路试一试，否则不理
+            attachSide(central)
             return
         }
         if let old = mac { dropQueued(for: old) }
         mac = central
         macEverSubscribed = true
         ready = false
+        sentNameThisLink = false
+        pendingTried[central.identifier] = nil
         assembler.reset()
         if isPaired {
             startConfirmLink(reason: "subscribe")
+        } else if !pairingActive {
+            // 没配着：来连的可能是撤销过的旧电脑
+            kickPendingUnpair(on: central)
         }
     }
 
@@ -1035,6 +1341,14 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             finishStagedAck(false)
             return
         }
+        if sideCentrals[central.identifier] != nil {
+            if let still = outbox?.subscribedCentrals, still.contains(where: { $0.identifier == central.identifier }) { return }
+            sideCentrals[central.identifier] = nil
+            pendingTried[central.identifier] = nil
+            finishPendingAttempt(central.identifier, .noAnswer)
+            dropQueued(for: central)
+            return
+        }
         guard central.identifier == mac?.identifier else {
             dropQueued(for: central)
             return
@@ -1045,6 +1359,9 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             return
         }
         let wasReady = ready
+        let triedPending = pendingTried[central.identifier] != nil
+        pendingTried[central.identifier] = nil
+        finishPendingAttempt(central.identifier, .noAnswer)
         mac = nil
         ready = false
         confirmTask?.cancel()
@@ -1052,7 +1369,8 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         dropQueued(for: central)
         assembler.reset()
         Self.linkLog.info("computer unsubscribed (ready \(wasReady))")
-        if !wasReady { noteEarlyDrop(central) }
+        // 收下撤销那一条就断开的旧电脑不算早断
+        if !wasReady, !triedPending { noteEarlyDrop(central) }
         ensureAdvertising("unsubscribed")
         // 断了：手机不知道 Mac 在不在，只说「没连上」；主屏从这一刻重新等 20 秒
         publish {
@@ -1061,7 +1379,7 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
         }
         // 换电脑时原来那台断了，不影响正在跟新电脑配的那一轮
         if !replacing { finishReply(.disconnected) }
-        finishAck(.failed)
+        finishAllAcks(.failed)
         finishCover(.unavailable)
         finishLift(.unavailable)
         awaitingLiftOpen = false
@@ -1094,8 +1412,10 @@ extension BLECurtainLink: @preconcurrency CBPeripheralManagerDelegate {
             let from = request.central.identifier
             if from == pairingCentral?.identifier {
                 if let message = pairingAssembler.feed(chunk) { receivePairing(message) }
+            } else if let side = sideCentrals[from] {
+                if let message = side.assembler.feed(chunk) { receiveSide(message, from: request.central) }
             } else if mac == nil || from == mac?.identifier {
-                if let message = assembler.feed(chunk) { receive(message) }
+                if let message = assembler.feed(chunk) { receive(message, from: request.central) }
             }
             // 别的电脑写进来的：不理
         }

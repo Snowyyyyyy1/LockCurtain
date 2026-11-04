@@ -1,9 +1,10 @@
 import Observation
 import SwiftUI
 
-/// The local pairing prototype. There is no Mac to ask yet, so this session
-/// drives the three UI steps and never tells the link that a connection exists:
-/// after it finishes, BLEPlaceholderCurtainLink still reports "没连上".
+/// Drives the pairing sheet's three steps. The real work (CPace with the
+/// computer) happens in `verify`, which AppModel wires to BLECurtainLink; this
+/// session never tells the link that a connection exists — the link reports
+/// what the computer said.
 @MainActor
 @Observable
 final class PairingSession {

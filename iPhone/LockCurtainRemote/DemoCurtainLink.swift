@@ -19,7 +19,8 @@ final class DemoCurtainLink: CurtainLink {
             phase: phase,
             auto: auto,
             macName: macName,
-            isAway: false
+            isAway: false,
+            keepAwake: .off
         )
     }
 
@@ -66,6 +67,21 @@ final class DemoCurtainLink: CurtainLink {
         snapshot.phoneLiftCount += 1
         publish()
         return .lifted
+    }
+
+    /// 保持唤醒（演示）：不发任何东西，0.6 秒后假装电脑报回来了
+    func setKeepAwake(_ choice: KeepAwakeChoice) async -> Bool {
+        guard snapshot.connection == .connected else { return false }
+        try? await Task.sleep(for: .milliseconds(600))
+        guard !Task.isCancelled else { return false }
+        switch choice {
+        case .off: snapshot.keepAwake = .off
+        case .always: snapshot.keepAwake = .always
+        case .oneHour, .twoHours, .fiveHours:
+            snapshot.keepAwake = .timed(endsAt: Date().addingTimeInterval(choice.duration ?? 0))
+        }
+        publish()
+        return true
     }
 
     // MARK: - Demo switcher
