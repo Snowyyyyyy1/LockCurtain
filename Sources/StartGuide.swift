@@ -1,7 +1,7 @@
 // StartGuide.swift —— 「开始用 LockCurtain」窗口（N1）+ 权限、系统设置跳转的小工具
 //
 // 第一次打开、以及升级后权限缺了的时候弹一次；之后从 设置 › 通用 › 关于 ›「再看一遍开始指南」找回来。
-// 三行：权限（屏幕录制、辅助功能）/ 配对手机（可以以后再说）/ 图标在哪儿。字照 Camo §16.4。
+// 三行：权限（屏幕录制、辅助功能）/ 配对手机（可以以后再说）/ 图标在哪儿（只是说明，不打勾）。字照 Camo §16.4 / v15.1 §17.4。
 
 import AppKit
 import Combine
@@ -13,6 +13,8 @@ import SwiftUI
 /// 系统权限和系统设置的跳转（权限页、开始指南、N2 提示共用）
 enum SystemPermissions {
     static var screenRecording: Bool { CGPreflightScreenCaptureAccess() }
+    /// 启动时屏幕录制有没有授权（AppDelegate 一启动就读一次）。这次运行里从没有变成有，才提示要重开
+    static let screenRecordingAtLaunch = CGPreflightScreenCaptureAccess()
     static var accessibility: Bool { AXIsProcessTrusted() }
 
     enum Bluetooth { case allowed, notDetermined, denied }
@@ -94,18 +96,22 @@ final class StartGuideController: NSObject, NSWindowDelegate {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
         UserDefaults.standard.set(version, forKey: Self.shownVersionKey)
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 360),
-                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            // 高度跟内容走：NSHostingController 按 SwiftUI 的理想尺寸定窗口大小（以前 SwiftUI 里写死了 420 高，
+            // 窗口这边改成 360 也会被它撑回 420）。配没配上手机行高不一样，窗口跟着变
+            let host = NSHostingController(rootView: StartGuideView(
+                pairing: pairing,
+                openPairing: { [weak self] in self?.openPairing() },
+                done: { [weak self] in self?.window?.performClose(nil) }))
+            host.sizingOptions = [.preferredContentSize]
+            let w = NSWindow(contentViewController: host)
+            w.styleMask = [.titled, .closable]
             w.title = "开始用 LockCurtain"
             w.isReleasedWhenClosed = false
             w.delegate = self
-            w.contentViewController = NSHostingController(rootView: StartGuideView(
-                pairing: pairing,
-                openPairing: { [weak self] in self?.openPairing() },
-                done: { [weak w] in w?.performClose(nil) }))
-            w.setContentSize(NSSize(width: 480, height: 360))
+            let size = host.view.fittingSize
+            w.setContentSize(size)
             if let v = (NSScreen.screens.first ?? NSScreen.main)?.visibleFrame {
-                w.setFrameOrigin(NSPoint(x: v.midX - 240, y: v.midY - 180))
+                w.setFrameOrigin(NSPoint(x: v.midX - size.width / 2, y: v.midY - size.height / 2))
             }
             window = w
         }
@@ -120,7 +126,6 @@ private struct StartGuideView: View {
     let done: () -> Void
     @State private var screen = SystemPermissions.screenRecording
     @State private var ax = SystemPermissions.accessibility
-    @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBar = true
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -131,23 +136,36 @@ private struct StartGuideView: View {
                 permission("屏幕录制", ok: screen, request: SystemPermissions.requestScreenRecording)
                 permission("辅助功能", ok: ax, request: SystemPermissions.requestAccessibility)
             }
-            step(done: !pairing.phones.isEmpty) {
-                Text("配对手机（可以以后再说）").font(.headline)
-                Button("配对手机…", action: openPairing)
-                Text("手机上先装 LockCurtain。").font(.callout).foregroundStyle(.secondary)
+            if pairing.phones.isEmpty {
+                step(done: false) {
+                    Text("配对手机（可以以后再说）").font(.headline)
+                    Button("配对手机…", action: openPairing)
+                    Text("手机上先装 LockCurtain。").font(.callout).foregroundStyle(.secondary)
+                }
+            } else {
+                // 配上了：打勾，一台一行「已配上 iPhone · 11 月 4 日配上」（和 设置 › 手机 一样的写法），没有按钮
+                step(done: true) {
+                    ForEach(pairing.phones) { phone in
+                        PhonePane.title(phone, prefix: "已配上 ").font(.headline)
+                    }
+                }
             }
-            step(done: showMenuBar) {
+            // 只是告诉你在哪儿，不算一项要做完的事：不打勾，左边是图标
+            row(icon: Image(systemName: "menubar.arrow.up.rectangle").foregroundStyle(.secondary)) {
                 Text("图标在哪儿").font(.headline)
                 Text("LockCurtain 住在右上角的菜单栏里。").font(.callout).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
             HStack {
                 Spacer()
                 Button("好了", action: done).keyboardShortcut(.defaultAction)
             }
+            .padding(.top, 24 - 18)
         }
-        .padding(24)
-        .frame(width: 480, height: 420, alignment: .topLeading)
+        .padding(.horizontal, 24)
+        .padding(.top, 24)
+        .padding(.bottom, 20)
+        .frame(width: 480, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
         .onReceive(timer) { _ in
             screen = SystemPermissions.screenRecording
             ax = SystemPermissions.accessibility
@@ -155,10 +173,13 @@ private struct StartGuideView: View {
     }
 
     private func step<Content: View>(done: Bool, @ViewBuilder _ content: () -> Content) -> some View {
+        row(icon: Image(systemName: done ? "checkmark.circle.fill" : "circle")
+            .foregroundStyle(done ? Color(nsColor: .systemGreen) : Color.secondary), content)
+    }
+
+    private func row<Icon: View, Content: View>(icon: Icon, @ViewBuilder _ content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: done ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 20))
-                .foregroundStyle(done ? Color(nsColor: .systemGreen) : Color.secondary)
+            icon.font(.system(size: 20)).frame(width: 24)
             VStack(alignment: .leading, spacing: 6) { content() }
             Spacer(minLength: 0)
         }

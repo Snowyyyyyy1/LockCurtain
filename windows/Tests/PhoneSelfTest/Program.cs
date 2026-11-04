@@ -288,6 +288,12 @@ Console.WriteLine("== 界面上的字 / 启动器命令行 ==");
     Check(LockCurtain.UiText.Duration(TimeSpan.FromSeconds(40)) == "不到 1 分" && LockCurtain.UiText.Duration(TimeSpan.FromMinutes(59.9)) == "59 分"
           && LockCurtain.UiText.Duration(TimeSpan.FromHours(2)) == "2 小时" && LockCurtain.UiText.Duration(TimeSpan.FromMinutes(80)) == "1 小时 20 分",
           "时长：不到 1 分 / N 分 / N 小时 / N 小时 M 分");
+    Check(LockCurtain.UiText.PhoneTitleParts("iPhone", now, tz) == ("iPhone", " · 11 月 4 日配上")
+          && LockCurtain.UiText.PhoneTitleParts("iPhone", null, tz) == ("iPhone", null),
+          "已配对那一行分两段：名字 / 「 · 11 月 4 日配上」（次要颜色）");
+    Check(LockCurtain.UiText.Remaining(TimeSpan.FromSeconds(40)) == "不到 1 分钟"
+          && LockCurtain.UiText.Remaining(TimeSpan.FromMinutes(80)) == "还剩 1 小时 20 分",
+          "右键菜单保持唤醒剩余时间：还剩 1 小时 20 分 / 不到 1 分钟");
 
     Check(LockCurtain.CtlArgs.Parse([]).Action == LockCurtain.CtlAction.Launch && LockCurtain.CtlArgs.Parse(["--launch"]).Action == LockCurtain.CtlAction.Launch,
           "启动器：没参数 / --launch 起主程序");

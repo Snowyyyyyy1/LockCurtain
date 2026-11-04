@@ -39,18 +39,15 @@ struct SettingsView: View {
                     .accessibilityLabel("关闭")
                 }
             }
-            .confirmationDialog(
-                "撤销这台手机的配对？",
-                isPresented: $showUnpairConfirmation,
-                titleVisibility: .visible
-            ) {
+            // copy v15.1 §17.4
+            .alert("撤销和这台电脑的配对？", isPresented: $showUnpairConfirmation) {
+                Button("取消", role: .cancel) {}
                 Button("撤销配对", role: .destructive) {
                     model.unpair()
                     dismiss()
                 }
-                Button("取消", role: .cancel) {}
             } message: {
-                Text("以后要重新配对才能控制这台电脑。")
+                Text("撤销后要重新输码才能再盖上幕布。电脑下次连上时也会知道这边撤销了。")
             }
             // 换电脑：先说清楚是「换」，不是「加」；取消或者没配上，原来那台不动
             .alert("换成另一台电脑？", isPresented: $showReplaceAlert) {

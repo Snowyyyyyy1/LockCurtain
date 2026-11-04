@@ -26,9 +26,16 @@ internal static class UiText
 
     /// 已配对那一行的标题：「iPhone · 11 月 4 日配上」；老记录没有配对日期就只有名字
     public static string PhoneTitle(string name, DateTime? pairedAtUtc, TimeZoneInfo? local = null) =>
-        pairedAtUtc is { } at
-            ? $"{name} · {MonthDay(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(at, DateTimeKind.Utc), local ?? TimeZoneInfo.Local))}配上"
-            : name;
+        name + PhoneTitleParts(name, pairedAtUtc, local).Note;
+
+    /// 分成两段画：名字正常颜色，「 · 11 月 4 日配上」次要颜色（同一行）；老记录没有配对日期时第二段是 null
+    public static (string Name, string? Note) PhoneTitleParts(string name, DateTime? pairedAtUtc, TimeZoneInfo? local = null) =>
+        (name, pairedAtUtc is { } at
+            ? $" · {MonthDay(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(at, DateTimeKind.Utc), local ?? TimeZoneInfo.Local))}配上"
+            : null);
+
+    /// 右键菜单「保持唤醒 ▸」在跑时置灰的那一行剩下的时间：还剩 1 小时 20 分；不到一分钟是「不到 1 分钟」（copy v15 §17.3）
+    public static string Remaining(TimeSpan span) => span < TimeSpan.FromMinutes(1) ? "不到 1 分钟" : $"还剩 {Duration(span)}";
 
     /// 已配对那一行的第二行：「已连上」/「没连上 · 上次连上：3 小时前」（没记过就只有「没连上」）
     public static string PhoneStatus(bool connected, DateTime? lastSeenUtc, DateTime nowUtc, TimeZoneInfo? local = null) =>

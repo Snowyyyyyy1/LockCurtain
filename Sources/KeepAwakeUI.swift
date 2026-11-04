@@ -25,15 +25,22 @@ enum KeepAwakeText {
         }
     }
 
-    /// 短的状态值（右键菜单置灰的那一行），和手机上的值同一套写法（Camo §16.3）
-    static func short(_ until: KeepAwake.Until?, clockTime: Bool) -> String {
+    /// 右键菜单「保持唤醒 ▸」在跑时置灰的那一行（copy v15.1 §17.4）
+    static func menuStatus(_ until: KeepAwake.Until, clockTime: Bool) -> String {
         switch until {
-        case nil: return "关"
-        case .forever: return "一直"
+        case .forever:
+            return "一直开着，点「停止」才停"
         case .date(let end):
-            return clockTime ? "到 \(end.formatted(date: .omitted, time: .shortened))" : "还剩 \(duration(end.timeIntervalSinceNow))"
-        case .appQuits(_, let name): return "\(name) 开着时"
+            if clockTime { return "到 \(end.formatted(date: .omitted, time: .shortened))，到点自己停" }
+            return "\(remaining(end.timeIntervalSinceNow))，到点自己停"
+        case .appQuits(_, let name):
+            return "\(name) 开着，关掉就停"
         }
+    }
+
+    /// 还剩 1 小时 20 分；不到一分钟时是「不到 1 分钟」（copy v15 §17.3，和手机上一样，别出现「还剩 0 分」）
+    static func remaining(_ seconds: Double) -> String {
+        seconds < 60 ? "不到 1 分钟" : "还剩 \(duration(seconds))"
     }
 
     /// 「到指定时间…」默认是一小时以后的第一个整点

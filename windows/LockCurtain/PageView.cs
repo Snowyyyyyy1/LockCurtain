@@ -317,7 +317,14 @@ internal sealed class PageView : Panel
                     g.DrawImage(row.Icon, At(row.IconRect));
                 }
                 var text = At(row.TextRect);
-                if (row.TitleHeight > 0)
+                if (row.TitleHeight > 0 && row.TitleNote is { } note && !row.MonoTitle)
+                {
+                    var titleW = Math.Min(TextWidth(row.Title, BodyFont), text.Width);
+                    TextRenderer.DrawText(g, row.Title, BodyFont, new Rectangle(text.X, text.Y, titleW, row.TitleHeight), Theme.Text, LineFlags);
+                    TextRenderer.DrawText(g, note, BodyFont, new Rectangle(text.X + titleW, text.Y, text.Width - titleW, row.TitleHeight),
+                                          Theme.Secondary, LineFlags);
+                }
+                else if (row.TitleHeight > 0)
                     TextRenderer.DrawText(g, row.Title, row.MonoTitle ? monoFont : BodyFont,
                                           new Rectangle(text.X, text.Y, text.Width, row.TitleHeight), Theme.Text,
                                           row.MonoTitle ? MonoWrapFlags : LineFlags);
@@ -430,6 +437,8 @@ internal sealed class PageView : Panel
     internal sealed class Row
     {
         public string Title = "";
+        /// 紧跟在标题后面、同一行、次要颜色的一段（「iPhone · 11 月 4 日配上」里的「 · 11 月 4 日配上」）
+        public string? TitleNote;
         public string? Detail, Value;
         public bool MonoTitle, MonoValue;
         /// 靠右排，最后一个在最右；没有标题时靠左排

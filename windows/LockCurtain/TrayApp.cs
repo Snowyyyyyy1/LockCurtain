@@ -191,7 +191,7 @@ internal sealed partial class TrayApp : ApplicationContext
 
     /// 「保持唤醒 ▸」：在跑时是置灰的状态行和「停止」；没在跑时和面板同一份菜单，「到指定时间…」去设置页里选
     List<TrayCommand> KeepAwakeCommands() => keepAwake.Mode != null
-        ? [new(keepAwake.Short(), () => { }, Enabled: false), new("停止", keepAwake.Stop)]
+        ? [new(keepAwake.MenuStatus(), () => { }, Enabled: false), new("停止", keepAwake.Stop)]
         : KeepAwakeMenu.Choices(keepAwake, () => ShowSettings()?.PickKeepAwakeTime());
 
     /// settings 命令在这里处理，其余交给遮罩

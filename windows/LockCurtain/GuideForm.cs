@@ -1,8 +1,8 @@
 // GuideForm.cs —— 「开始用 LockCurtain」（Colo N1，copy §16.4）
 //
-// 第一次打开时弹一次；以后从 设置 › 通用 › 关于 ›「再看一遍开始指南」找回来。Windows 没有权限那一行，只有两行清单：
-//   配对手机（可以以后再说）：「配对手机…」，下面一句「手机上先装 LockCurtain。」—— 配上了就打勾
-//   图标在哪儿：Windows 11 新的托盘图标默认收在 ^ 里，配一张代码画的示意小图 —— 拖到任务栏上了就打勾
+// 第一次打开时弹一次；以后从 设置 › 通用 › 关于 ›「再看一遍开始指南」找回来。Windows 没有权限那一行，只有两行：
+//   配对手机：没配上是空心圆圈 +「配对手机…」+「手机上先装 LockCurtain。」；配上了是绿勾 +「已配上 iPhone · 11 月 4 日配上」，没有按钮
+//   图标在哪儿：只是说明，不打勾，左边是个图标；Windows 11 新的托盘图标默认收在 ^ 里，配一张代码画的示意小图（copy v15.1 §17.4）
 // 底部一颗「好了」。窗口和设置窗口一样跟着系统深浅色（PageView 画）。
 
 using System.Drawing;
@@ -14,7 +14,7 @@ namespace LockCurtain;
 
 internal sealed class GuideForm : Form
 {
-    const int LogicalWidth = 480, LogicalHeight = 420;
+    const int LogicalWidth = 480, LogicalHeight = 420;   // LogicalHeight 只是建页之前的初始值
 
     readonly PhoneLink phone;
     readonly Action showPairing;
@@ -23,8 +23,6 @@ internal sealed class GuideForm : Form
     readonly Panel bar = new() { Dock = DockStyle.Bottom };
     readonly Button done;
     readonly Font doneFont;
-    /// 每 2 秒看一眼图标拖出来没有
-    readonly System.Windows.Forms.Timer check = new() { Interval = 2000 };
     readonly List<Bitmap> images = new();
     string signature = "";
 
@@ -53,8 +51,6 @@ internal sealed class GuideForm : Form
         Rebuild();
 
         phone.PhonesChanged += Rebuild;
-        check.Tick += (_, _) => Rebuild();
-        check.Start();
     }
 
     int S(int logical) => LogicalToDeviceUnits(logical);
@@ -68,7 +64,6 @@ internal sealed class GuideForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         phone.PhonesChanged -= Rebuild;
-        check.Dispose();
         foreach (var b in images) b.Dispose();
         doneFont.Dispose();
         Icon?.Dispose();
@@ -86,9 +81,8 @@ internal sealed class GuideForm : Form
     void Rebuild()
     {
         if (IsDisposed) return;
-        var paired = phone.IsPaired;
-        var promoted = IconPromoted();
-        var next = $"{paired}|{promoted}|{DeviceDpi}";
+        var phones = phone.Phones;
+        var next = string.Join("|", phones.Select(p => $"{p.ID}:{p.Name}:{p.PairedAt}")) + $"|{DeviceDpi}";
         if (next == signature) return;
         signature = next;
         foreach (var b in images) b.Dispose();
@@ -96,11 +90,23 @@ internal sealed class GuideForm : Form
         page.Build("开始用 LockCurtain", v =>
         {
             var list = v.Section();
-            list.Item(Circle(v, paired), "配对手机", "手机上先装 LockCurtain。",
-                      controls: v.MakeButton("配对手机…", showPairing));
-            list.Item(Circle(v, promoted), "图标在哪儿", "LockCurtain 住在右下角，可能收在 ^ 里。想让它一直看得见，把它拖到任务栏上。");
+            if (phones.Count == 0)
+                list.Item(Circle(v, false), "配对手机", "手机上先装 LockCurtain。",
+                          controls: v.MakeButton("配对手机…", showPairing));
+            else
+                // 配上了：一台一行「已配上 iPhone · 11 月 4 日配上」，日期次要颜色（和 设置 › 手机 一样），没有按钮
+                foreach (var p in phones)
+                    list.Add(new PageView.Row { Icon = Circle(v, true), Title = "已配上 " + p.Name,
+                                                TitleNote = UiText.PhoneTitleParts(p.Name, p.PairedAt).Note });
+            // 不算要做完的事：不打勾，左边是个次要颜色的图标
+            var where = PageView.GlyphBitmap("\uE7F4", v.S(24), v.Theme.Secondary);     // TVMonitor
+            images.Add(where);
+            list.Item(where, "图标在哪儿", "LockCurtain 住在右下角，可能收在 ^ 里。想让它一直看得见，把它拖到任务栏上。");
             list.Wide(new TaskbarSketch(v.Theme));
         });
+        // 窗口高度跟内容走（配没配上手机行数不一样），不留一大块空白；屏幕放不下才滚
+        var work = Screen.FromControl(this).WorkingArea.Height - S(80);
+        ClientSize = new Size(S(LogicalWidth), Math.Min(page.ContentHeight + S(56), work));
     }
 
     /// 左边的圆圈：没做完是空心，做完是绿底白勾
@@ -127,28 +133,6 @@ internal sealed class GuideForm : Form
         }
         images.Add(bmp);
         return bmp;
-    }
-
-    /// Windows 11 记每个托盘图标在不在任务栏上：HKCU\Control Panel\NotifyIconSettings\<id> 的 IsPromoted。
-    /// ExecutablePath 可能写成已知文件夹 GUID 开头，只比文件名。读不到当没拖出来
-    static bool IconPromoted()
-    {
-        try
-        {
-            using var root = Registry.CurrentUser.OpenSubKey(@"Control Panel\NotifyIconSettings");
-            if (root == null) return false;
-            var exe = Path.GetFileName(Environment.ProcessPath ?? "LockCurtainApp.exe");
-            foreach (var name in root.GetSubKeyNames())
-            {
-                using var key = root.OpenSubKey(name);
-                if (key?.GetValue("ExecutablePath") is string path
-                    && path.EndsWith("\\" + exe, StringComparison.OrdinalIgnoreCase)
-                    && key.GetValue("IsPromoted") is int promoted && promoted == 1)
-                    return true;
-            }
-        }
-        catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException or IOException) { }
-        return false;
     }
 }
 

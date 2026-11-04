@@ -58,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         NSLog("LockCurtain launched")
+        // 记下启动时屏幕录制的授权状态（权限页「重新打开 LockCurtain」只在这次运行里刚授权时出现）
+        _ = SystemPermissions.screenRecordingAtLaunch
         removeLegacyWallpaperDumps()
         LogFolder.removeLegacyTmpLog()
 
@@ -384,7 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let awake = NSMenu()
         awake.autoenablesItems = false
         if let until = keepAwake.until {
-            _ = add(KeepAwakeText.short(until, clockTime: keepAwake.clockTime), nil, enabled: false, to: awake)
+            _ = add(KeepAwakeText.menuStatus(until, clockTime: keepAwake.clockTime), nil, enabled: false, to: awake)
             _ = add("停止", #selector(stopKeepAwake), to: awake)
         } else {
             add("一直", #selector(startKeepAwake(_:)), to: awake).tag = 0

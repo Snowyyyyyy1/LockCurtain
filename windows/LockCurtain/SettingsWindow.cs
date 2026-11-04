@@ -383,7 +383,9 @@ internal sealed class SettingsWindow : Form
             list.Add(new PageView.Row
             {
                 Icon = phoneIcon,
-                Title = UiText.PhoneTitle(p.Name, p.PairedAt),
+                // 「iPhone · 11 月 4 日配上」：日期次要颜色，同一行
+                Title = p.Name,
+                TitleNote = UiText.PhoneTitleParts(p.Name, p.PairedAt).Note,
                 Detail = UiText.PhoneStatus(p.Connected, p.LastSeen, now),
                 DetailDot = p.Connected ? v.ConnectedDot : v.DisconnectedDot,
                 Controls = [v.MakeButton("撤销配对", () => PairingForm.ConfirmUnpair(phone, id, this))],

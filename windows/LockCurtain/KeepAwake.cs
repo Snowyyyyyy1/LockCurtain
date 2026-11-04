@@ -168,13 +168,13 @@ internal sealed class KeepAwake : IDisposable
         _ => "",
     };
 
-    /// 右键菜单「保持唤醒 ▸」里置灰的那行（和手机上的值同一套说法，copy §16.3）
-    public string Short() => Mode switch
+    /// 右键菜单「保持唤醒 ▸」在跑时置灰的那行（copy v15.1 §17.4）
+    public string MenuStatus() => Mode switch
     {
-        KeepAwakeMode.Forever => "一直",
-        KeepAwakeMode.Until { Clock: true } u => $"到 {u.EndUtc.ToLocalTime():HH:mm}",
-        KeepAwakeMode.Until u => $"还剩 {UiText.Duration(u.EndUtc - DateTime.UtcNow)}",
-        KeepAwakeMode.WhileRunning w => $"{w.Name} 开着时",
+        KeepAwakeMode.Forever => "一直开着，点「停止」才停",
+        KeepAwakeMode.Until { Clock: true } u => $"到 {u.EndUtc.ToLocalTime():HH:mm}，到点自己停",
+        KeepAwakeMode.Until u => $"{UiText.Remaining(u.EndUtc - DateTime.UtcNow)}，到点自己停",
+        KeepAwakeMode.WhileRunning w => $"{w.Name} 开着，关掉就停",
         _ => "关",
     };
 

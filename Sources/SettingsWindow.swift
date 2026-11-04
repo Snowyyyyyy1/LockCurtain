@@ -498,9 +498,12 @@ private struct PermissionsPane: View {
             } header: {
                 Text("系统权限")
             } footer: {
-                HStack {
-                    Text("改完要重新打开 LockCurtain 才生效。").foregroundStyle(.secondary)
-                    Button("重新打开 LockCurtain", action: SystemPermissions.relaunch)
+                // 只有这次运行里屏幕录制从没授权变成已授权，才要重开（别的权限改了当场生效）
+                if !SystemPermissions.screenRecordingAtLaunch && screenRecording {
+                    HStack {
+                        Text("改完要重新打开 LockCurtain 才生效。").foregroundStyle(.secondary)
+                        Button("重新打开 LockCurtain", action: SystemPermissions.relaunch)
+                    }
                 }
             }
             Section("排查信息") {
@@ -537,7 +540,7 @@ private struct PermissionsPane: View {
 
 // MARK: - 手机（A1）
 
-private struct PhonePane: View {
+struct PhonePane: View {
     @ObservedObject var pairing: PhonePairing
     let openPairing: () -> Void
     @State private var confirming: PhonePairing.PhoneInfo?
@@ -629,7 +632,7 @@ private struct PhonePane: View {
         HStack(spacing: 12) {
             Image(systemName: "iphone").font(.system(size: 24)).foregroundStyle(.secondary).frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
-                Text(phone.pairedAt.map { "\(phone.name) · \(Self.monthDay($0))配上" } ?? phone.name)
+                Self.title(phone)
                 HStack(spacing: 6) {
                     Circle().fill(phone.connected ? Color(nsColor: .systemGreen) : Color(nsColor: .systemGray))
                         .frame(width: 8, height: 8)
@@ -646,6 +649,13 @@ private struct PhonePane: View {
         if phone.connected { return "已连上" }
         guard let seen = phone.lastSeen else { return "没连上" }
         return "没连上 · 上次连上：\(Self.ago(seen, now: now))"
+    }
+
+    /// 「iPhone · 11 月 4 日配上」：名字正常颜色，配上的日期次要颜色，同一行（开始指南也用）
+    static func title(_ phone: PhonePairing.PhoneInfo, prefix: String = "") -> Text {
+        guard let at = phone.pairedAt else { return Text(prefix + phone.name) }
+        let date = Text(" · \(monthDay(at))配上").foregroundColor(.secondary)
+        return Text("\(prefix + phone.name)\(date)")
     }
 
     /// 11 月 4 日
@@ -686,8 +696,15 @@ private struct KeepAwakePane: View {
                                     .font(.callout).foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Menu("改时长") { items }.fixedSize()
-                            Button("停止") { keepAwake.stop() }
+                            // 带边框的下拉按钮，和「停止」一样高、一样的样子，中间 8pt
+                            HStack(spacing: 8) {
+                                Menu("改时长") { items }
+                                    .menuStyle(.button)
+                                    .buttonStyle(.bordered)
+                                    .fixedSize()
+                                Button("停止") { keepAwake.stop() }
+                                    .buttonStyle(.bordered)
+                            }
                         }
                     } else {
                         HStack {
