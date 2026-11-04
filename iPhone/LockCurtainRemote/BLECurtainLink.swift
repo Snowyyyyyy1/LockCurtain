@@ -129,8 +129,12 @@ final class BLECurtainLink: NSObject, CurtainLink {
     private var pendingStagedAck: (counter: UInt64, cont: CheckedContinuation<Bool, Never>)?
     private var stagedAckTimeout: Task<Void, Never>?
     private var lastStateSeq: UInt64 = 0
+    /// 电脑最近一条验过签名的幕布状态是什么时候到的（快捷指令「撤下幕布」用它判断「状态是新的」）
+    private(set) var lastStateAt: Date?
     /// KeepAwakeState 自己记一份 seq（和 State 共用电脑那边同一个递增计数，这里按类型各防各的重放）
     private var lastAwakeSeq: UInt64 = 0
+    /// 电脑最近一条验过签名的保持唤醒状态是什么时候到的（快捷指令「保持唤醒」只认签收之后新到的）
+    private(set) var lastAwakeAt: Date?
 
     // 待撤销（protocol-v3 §5）
     /// 旁路中心：不是现在这台、也不是来配对的那台；只为撤销配对那一条收发
@@ -951,6 +955,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
               state.seq > lastStateSeq else { return }
         if path == .bluetooth { noteVerifiedFromMac("state") }
         lastStateSeq = state.seq
+        lastStateAt = Date()
         let liftedByUs = !state.closed && awaitingLiftOpen
         if state.closed || liftedByUs { awaitingLiftOpen = false }
         publish {
@@ -967,6 +972,7 @@ final class BLECurtainLink: NSObject, CurtainLink {
               report.seq > lastAwakeSeq else { return }
         if path == .bluetooth { noteVerifiedFromMac("keep-awake state") }
         lastAwakeSeq = report.seq
+        lastAwakeAt = Date()
         guard let state = KeepAwakeState(mode: report.mode, endsAt: report.endsAt, appName: report.appName) else {
             Self.linkLog.info("keep-awake state: unknown mode \(report.mode); ignored")
             return
@@ -1271,14 +1277,18 @@ final class BLECurtainLink: NSObject, CurtainLink {
         netEvalTask = nil
         let address = NetworkAddress.load()
         let bleReady = mac != nil && ready
-        if bleReady || !inForeground || !isPaired {
+        // 快捷指令 / 语音正在跑、而且允许走网络：当作前台，也不等那 5 秒（见 beginIntentSession）
+        let intentNetwork = intentSessions.values.contains(true)
+        let foreground = inForeground || intentNetwork
+        if bleReady || !foreground || !isPaired {
             bleWaitSince = nil
         } else if bleWaitSince == nil {
             bleWaitSince = Date()
         }
         var decision = NetworkLinkPlan.decide(
-            paired: isPaired, hasAddress: address != nil, foreground: inForeground, bleReady: bleReady,
-            waited: bleWaitSince.map { Date().timeIntervalSince($0) } ?? 0, running: netRunning)
+            paired: isPaired, hasAddress: address != nil, foreground: foreground, bleReady: bleReady,
+            waited: intentNetwork ? NetworkLinkPlan.bleGrace : (bleWaitSince.map { Date().timeIntervalSince($0) } ?? 0),
+            running: netRunning)
         if netForce, isPaired, address != nil, inForeground { decision = .run }
         switch decision {
         case .run:
@@ -1339,6 +1349,38 @@ final class BLECurtainLink: NSObject, CurtainLink {
         // 地址变了（或再存一次）：旧的连接作废，重新来
         stopNetwork()
         evaluateNetwork()
+    }
+
+    // MARK: - 快捷指令 / 语音（App Intents，见 CurtainIntentCore.swift）
+
+    /// 正在跑的快捷指令：token → 它要不要网络。App 在后台时没有这个就不走网络；有了：蓝牙没通就马上开网络
+    /// （不等 5 秒，后台也开），结束时 endIntentSession 再算一遍，后台的就关掉。蓝牙那一路一点没动。
+    private var intentSessions: [UUID: Bool] = [:]
+
+    func beginIntentSession(allowNetwork: Bool) -> UUID {
+        let token = UUID()
+        intentSessions[token] = allowNetwork
+        Self.linkLog.info("intent session start (network \(allowNetwork ? "allowed" : "not needed", privacy: .public), app foreground \(self.inForeground, privacy: .public))")
+        if allowNetwork { evaluateNetwork() }
+        return token
+    }
+
+    func endIntentSession(_ token: UUID) {
+        guard let allowedNetwork = intentSessions.removeValue(forKey: token) else { return }
+        Self.linkLog.info("intent session end")
+        if allowedNetwork { evaluateNetwork() }
+    }
+
+    /// 「预览幕布」：签名命令 preview，只走蓝牙（网络白名单里没有它），等电脑签名的收据。
+    /// 电脑不会为预览报状态，所以最多只能说到「电脑收到了」
+    func previewNow() async -> PreviewOutcome {
+        guard mac != nil, ready, isPaired, activePath == .bluetooth else { return .unavailable }
+        Self.linkLog.info("preview command")
+        switch await sendSigned("preview", ackSeconds: 5) {
+        case .ok: return .received
+        case .failed: return .timedOut
+        case .missingPermission, .notAllowedOnNetwork, .rejected: return .refused
+        }
     }
 
     // MARK: - 内部

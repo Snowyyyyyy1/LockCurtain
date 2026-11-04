@@ -232,7 +232,8 @@ final class AppModel {
             paired = storedPaired
             demoMode = false
             macName = storedName
-            link = BLECurtainLink(paired: storedPaired, macName: storedName)
+            // 和快捷指令共用同一个蓝牙连接（App 被划掉后快捷指令可能已经建好了，见 CurtainLinkHub）
+            link = CurtainLinkHub.obtain(paired: storedPaired, macName: storedName)
         }
 
         observeCurrentLink()
@@ -342,7 +343,7 @@ final class AppModel {
         return keepAwakeDisplayValue(at: now)
     }
 
-    static func keepAwakeText(_ state: KeepAwakeState, now: Date) -> String {
+    nonisolated static func keepAwakeText(_ state: KeepAwakeState, now: Date) -> String {
         switch state {
         case .off:
             return "关"
@@ -362,7 +363,7 @@ final class AppModel {
     }
 
     /// 「还剩 1 小时 20 分」：分钟往上取整（刚开 1 小时就是「还剩 1 小时」）
-    static func remainingText(_ seconds: TimeInterval) -> String {
+    nonisolated static func remainingText(_ seconds: TimeInterval) -> String {
         if seconds < 60 { return "不到 1 分钟" }  // copy v15 §17.3：别出现「还剩 0 分」
         let minutes = Int((seconds / 60).rounded(.up))
         let h = minutes / 60
@@ -817,6 +818,7 @@ final class AppModel {
         }
         if let ble = link as? BLECurtainLink {
             ble.onRevoked = { [weak self] in self?.handleRevokedByMac() }
+            CurtainLinkHub.register(ble)
         }
         apply(link.snapshot)
     }
