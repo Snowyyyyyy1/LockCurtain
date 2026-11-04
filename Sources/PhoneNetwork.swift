@@ -27,7 +27,7 @@ struct NetworkAddressEntry: Equatable {
         case tailscale = 2
         case other = 3
 
-        // COPY-TODO: 标签文案来自方案（Wi-Fi / 以太网 / Tailscale / 其他），待文案定稿
+        // 文案：Camo copy v15.8 §18.6
         var label: String {
             switch self {
             case .wifi: return "Wi-Fi"

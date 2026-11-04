@@ -241,6 +241,27 @@ expect(pairing.phones.isEmpty, "在电脑上撤销：配对列表里没有了")
 client.stop()
 pairing.setNetworkEnabled(false)
 pause(0.2)
+
+// MARK: - 存着的端口被占了：换一个（范围内），存起来，不是直接失败
+
+let busyPort = NetworkGateway.portRange.lowerBound + 123
+let occupier = try! NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: busyPort)!)
+var occupierReady = false
+occupier.stateUpdateHandler = { if case .ready = $0 { occupierReady = true } }
+occupier.newConnectionHandler = { $0.cancel() }
+occupier.start(queue: .main)
+expect(waitUntil { occupierReady }, "占端口：占位的监听起来了")
+defaults.set(Int(busyPort), forKey: NetworkGateway.portDefaultsKey)
+let busyPairing = PhonePairing(store: MemoryPairingStore(), defaults: defaults, networkPort: .persisted, networkLoopbackOnly: true)
+busyPairing.setNetworkEnabled(true)
+expect(waitUntil(5) { busyPairing.networkPort != nil }, "占端口：存着的端口被占了，照样监听起来了")
+if let fallback = busyPairing.networkPort {
+    expect(fallback != busyPort && NetworkGateway.portRange.contains(fallback), "占端口：换了一个范围内的端口")
+    expect(defaults.integer(forKey: NetworkGateway.portDefaultsKey) == Int(fallback), "占端口：新端口存起来了")
+}
+busyPairing.setNetworkEnabled(false)
+occupier.cancel()
+pause(0.2)
 defaults.removePersistentDomain(forName: suite)
 
 print(results.joined(separator: "\n"))

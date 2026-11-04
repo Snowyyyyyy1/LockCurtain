@@ -72,7 +72,7 @@ enum PhonePath: Equatable {
     }
 
     /// 「已连上」后面带链路。path 为 nil 时只写「已连上」
-    // COPY-TODO confirm with Camo: 「已连上 · 网络」「已连上 · 蓝牙」这个写法 Mac 端还没定稿（手机端是「已连接 · 蓝牙/网络」）
+    /// 文案：Camo copy v15.8 §18.6
     static func connectedText(_ path: PhonePath?) -> String {
         switch path {
         case .bluetooth?: return "已连上 · 蓝牙"

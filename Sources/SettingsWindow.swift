@@ -455,7 +455,7 @@ private struct RemotePane: View {
             } header: {
                 Text("命令行")
             } footer: {
-                Text("一行命令进，一行 JSON 出；成功时退出码 0。App 本身不监听任何网络端口，只接受本机当前用户的连接。把 away 换成 hide、status、preview、settings，就是另外四个命令。照这行抄，别自己改。")
+                Text("一行命令进，一行 JSON 出；成功时退出码 0。默认不监听任何网络端口，只接受本机当前用户的连接。打开走网络以后，会在这台电脑的一个端口上等手机来连；进来的命令要带你手机里那把钥匙，签名不对一律不执行。把 away 换成 hide、status、preview、settings，就是另外四个命令。照这行抄，别自己改。")
                     .foregroundStyle(.secondary)
             }
             Section {
@@ -648,12 +648,11 @@ struct PhonePane: View {
             if pairing.networkEnabled {
                 switch pairing.networkStatus {
                 case .failed:
-                    // COPY-TODO: 监听没起来的提示 Camo 还没给文案（方案里的占位）
-                    Text("网络没开起来").foregroundStyle(.secondary)
+                    Text("没能打开。这个端口被别的程序占了，或者系统没放行。关掉占着它的程序，再打开一次。")
+                        .foregroundStyle(.secondary)
                 case .listening(let port):
                     if pairing.networkAddresses.isEmpty {
-                        // COPY-TODO: 没有可用地址的提示 Camo 还没给文案（方案里的占位）
-                        Text("没有可用的网络地址").foregroundStyle(.secondary)
+                        Text("这台电脑现在没有可用的网络地址。连上网络以后再打开一次。").foregroundStyle(.secondary)
                     }
                     ForEach(pairing.networkAddresses) { entry in
                         addressRow(entry, port: port)
@@ -675,7 +674,7 @@ struct PhonePane: View {
     private func addressRow(_ entry: NetworkAddressEntry, port: UInt16) -> some View {
         let line = entry.text(port: port)
         return HStack(spacing: 8) {
-            // 网络类型前缀：Wi-Fi / Tailscale 是 Camo 定的；以太网 / 其他在 NetworkAddressEntry.Kind 里还是 COPY-TODO
+            // 网络类型前缀（Wi-Fi / Tailscale / 以太网 / 其他）：NetworkAddressEntry.Kind.label
             Text(entry.label).foregroundStyle(.secondary)
             Text(line).font(.system(.body, design: .monospaced)).textSelection(.enabled)
                 .lineLimit(1).truncationMode(.middle)
