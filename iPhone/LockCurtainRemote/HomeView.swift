@@ -185,19 +185,10 @@ struct HomeView: View {
         TimelineView(.periodic(from: .now, by: 5)) { _ in
             let row = model.macRow(at: clockNow)
             LabeledContent {
-                if let row, row.showsSpinner {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.small)
-                        Text(row.value)
-                            .contentTransition(.opacity)
-                    }
+                // 一件事只说一次：没连上时下面一行已经说「正在重新连上…」，这一行不再放转圈（Ato / Colo）
+                Text(row?.value ?? model.macDisplayValue)
+                    .contentTransition(.opacity)
                     .foregroundStyle(.secondary)
-                } else {
-                    Text(row?.value ?? model.macDisplayValue)
-                        .contentTransition(.opacity)
-                        .foregroundStyle(.secondary)
-                }
             } label: {
                 // 没连上、有「上次」：上次连上是什么时候，是「这台电脑」的副标题（不是单独一行；打开 App 的第一帧就有）
                 Label {
