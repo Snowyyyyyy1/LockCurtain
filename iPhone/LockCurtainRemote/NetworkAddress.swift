@@ -43,6 +43,67 @@ struct NetworkAddress: Equatable, Sendable {
         return NetworkAddress(host: hostPart, port: port)
     }
 
+    // MARK: - 输入整理 / 诊断
+
+    /// 用户输入 → 能交给 parse 的写法：全角冒号 / 数字 / 方括号换成半角，去掉所有空白和换行，
+    /// 再去掉开头的 http:// https:// tcp:// 和结尾的一个 "/"。别的一概不动，是不是地址仍由 parse 严格判定
+    static func normalize(_ raw: String) -> String {
+        var out = ""
+        for ch in raw {
+            if ch.isWhitespace || ch.isNewline { continue }
+            switch ch {
+            case "\u{FF1A}": out.append(":")
+            case "\u{FF3B}": out.append("[")
+            case "\u{FF3D}": out.append("]")
+            default:
+                if ch.unicodeScalars.count == 1, let u = ch.unicodeScalars.first,
+                   u.value >= 0xFF10, u.value <= 0xFF19,
+                   let ascii = Unicode.Scalar(u.value - 0xFF10 + 0x30) {
+                    out.append(Character(ascii))
+                } else {
+                    out.append(ch)
+                }
+            }
+        }
+        let lower = out.lowercased()
+        for prefix in ["http://", "https://", "tcp://"] where lower.hasPrefix(prefix) {
+            out.removeFirst(prefix.count)
+            break
+        }
+        if out.hasSuffix("/") { out.removeLast() }
+        return out
+    }
+
+    /// 整理后再解析：保存时用这个（parse 本身仍然严格）
+    static func parseNormalized(_ raw: String) -> NetworkAddress? {
+        parse(normalize(raw))
+    }
+
+    enum Problem: Equatable, Sendable {
+        /// 像个主机（IPv4 / 主机名 / 带方括号的 IPv6），后面没有端口
+        case missingPort
+        /// 其他解析不过的
+        case malformed
+    }
+
+    /// 在整理后的文本上判断：能解析 → nil；只缺端口 → missingPort；其余 → malformed
+    static func diagnose(_ raw: String) -> Problem? {
+        let s = normalize(raw)
+        if parse(s) != nil { return nil }
+        guard !s.isEmpty, s.allSatisfy({ $0.isASCII }) else { return .malformed }   // parse 只收 ASCII
+        if s.hasPrefix("[") {
+            // [v6] 或 [v6]:
+            var inner = s
+            if inner.hasSuffix(":") { inner.removeLast() }
+            if inner.hasSuffix("]"), IPv6Address(String(inner.dropFirst().dropLast())) != nil { return .missingPort }
+            return .malformed
+        }
+        var host = s
+        if host.hasSuffix(":") { host.removeLast() }   // "192.168.1.23:" 也是没写端口
+        if !host.contains(":"), isValidHost(host) { return .missingPort }
+        return .malformed
+    }
+
     private static func parsePort(_ s: Substring) -> UInt16? {
         guard !s.isEmpty, s.count <= 5, s.allSatisfy({ $0 >= "0" && $0 <= "9" }),
               let n = UInt32(s), n >= 1, n <= 65535 else { return nil }
@@ -123,4 +184,43 @@ enum NetworkLinkPlan {
 
     /// 能不能撤下：只有蓝牙
     static func canLift(path: LinkPath?) -> Bool { path == .bluetooth }
+}
+
+/// 点「保存」时该做什么：纯函数，界面和测试共用
+enum SaveCheck {
+    enum Reason: Equatable, Sendable {
+        case notPaired
+        case missingPort
+        case malformed
+    }
+
+    enum Result: Equatable, Sendable {
+        case save(NetworkAddress)
+        case reject(Reason)
+    }
+
+    static func evaluate(text: String, paired: Bool) -> Result {
+        guard paired else { return .reject(.notPaired) }
+        if let address = NetworkAddress.parseNormalized(text) { return .save(address) }
+        switch NetworkAddress.diagnose(text) {
+        case .missingPort: return .reject(.missingPort)
+        case .malformed, nil: return .reject(.malformed)
+        }
+    }
+}
+
+/// 保存后给用户看的话（失败的原因 / 成功）。文案由 copywriter（Camo）定稿，v15.13 §18.3
+enum NetworkAddressCopy {
+    static let notPaired = "还没和电脑配对。先配对，再填地址。"
+    static let missingPort = "少了冒号后面那串数字。照电脑上那一整行填，比如 192.168.1.23:52811。"
+    static let malformed = "这不像一个地址。点电脑上那行旁边的「拷贝」，再粘到这里。"
+    static let saved = "存好了。蓝牙连不上时就走这个地址。"
+
+    static func text(for reason: SaveCheck.Reason) -> String {
+        switch reason {
+        case .notPaired: notPaired
+        case .missingPort: missingPort
+        case .malformed: malformed
+        }
+    }
 }

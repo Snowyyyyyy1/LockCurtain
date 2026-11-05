@@ -885,7 +885,7 @@ final class AppModel {
     /// 存下用户填的地址并马上试连一次（第一次也会触发 iOS 的「本地网络」询问）。解析不过返回 false，什么都不存
     @discardableResult
     func saveNetworkAddress(_ text: String) -> Bool {
-        guard paired, !demoMode, let address = NetworkAddress.parse(text) else { return false }
+        guard paired, !demoMode, let address = NetworkAddress.parseNormalized(text) else { return false }
         NetworkAddress.save(address)
         networkAddress = address
         ((link as? BLECurtainLink) ?? parkedLink)?.networkAddressChanged(connectNow: true)

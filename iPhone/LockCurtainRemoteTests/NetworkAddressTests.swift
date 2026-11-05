@@ -150,3 +150,60 @@ struct NetworkLinkPlanTests {
         #expect(NetworkLinkPlan.status(client: .stopped, previous: .failed) == S.none)
     }
 }
+
+/// 保存前的整理 / 诊断 / 保存判断
+struct NetworkAddressSaveTests {
+    private let v4 = NetworkAddress(host: "1.2.3.4", port: 5)
+
+    @Test
+    func normalizesFullWidth() {
+        #expect(NetworkAddress.normalize("１９２.１６８.１.２３：５２８１１") == "192.168.1.23:52811")
+        #expect(NetworkAddress.normalize("［::1］：８０") == "[::1]:80")
+        #expect(NetworkAddress.parseNormalized("１９２.１６８.１.２３：５２８１１") == NetworkAddress(host: "192.168.1.23", port: 52811))
+    }
+
+    @Test
+    func stripsWhitespaceAndScheme() {
+        #expect(NetworkAddress.parseNormalized(" \n1.2.3.4 : 5\n ") == v4)
+        #expect(NetworkAddress.parseNormalized("tcp://1.2.3.4:5/") == v4)
+        #expect(NetworkAddress.parseNormalized("HTTP://1.2.3.4:5") == v4)
+        #expect(NetworkAddress.parseNormalized("ftp://1.2.3.4:5") == nil)
+        #expect(NetworkAddress.parse("tcp://1.2.3.4:5/") == nil)   // parse 本身仍严格
+    }
+
+    @Test
+    func diagnoses() {
+        #expect(NetworkAddress.diagnose("1.2.3.4:5") == nil)
+        #expect(NetworkAddress.diagnose("1.2.3.4") == .missingPort)
+        #expect(NetworkAddress.diagnose("1.2.3.4：") == .missingPort)
+        #expect(NetworkAddress.diagnose("my-mac.local") == .missingPort)
+        #expect(NetworkAddress.diagnose("[fd00::1]") == .missingPort)
+        #expect(NetworkAddress.diagnose("tcp://1.2.3.4/") == .missingPort)
+        #expect(NetworkAddress.diagnose("1.2.3.4:0") == .malformed)
+        #expect(NetworkAddress.diagnose("999.1.1.1:80") == .malformed)
+        #expect(NetworkAddress.diagnose("fd00::1") == .malformed)
+        #expect(NetworkAddress.diagnose("[nope]") == .malformed)
+        #expect(NetworkAddress.diagnose("电脑") == .malformed)
+        #expect(NetworkAddress.diagnose("") == .malformed)
+    }
+
+    @Test
+    func saveCheck() {
+        #expect(SaveCheck.evaluate(text: "1.2.3.4:5", paired: false) == .reject(.notPaired))
+        #expect(SaveCheck.evaluate(text: "", paired: false) == .reject(.notPaired))
+        #expect(SaveCheck.evaluate(text: "1.2.3.4", paired: true) == .reject(.missingPort))
+        #expect(SaveCheck.evaluate(text: "???", paired: true) == .reject(.malformed))
+        #expect(SaveCheck.evaluate(text: "", paired: true) == .reject(.malformed))
+        #expect(SaveCheck.evaluate(text: "1.2.3.4:5", paired: true) == .save(v4))
+        #expect(SaveCheck.evaluate(text: "１.２.３.４：５\n", paired: true) == .save(v4))
+        #expect(SaveCheck.evaluate(text: "mac.local:52811", paired: true) == .save(NetworkAddress(host: "mac.local", port: 52811)))
+        #expect(SaveCheck.evaluate(text: "[fd00::1]:80", paired: true) == .save(NetworkAddress(host: "fd00::1", port: 80)))
+    }
+
+    @Test
+    func copyCoversEveryReason() {
+        #expect(NetworkAddressCopy.text(for: .notPaired) == NetworkAddressCopy.notPaired)
+        #expect(NetworkAddressCopy.text(for: .missingPort) == NetworkAddressCopy.missingPort)
+        #expect(NetworkAddressCopy.text(for: .malformed) == NetworkAddressCopy.malformed)
+    }
+}
