@@ -540,8 +540,8 @@ struct HomeView: View {
                             .controlSize(.small)
                             .tint(.white)
                             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                        // COPY-TODO: 按了「盖上幕布」、还没连上，等连上再发时按钮上的字（暂用「正在连上…」，取自「正在重新连上…」）
-                        Text("正在连上…")
+                        // 等连上时字不变（copy v15.9 §21.3：换了字就成了另一种按钮），左边小转圈，不置灰
+                        Text("盖上幕布")
                             .lineLimit(1)
                     }
                     .frame(maxWidth: .infinity)
@@ -554,8 +554,7 @@ struct HomeView: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.updatesFrequently)
 
-                // COPY-TODO: 等连上时取消的按钮（暂用「取消」，设置里已有这个词）
-                // 朴素文字按钮（无底、无玻璃），紧贴在主按钮正下方，不在主按钮里面
+                // 正下方一颗无底色的「取消」（§21.3）。朴素文字按钮（无底、无玻璃），紧贴在主按钮正下方，不在主按钮里面
                 Button("取消") {
                     model.cancelQueuedCover()
                 }
@@ -563,7 +562,7 @@ struct HomeView: View {
                 .foregroundStyle(.tint)
                 .frame(minHeight: 44)
                 .contentShape(.rect)
-                // COPY-TODO: 取消按钮的 VoiceOver 提示
+                // COPY-TODO: 取消按钮的 VoiceOver 提示（Camo 没给字）
                 .accessibilityHint("不等了，不盖上幕布")
             }
         } else if model.isPending {
@@ -601,7 +600,7 @@ struct HomeView: View {
             .buttonStyle(.glassProminent)
             .controlSize(.large)
             .glassEffectID("action", in: glassNS)
-            // COPY-TODO: 没连上时的 VoiceOver 提示（连上之前按下去是等连上再发）
+            // COPY-TODO: 没连上时的 VoiceOver 提示（连上之前按下去是等连上再发；Camo 没给字）
             .accessibilityHint(model.coverButtonState == .coverWhenLinked
                                ? "连上这台电脑以后，盖上幕布"
                                : "发给这台电脑，盖上幕布")

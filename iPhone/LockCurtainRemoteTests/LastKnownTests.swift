@@ -43,6 +43,9 @@ struct LastKnownTests {
         // 前天 → M 月 D 日
         #expect(b(40 * 3600) == .date(month: 11, day: 2))
         #expect(b(10 * 24 * 3600) == .date(month: 10, day: 25))
+        // 跨年：带年份（2026-11-04 往前 310 天是 2025-12-29）
+        #expect(b(310 * 24 * 3600) == .dateWithYear(year: 2025, month: 12, day: 29))
+        #expect(b(300 * 24 * 3600) == .date(month: 1, day: 8))
     }
 
     @Test
@@ -59,6 +62,7 @@ struct LastKnownTests {
         #expect(P.relativeText(.hours(2)) == "2 小时前")
         #expect(P.relativeText(.yesterday) == "昨天")
         #expect(P.relativeText(.date(month: 11, day: 2)) == "11 月 2 日")
+        #expect(P.relativeText(.dateWithYear(year: 2025, month: 12, day: 30)) == "2025 年 12 月 30 日")
     }
 
     @Test
@@ -131,13 +135,17 @@ struct LastKnownTests {
     }
 
     @Test
-    func macRowWithoutLastKnownIsUnchanged() {
-        for state in [AppModel.UnlinkedMacState.waiting, .reconnecting, .notYet, .stillTrying, .stillTryingLong, .bluetoothOff] {
+    func macRowNeverConnectedSaysSoWithoutATime() {
+        // copy v15.9 §21.1：从来没连上过 →「还没连上过」，不放时间（也不带「上次连上：」）；蓝牙关了仍然不显示这一行
+        for state in [AppModel.UnlinkedMacState.waiting, .reconnecting, .notYet, .stillTrying, .stillTryingLong] {
             let row = LastKnownPresentation.macRow(state: state, lastKnown: nil, now: Self.now)
             #expect(row.value == state.value)
             #expect(row.showsSpinner == state.showsSpinner)
-            #expect(row.lastConnectedLine == nil)
+            #expect(row.lastConnectedLine == "还没连上过")
         }
+        let off = LastKnownPresentation.macRow(state: .bluetoothOff, lastKnown: nil, now: Self.now)
+        #expect(off.value == "蓝牙关了")
+        #expect(off.lastConnectedLine == nil)
     }
 
     @Test
@@ -166,6 +174,7 @@ struct LastKnownTests {
                 liveText: "已盖上", liveVoice: "已盖上", disconnectedVoice: "没连上", now: Self.now, calendar: Self.calendar)
             #expect(row.isLastKnown)
             #expect(row.text.hasPrefix(LastKnownPresentation.lastKnownMarker))
+            #expect(row.text == "上次：已盖上")
             #expect(row.text != "已盖上")                    // 不能和现在的值一样
             #expect(row.voice == "上次是已盖上")           // 「幕布」+「上次是已盖上」，不是「已盖上」
             #expect(row.voice != "已盖上")
@@ -180,7 +189,9 @@ struct LastKnownTests {
         let row = LastKnownPresentation.curtainRow(
             connection: .notConnected, paired: true, demo: false, lastKnown: known,
             liveText: "x", liveVoice: "x", disconnectedVoice: "没连上", now: Self.now, calendar: Self.calendar)
-        #expect(row.voice == "上次是没盖上")
+        #expect(row.text == "上次：已撤下")              // 旧值是「已撤下」，不是「没盖上」
+        #expect(row.voice == "上次是已撤下")
+        #expect(!row.text.contains("没盖上") && !row.voice.contains("没盖上"))
     }
 
     @Test

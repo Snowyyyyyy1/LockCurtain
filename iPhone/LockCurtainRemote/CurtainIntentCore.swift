@@ -28,7 +28,7 @@ enum CurtainIntentKind: String, CaseIterable, Sendable {
 
 /// 「预览幕布」发出去之后电脑的回答
 enum PreviewOutcome: Equatable, Sendable {
-    /// 电脑签名收下了（电脑不为预览报状态，所以只能说到「收到」）
+    /// 电脑签名收下了。这是预览「开始」时的收据，不是「做完」：电脑上的预览要有人按键才撤
     case received
     case timedOut
     case refused
@@ -69,6 +69,7 @@ enum IntentFailure: Equatable, Sendable, CaseIterable {
 enum IntentOutcome: Equatable, Sendable {
     case covered
     case lifted
+    /// 电脑签名收下了预览命令 = 预览开始了（不是做完了：收据在预览「开始」时就给，预览要有人在电脑上按键才撤）
     case previewed
     /// state = 电脑随后报来的保持唤醒状态（没等到就是 nil，那时只凭电脑签收）
     case keepAwakeSet(KeepAwakeChoice, state: KeepAwakeState?)
@@ -196,7 +197,7 @@ enum IntentPlan {
 
 // MARK: - 说的话
 
-/// 每句都是电脑真的说过什么之后才说。// COPY-TODO = 新写的，等文案确认；「现有」= 一字不差取自 App 里已有的句子
+/// 每句都是电脑真的说过什么之后才说。字来自 copy v15.9 §20.4 / §20.5（预览成功那句按 Camo msg 1091）
 enum IntentCopy {
     /// 保持唤醒那几项在 App 里的字（HomeView 的菜单一字不差）
     static func label(_ choice: KeepAwakeChoice) -> String {
@@ -212,55 +213,74 @@ enum IntentCopy {
     static func text(kind: CurtainIntentKind, outcome: IntentOutcome, now: Date = Date()) -> String {
         switch outcome {
         case .covered:
-            return "幕布已盖上" // 现有：演示里的「幕布已盖上」
+            return "盖上了。"
         case .lifted:
-            return "幕布撤下了" // 现有：演示里的「幕布撤下了」
+            return "撤下了。"
         case .previewed:
-            return "电脑收到了预览。" // COPY-TODO 预览成功：电脑不为预览报状态，只能说「收到」
+            // Camo 定稿（msg 1091）：电脑在预览「开始」时就回执、不是做完时，所以说「开始预览了。」；
+            // 「预览完了，幕布撤回来了。」只在电脑真的在预览结束后才回执时才能说，这里不是
+            return "开始预览了。"
         case .keepAwakeSet(let choice, let state):
-            let shown = state.map { AppModel.keepAwakeText($0, now: now) } ?? (choice == .off ? "关" : label(choice))
-            return "保持唤醒：\(shown)" // COPY-TODO 句式；值取自电脑报来的状态（和 App 里那一行一样），没等到状态时用菜单里的字
+            return keepAwakeText(choice: choice, state: state, now: now)
         case .failed(let failure):
             return text(kind: kind, failure: failure)
         }
     }
 
+    /// §20.4：保持唤醒中，还剩 1 小时。／不带时长：保持唤醒中。／关掉：保持唤醒关了。
+    /// 值取自电脑随后报来的状态；没等到状态就用选的那一项（刚设的 1 小时就是「还剩 1 小时」）
+    static func keepAwakeText(choice: KeepAwakeChoice, state: KeepAwakeState?, now: Date) -> String {
+        guard choice != .off else { return "保持唤醒关了。" }
+        let remaining: String?
+        switch state {
+        case .timed(let end)?:
+            let text = AppModel.remainingText(end.timeIntervalSince(now))
+            remaining = text.hasPrefix("还剩") ? text : "还剩" + text
+        case .always?:
+            remaining = nil
+        case nil:
+            switch choice {
+            case .oneHour: remaining = "还剩 1 小时"
+            case .twoHours: remaining = "还剩 2 小时"
+            case .fiveHours: remaining = "还剩 5 小时"
+            case .off, .always: remaining = nil
+            }
+        default:
+            remaining = nil
+        }
+        return remaining.map { "保持唤醒中，\($0)。" } ?? "保持唤醒中。"
+    }
+
+    /// §20.5：每条失败都带前缀（没盖上：／没撤下：／没能预览：／没能保持唤醒：），再接下面那句。
+    /// 保持唤醒的「关掉」是「保持多久」的一个值，没有单独的关掉动作，所以失败也是「没能保持唤醒：」
     static func text(kind: CurtainIntentKind, failure: IntentFailure) -> String {
+        prefix(kind) + reason(kind: kind, failure: failure)
+    }
+
+    private static func reason(kind: CurtainIntentKind, failure: IntentFailure) -> String {
         switch failure {
-        // 现有的句子：自己就说清了没做成，原样用
-        case .liftOnNetwork: return "走网络时不能撤下。撤下要手机在电脑旁边。"
-        case .alreadyUncovered: return "幕布已经是撤下的了。"
-        case .missingPermission: return "没能盖上：电脑上还缺一个权限。"
-        case .notDelivered: return "没送到，再试一次"
-        case .tooFar where kind == .lift: return "离这台电脑太远，走近再试。"
-        case .noAnswer: return kind == .lift ? "电脑没有回应，幕布还盖着。" : "电脑没有回应，状态没变。"
-        case .refused where kind == .lift: return "这次没撤下来，再按一次。"
-        default: break
+        case .notPaired: "还没和这台电脑配对。"
+        case .bluetoothOff: "手机的蓝牙关着，打开再试。"
+        case .noReach: "手机没连上这台电脑。"
+        case .tooFar: "离这台电脑太远，走近再试。"
+        case .liftOnNetwork: "走网络时不能撤下。"
+        case .previewOnNetwork: "走网络时不能预览。"
+        case .phoneLocked: kind == .lift ? "要先解锁手机。" : "手机锁着。"
+        case .authCancelled: "要先过面容。"
+        case .authFailed: "面容或密码没通过。"
+        case .alreadyUncovered: "幕布已经是撤下的了。" // App 里的句子，Camo 的列表里没有对应的；意思不变，放在前缀后面
+        case .missingPermission: "电脑上还缺一个权限。" // §16.8 N2
+        case .refused: kind == .lift ? "这次没撤下来，再按一次。" : "电脑没有接受这条命令。"
+        case .noAnswer, .stateUnknown, .notDelivered: "电脑没有回应。"
         }
-        // 新写的：前面加一个「没……」说明哪件事没成
-        let reason: String
-        switch failure {
-        case .notPaired: reason = "还没和电脑配对。" // COPY-TODO
-        case .bluetoothOff: reason = "蓝牙关了。打开 iPhone 的蓝牙再试。" // COPY-TODO（后半句取自「蓝牙关了」时主屏的说明）
-        case .noReach: reason = "没连上这台电脑。电脑上开着 LockCurtain、人也在附近就行。" // COPY-TODO（后半句取自主屏「等这台电脑来连」的说明）
-        case .previewOnNetwork: reason = "走网络时不能预览。预览要手机在电脑旁边。" // COPY-TODO（仿「走网络时不能撤下」）
-        case .phoneLocked: reason = "手机锁着，解锁再试。" // COPY-TODO
-        case .authCancelled: reason = "没有验证面容。" // COPY-TODO
-        case .authFailed: reason = "面容或密码没验证通过。" // COPY-TODO
-        case .tooFar: reason = "离这台电脑太远，走近再试。"
-        case .refused: reason = "电脑没有接受，再试一次。" // COPY-TODO
-        case .stateUnknown: reason = "电脑没有回应，状态没变。" // COPY-TODO（句子取自 App 里的「电脑没有回应，状态没变。」，前面加「没撤下：」）
-        case .liftOnNetwork, .alreadyUncovered, .missingPermission, .notDelivered, .noAnswer: reason = ""
-        }
-        return prefix(kind) + reason
     }
 
     private static func prefix(_ kind: CurtainIntentKind) -> String {
         switch kind {
-        case .cover: "没盖上：" // COPY-TODO（仿「没能盖上：」）
-        case .lift: "没撤下：" // COPY-TODO
-        case .preview: "没能预览：" // COPY-TODO
-        case .keepAwake: "没改成：" // COPY-TODO
+        case .cover: "没盖上："
+        case .lift: "没撤下："
+        case .preview: "没能预览："
+        case .keepAwake: "没能保持唤醒："
         }
     }
 }

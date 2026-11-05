@@ -528,7 +528,7 @@ final class AppModel {
         }
     }
 
-    /// 没连上时按下：等连上（最多 CoverButtonPolicy.queueTimeout 秒），连上了再发；到时没连上就如实说「电脑没有回应」。
+    /// 没连上时按下：等连上（最多 CoverButtonPolicy.queueTimeout 秒），连上了再发；到时没连上就安静地回到「没连上」（不弹任何字）。
     /// 只有盖上能排队；撤下（现在撤下）照旧要连着、蓝牙、面容，不排队
     private func queueCover() {
         coverTapCount += 1
@@ -560,9 +560,10 @@ final class AppModel {
         coverQueueTask = nil
     }
 
+    /// 取消、或者 20 秒还没连上：状态行回到「没连上」，什么都不弹、不留一句"超时"（copy v15.9 §21.3）。
+    /// 所以不碰 didTimeOut——那是命令发出去以后电脑没回应才有的（「电脑没有回应，状态没变。」）
     private func expireQueuedCover() {
         clearQueuedCover()
-        didTimeOut = true
         recordEvent(text: "没连上")
     }
 

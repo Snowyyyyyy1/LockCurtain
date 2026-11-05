@@ -204,19 +204,48 @@ struct CurtainIntentTests {
 
     // MARK: - 说的话
 
-    private static let successLines: Set<String> = ["幕布已盖上", "幕布撤下了", "电脑收到了预览。"]
+    private static let successLines: Set<String> = ["盖上了。", "撤下了。", "开始预览了。", "保持唤醒关了。"]
+
+    private static func prefix(_ kind: CurtainIntentKind) -> String {
+        switch kind {
+        case .cover: "没盖上："
+        case .lift: "没撤下："
+        case .preview: "没能预览："
+        case .keepAwake: "没能保持唤醒："
+        }
+    }
 
     @Test
-    func everyFailureHasAnHonestNonEmptyLine() {
+    func everyFailureHasAnHonestNonEmptyLineWithItsPrefix() {
         for kind in CurtainIntentKind.allCases {
             for failure in IntentFailure.allCases {
                 let line = IntentCopy.text(kind: kind, outcome: .failed(failure))
                 #expect(!line.isEmpty, "\(kind) \(failure)")
+                // §20.5：每条都带前缀，后面还有原因
+                #expect(line.hasPrefix(Self.prefix(kind)), "\(kind) \(failure): \(line)")
+                #expect(line.count > Self.prefix(kind).count, "\(kind) \(failure): \(line)")
                 #expect(!Self.successLines.contains(line), "\(kind) \(failure)")
-                #expect(!line.hasPrefix("保持唤醒："), "\(kind) \(failure)")
-                #expect(!line.contains("已发送"))
-                #expect(!line.contains("遮罩"))
-                #expect(!line.contains("成功"))
+                #expect(!line.hasPrefix("保持唤醒中"), "\(kind) \(failure)")
+                for banned in ["失败", "错误", "未知问题", "操作超时", "超时", "已发送", "遮罩", "成功", "已连接"] {
+                    #expect(!line.contains(banned), "\(kind) \(failure): \(line)")
+                }
+            }
+        }
+    }
+
+    @Test
+    func failureReasonsAreCamosOwnSentences() {
+        let allowed: Set<String> = [
+            "还没和这台电脑配对。", "手机的蓝牙关着，打开再试。", "手机没连上这台电脑。", "离这台电脑太远，走近再试。",
+            "走网络时不能预览。", "走网络时不能撤下。", "电脑没有接受这条命令。", "电脑没有回应。",
+            "手机锁着。", "要先解锁手机。", "要先过面容。", "面容或密码没通过。",
+            // App 里已有、Camo 的列表里没有对应的几句（意思不变，放在前缀后面）
+            "电脑上还缺一个权限。", "幕布已经是撤下的了。", "这次没撤下来，再按一次。",
+        ]
+        for kind in CurtainIntentKind.allCases {
+            for failure in IntentFailure.allCases {
+                let line = IntentCopy.text(kind: kind, outcome: .failed(failure))
+                #expect(allowed.contains(String(line.dropFirst(Self.prefix(kind).count))), "\(kind) \(failure): \(line)")
             }
         }
     }
@@ -240,24 +269,69 @@ struct CurtainIntentTests {
         ]
         for (kind, outcome) in successes {
             #expect(outcome.isSuccess)
-            #expect(!IntentCopy.text(kind: kind, outcome: outcome, now: now).isEmpty)
+            let line = IntentCopy.text(kind: kind, outcome: outcome, now: now)
+            #expect(!line.isEmpty)
+            for failurePrefix in ["没盖上：", "没撤下：", "没能预览：", "没能保持唤醒："] {
+                #expect(!line.hasPrefix(failurePrefix))
+            }
         }
-        #expect(IntentCopy.text(kind: .cover, outcome: .covered) == "幕布已盖上")
-        #expect(IntentCopy.text(kind: .lift, outcome: .lifted) == "幕布撤下了")
+        #expect(IntentCopy.text(kind: .cover, outcome: .covered) == "盖上了。")
+        #expect(IntentCopy.text(kind: .lift, outcome: .lifted) == "撤下了。")
+        // 预览：电脑在预览开始时就回执，所以说「开始预览了。」，不说「预览完了」
+        #expect(IntentCopy.text(kind: .preview, outcome: .previewed) == "开始预览了。")
         for choice in KeepAwakeChoice.allCases {
             #expect(!IntentCopy.label(choice).isEmpty)
         }
     }
 
     @Test
-    func existingInAppLinesAreReusedVerbatim() {
-        #expect(IntentCopy.text(kind: .cover, failure: .noAnswer) == "电脑没有回应，状态没变。")
-        #expect(IntentCopy.text(kind: .cover, failure: .missingPermission) == "没能盖上：电脑上还缺一个权限。")
-        #expect(IntentCopy.text(kind: .lift, failure: .tooFar) == "离这台电脑太远，走近再试。")
-        #expect(IntentCopy.text(kind: .lift, failure: .alreadyUncovered) == "幕布已经是撤下的了。")
-        #expect(IntentCopy.text(kind: .lift, failure: .refused) == "这次没撤下来，再按一次。")
-        #expect(IntentCopy.text(kind: .keepAwake, failure: .notDelivered) == "没送到，再试一次")
-        #expect(IntentCopy.text(kind: .lift, failure: .liftOnNetwork) == "走网络时不能撤下。撤下要手机在电脑旁边。")
+    func keepAwakeSuccessLines() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func line(_ choice: KeepAwakeChoice, _ state: KeepAwakeState?) -> String {
+            IntentCopy.text(kind: .keepAwake, outcome: .keepAwakeSet(choice, state: state), now: now)
+        }
+        #expect(line(.oneHour, .timed(endsAt: now.addingTimeInterval(3600))) == "保持唤醒中，还剩 1 小时。")
+        #expect(line(.twoHours, .timed(endsAt: now.addingTimeInterval(7200))) == "保持唤醒中，还剩 2 小时。")
+        #expect(line(.fiveHours, .timed(endsAt: now.addingTimeInterval(5 * 3600))) == "保持唤醒中，还剩 5 小时。")
+        // 没等到电脑报状态：用选的那一项
+        #expect(line(.oneHour, nil) == "保持唤醒中，还剩 1 小时。")
+        #expect(line(.twoHours, nil) == "保持唤醒中，还剩 2 小时。")
+        #expect(line(.fiveHours, nil) == "保持唤醒中，还剩 5 小时。")
+        // 不带时长
+        #expect(line(.always, .always) == "保持唤醒中。")
+        #expect(line(.always, nil) == "保持唤醒中。")
+        // 关掉
+        #expect(line(.off, .off) == "保持唤醒关了。")
+        #expect(line(.off, nil) == "保持唤醒关了。")
+    }
+
+    @Test
+    func keepAwakeChoicesAreTheAppsOwnFive() {
+        #expect(KeepAwakeChoice.allCases.map { IntentCopy.label($0) } == ["关掉", "1 小时", "2 小时", "5 小时", "一直"])
+        let words = KeepAwakeChoice.caseDisplayRepresentations.values.map { String(localized: $0.title) }
+        #expect(!words.contains("30 分钟") && !words.contains("4 小时"))
+    }
+
+    @Test
+    func mappedFailuresUseTheRightReasonPerAction() {
+        #expect(IntentCopy.text(kind: .cover, failure: .noAnswer) == "没盖上：电脑没有回应。")
+        #expect(IntentCopy.text(kind: .cover, failure: .missingPermission) == "没盖上：电脑上还缺一个权限。")
+        #expect(IntentCopy.text(kind: .lift, failure: .tooFar) == "没撤下：离这台电脑太远，走近再试。")
+        #expect(IntentCopy.text(kind: .lift, failure: .alreadyUncovered) == "没撤下：幕布已经是撤下的了。")
+        #expect(IntentCopy.text(kind: .lift, failure: .refused) == "没撤下：这次没撤下来，再按一次。")
+        #expect(IntentCopy.text(kind: .preview, failure: .refused) == "没能预览：电脑没有接受这条命令。")
+        #expect(IntentCopy.text(kind: .keepAwake, failure: .notDelivered) == "没能保持唤醒：电脑没有回应。")
+        #expect(IntentCopy.text(kind: .lift, failure: .liftOnNetwork) == "没撤下：走网络时不能撤下。")
+        #expect(IntentCopy.text(kind: .preview, failure: .previewOnNetwork) == "没能预览：走网络时不能预览。")
+        #expect(IntentCopy.text(kind: .lift, failure: .phoneLocked) == "没撤下：要先解锁手机。")
+        for kind in [CurtainIntentKind.cover, .preview, .keepAwake] {
+            #expect(IntentCopy.text(kind: kind, failure: .phoneLocked).hasSuffix("手机锁着。"))
+        }
+        #expect(IntentCopy.text(kind: .lift, failure: .authCancelled) == "没撤下：要先过面容。")
+        #expect(IntentCopy.text(kind: .lift, failure: .authFailed) == "没撤下：面容或密码没通过。")
+        #expect(IntentCopy.text(kind: .cover, failure: .notPaired) == "没盖上：还没和这台电脑配对。")
+        #expect(IntentCopy.text(kind: .cover, failure: .bluetoothOff) == "没盖上：手机的蓝牙关着，打开再试。")
+        #expect(IntentCopy.text(kind: .keepAwake, failure: .noReach) == "没能保持唤醒：手机没连上这台电脑。")
     }
 
     // MARK: - 跑起来（假连接）
@@ -366,7 +440,7 @@ struct CurtainIntentTests {
         }
         let outcome = await runner.run(.keepAwake, choice: .oneHour)
         #expect(outcome == .keepAwakeSet(.oneHour, state: nil))
-        #expect(IntentCopy.text(kind: .keepAwake, outcome: outcome) == "保持唤醒：1 小时")
+        #expect(IntentCopy.text(kind: .keepAwake, outcome: outcome) == "保持唤醒中，还剩 1 小时。")
 
         link.keepAwakeAcked = false
         #expect(await runner.run(.keepAwake, choice: .always) == .failed(.notDelivered))
