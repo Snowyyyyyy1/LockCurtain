@@ -146,14 +146,10 @@ struct HomeView: View {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
             let row = model.curtainRow(at: clockNow)
             LabeledContent {
-                if row.isLastKnown {
-                    // 上次的样子：淡着、带「上次」，不是现在
-                    Text(row.text)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    Text(row.text)
-                        .foregroundStyle(.secondary)
-                }
+                // 上次的值和现在的值同一个 .secondary（不用 opacity 调淡：浅色下对比度 <3:1），靠「上次：」两个字区分
+                Text(row.text)
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             } label: {
                 Label {
                     HStack(spacing: 6) {
@@ -163,14 +159,16 @@ struct HomeView: View {
                         }
                     }
                 } icon: {
-                    if row.isLastKnown {
-                        Image(systemName: model.lastKnown?.phase == .closed ? "curtains.closed" : "curtains.open")
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        Image(systemName: curtainSymbol)
-                    }
+                    // 状态点：只有电脑真的报来了（现在的值）才亮；上次的值不亮
+                    Image(systemName: row.isLastKnown
+                          ? (model.lastKnown?.phase == .closed ? "curtains.closed" : "curtains.open")
+                          : curtainSymbol)
+                        .foregroundStyle(row.isLit ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                        .id(row.isLit)
                 }
             }
+            // 连上后「上次」换成现在的值：0.2 秒交叉淡入淡出，不弹 toast / alert
+            .animation(.easeInOut(duration: LastKnownPresentation.liveCrossFadeDuration), value: row)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("幕布")
             .accessibilityValue(row.voice)
@@ -187,30 +185,35 @@ struct HomeView: View {
         TimelineView(.periodic(from: .now, by: 5)) { _ in
             let row = model.macRow(at: clockNow)
             LabeledContent {
-                VStack(alignment: .trailing, spacing: 2) {
-                    if let row, row.showsSpinner {
-                        HStack(spacing: 6) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text(row.value)
-                                .contentTransition(.opacity)
-                        }
+                if let row, row.showsSpinner {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(row.value)
+                            .contentTransition(.opacity)
+                    }
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text(row?.value ?? model.macDisplayValue)
+                        .contentTransition(.opacity)
                         .foregroundStyle(.secondary)
-                    } else {
-                        Text(row?.value ?? model.macDisplayValue)
-                            .contentTransition(.opacity)
-                            .foregroundStyle(.secondary)
-                    }
-                    // 没连上、有「上次」：上次连上是什么时候（打开 App 的第一帧就有，不用等任何计时）
-                    if let line = row?.lastConnectedLine {
-                        Text(line)
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
-                            .contentTransition(.opacity)
-                    }
                 }
             } label: {
-                Label("这台电脑", systemImage: "laptopcomputer")
+                // 没连上、有「上次」：上次连上是什么时候，是「这台电脑」的副标题（不是单独一行；打开 App 的第一帧就有）
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("这台电脑")
+                        if let line = row?.lastConnectedLine {
+                            Text(line)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .contentTransition(.opacity)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "laptopcomputer")
+                        .foregroundStyle(.primary)
+                }
             }
         }
     }
@@ -543,6 +546,7 @@ struct HomeView: View {
                 } label: {
                     HStack(spacing: 8) {
                         ProgressView()
+                            .controlSize(.small)
                             .tint(.white)
                             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                         // COPY-TODO: 按了「盖上幕布」、还没连上，等连上再发时按钮上的字（暂用「正在连上…」，取自「正在重新连上…」）
@@ -560,12 +564,14 @@ struct HomeView: View {
                 .accessibilityAddTraits(.updatesFrequently)
 
                 // COPY-TODO: 等连上时取消的按钮（暂用「取消」，设置里已有这个词）
+                // 朴素文字按钮（无底、无玻璃），紧贴在主按钮正下方，不在主按钮里面
                 Button("取消") {
                     model.cancelQueuedCover()
                 }
-                .font(.body.weight(.semibold))
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
                 .frame(minHeight: 44)
+                .contentShape(.rect)
                 // COPY-TODO: 取消按钮的 VoiceOver 提示
                 .accessibilityHint("不等了，不盖上幕布")
             }

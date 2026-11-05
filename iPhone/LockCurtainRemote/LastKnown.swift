@@ -165,10 +165,20 @@ enum LastKnownPresentation {
     /// 「幕布」那一行
     struct CurtainRow: Equatable {
         var text: String
-        /// true = 上次的样子（淡着、带「上次」）；false = 现在的（连着）或者没有可说的（「—」）
+        /// true = 上次的样子（带「上次」，字用 .secondary，不用 opacity 调淡——浅色下对比度 <3:1）；false = 现在的（连着）或者没有可说的（「—」）
         var isLastKnown: Bool
-        /// 念给 VoiceOver 的值（把「上次」和时间说全）
+        /// 念给 VoiceOver 的值：上次的写成「上次是已盖上」（label 仍是「幕布」），不能读成「已盖上」
         var voice: String
+        /// 状态点亮不亮（Colo 定稿）：只有电脑真的报来了（连着、现在的值）才亮；上次的值、「—」都不亮
+        var isLit: Bool
+    }
+
+    /// 连上后「上次」换成现在的值：交叉淡入淡出的时长（Colo 定稿 0.2 秒，不弹 toast / alert）
+    static let liveCrossFadeDuration: TimeInterval = 0.2
+
+    /// 状态点亮不亮的规则：只有连着（电脑真的报来了）才亮
+    static func isStatusLit(connection: CurtainConnection) -> Bool {
+        connection == .connected
     }
 
     // COPY-TODO: 「上次」标记。幕布那一行没连上时写「上次：已盖上」之类，淡着。「上次」两个字沿用上面那句，具体版式待 Camo
@@ -183,15 +193,19 @@ enum LastKnownPresentation {
                            lastKnown: LastKnownState?, liveText: String, liveVoice: String,
                            disconnectedVoice: String, now: Date, calendar: Calendar = .current) -> CurtainRow {
         if connection == .connected {
-            return CurtainRow(text: liveText, isLastKnown: false, voice: liveVoice)
+            return CurtainRow(text: liveText, isLastKnown: false, voice: liveVoice,
+                              isLit: isStatusLit(connection: connection))
         }
         guard isShown(paired: paired, demo: demo, connection: connection),
-              let phase = lastKnown?.phase, let phaseAt = lastKnown?.phaseAt else {
-            return CurtainRow(text: "—", isLastKnown: false, voice: disconnectedVoice)
+              let phase = lastKnown?.phase, lastKnown?.phaseAt != nil else {
+            return CurtainRow(text: "—", isLastKnown: false, voice: disconnectedVoice,
+                              isLit: isStatusLit(connection: connection))
         }
         let text = "\(lastKnownMarker)：\(phaseText(phase))"
-        let voice = "\(disconnectedVoice)，\(lastKnownMarker)：\(phaseText(phase))，\(relativeText(from: phaseAt, now: now, calendar: calendar))"
-        return CurtainRow(text: text, isLastKnown: true, voice: voice)
+        // COPY-TODO: VoiceOver 念「幕布，上次是已盖上」（label「幕布」+ value「上次是已盖上」）；Colo 定
+        let voice = "\(lastKnownMarker)是\(phaseText(phase))"
+        return CurtainRow(text: text, isLastKnown: true, voice: voice,
+                          isLit: isStatusLit(connection: connection))
     }
 }
 

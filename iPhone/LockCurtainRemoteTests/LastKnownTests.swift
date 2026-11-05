@@ -167,10 +167,43 @@ struct LastKnownTests {
             #expect(row.isLastKnown)
             #expect(row.text.hasPrefix(LastKnownPresentation.lastKnownMarker))
             #expect(row.text != "已盖上")                    // 不能和现在的值一样
-            #expect(row.voice.contains("没连上"))
-            #expect(row.voice.contains("1 小时前"))
+            #expect(row.voice == "上次是已盖上")           // 「幕布」+「上次是已盖上」，不是「已盖上」
+            #expect(row.voice != "已盖上")
+            #expect(!row.isLit)                            // 上次的值：状态点不亮
             #expect(!row.text.contains("已连上"))
         }
+    }
+
+    @Test
+    func voiceOverReadsStaleOpenAsLastTime() {
+        let known = LastKnownState(connectedAt: Self.ago(60), phase: .open, phaseAt: Self.ago(60))
+        let row = LastKnownPresentation.curtainRow(
+            connection: .notConnected, paired: true, demo: false, lastKnown: known,
+            liveText: "x", liveVoice: "x", disconnectedVoice: "没连上", now: Self.now, calendar: Self.calendar)
+        #expect(row.voice == "上次是没盖上")
+    }
+
+    @Test
+    func statusDotIsLitOnlyWhenMacReallyReported() {
+        #expect(LastKnownPresentation.isStatusLit(connection: .connected))
+        for c in [CurtainConnection.notConnected, .bluetoothOff, .notPaired] {
+            #expect(!LastKnownPresentation.isStatusLit(connection: c))
+        }
+        let known = LastKnownState(connectedAt: Self.ago(60), phase: .closed, phaseAt: Self.ago(60))
+        func row(_ c: CurtainConnection, _ k: LastKnownState?) -> LastKnownPresentation.CurtainRow {
+            LastKnownPresentation.curtainRow(connection: c, paired: true, demo: false, lastKnown: k,
+                                             liveText: "已盖上", liveVoice: "已盖上", disconnectedVoice: "没连上",
+                                             now: Self.now, calendar: Self.calendar)
+        }
+        #expect(row(.connected, known).isLit)
+        #expect(!row(.notConnected, known).isLit)
+        #expect(!row(.bluetoothOff, known).isLit)
+        #expect(!row(.notConnected, nil).isLit)
+    }
+
+    @Test
+    func liveCrossFadeIsTwoTenthsOfASecond() {
+        #expect(LastKnownPresentation.liveCrossFadeDuration == 0.2)
     }
 
     @Test
@@ -179,7 +212,7 @@ struct LastKnownTests {
         let row = LastKnownPresentation.curtainRow(
             connection: .connected, paired: true, demo: false, lastKnown: known,
             liveText: "没盖上", liveVoice: "没盖上", disconnectedVoice: "没连上", now: Self.now)
-        #expect(row == .init(text: "没盖上", isLastKnown: false, voice: "没盖上"))
+        #expect(row == .init(text: "没盖上", isLastKnown: false, voice: "没盖上", isLit: true))
     }
 
     @Test
