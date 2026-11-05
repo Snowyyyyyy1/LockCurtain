@@ -92,15 +92,17 @@ struct KeepAwakeIntent: AppIntent {
     }
 }
 
-/// Siri 说法（copy v15.9 §20.3）。苹果要求每条短语都带 App 名（\(.applicationName)），所以屏幕上显示的是「用 LockCurtain 盖上幕布」；
+/// Siri 说法（copy v15.9 §20.3）。代码里写的是开发语言（en）的说法，中文那几句（用 LockCurtain 盖上幕布 …）在 AppShortcuts.xcstrings 的 zh-Hans 里，
+/// 键是这里的英文句子、App 名占位写成 ${applicationName}（苹果 App Shortcuts 本地化的写法）。英文句子是中文的直译，只作 en 的兜底。
+/// 下面这段旧说明照旧：苹果要求每条短语都带 App 名（\(.applicationName)），所以屏幕上显示的是「用 LockCurtain 盖上幕布」；
 /// 中文里 App 名两边各留一个空格，和 Camo 写的一致。幕布只配盖上 / 撤下，不加「打开 / 关闭幕布」这类说法
 struct CurtainShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: CoverCurtainIntent(),
             phrases: [
-                "用 \(.applicationName) 盖上幕布",
-                "用 \(.applicationName) 把屏幕盖住",
+                "Cover the curtain with \(.applicationName)",
+                "Cover the screen with \(.applicationName)",
             ],
             shortTitle: "盖上幕布",
             systemImageName: "curtains.closed"
@@ -108,7 +110,7 @@ struct CurtainShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: LiftCurtainIntent(),
             phrases: [
-                "用 \(.applicationName) 撤下幕布",
+                "Lift the curtain with \(.applicationName)",
             ],
             shortTitle: "撤下幕布",
             systemImageName: "curtains.open"
@@ -116,8 +118,8 @@ struct CurtainShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: PreviewCurtainIntent(),
             phrases: [
-                "用 \(.applicationName) 预览幕布",
-                "用 \(.applicationName) 看看盖上什么样",
+                "Preview the curtain with \(.applicationName)",
+                "See what covering looks like with \(.applicationName)",
             ],
             shortTitle: "预览幕布",
             systemImageName: "eye"
@@ -125,8 +127,8 @@ struct CurtainShortcuts: AppShortcutsProvider {
         AppShortcut(
             intent: KeepAwakeIntent(),
             phrases: [
-                "用 \(.applicationName) 保持唤醒",
-                "用 \(.applicationName) 让电脑别睡",
+                "Keep awake with \(.applicationName)",
+                "Keep the computer from sleeping with \(.applicationName)",
             ],
             shortTitle: "保持唤醒",
             systemImageName: "cup.and.saucer"
