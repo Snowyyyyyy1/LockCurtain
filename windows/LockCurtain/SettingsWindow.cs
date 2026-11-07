@@ -401,6 +401,9 @@ internal sealed class SettingsWindow : Form
     /// 走网络：开关 + 打开后每个本机地址一行（等宽 ip:port + 拷贝）。文案：Camo copy v15.13 §18.2 / §18.6（NetworkText）
     void BuildPhoneNetwork(PageView v)
     {
+        // COPY-TODO: 分组标题「网络」——§18.2 的小标题是「手机」页 › 网络，Mac 这一组没有标题；Windows 的卡片分组需要一个，先用「网络」
+        // COPY-TODO: 地址行的网络类型（Wi-Fi / Tailscale / 以太网 / 其他）放在地址右边的值位置，§18.2 说的是行首；PageView 的行没有「行首次要色标签」这一格
+        // COPY-TODO: 脚注两句（打开以后… / 手机和电脑不在同一个网络…）§18.2 一句主色一句次要色，这里的脚注只有一种颜色，两句分两行
         var g = v.Section("网络", () => NetworkText.Allowed + "\n" + NetworkText.Tailscale);
         g.Toggle(NetworkText.Switch, () => phone.NetworkEnabled, on => phone.SetNetworkEnabled(on));
         if (!phone.NetworkEnabled) return;
