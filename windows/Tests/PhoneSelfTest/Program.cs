@@ -316,7 +316,7 @@ foreach (var f in root.GetProperty("framing").EnumerateArray())
     var asm = new PairingFraming.Assembler();
     byte[]? rebuilt = null;
     foreach (var c in got) rebuilt = asm.Feed(c) ?? rebuilt;
-    Check(got.Count == want.Count && got.Zip(want).All(p => Eq(p.First, p.Second)), $"{msg.Length} 字节按 {size} 切：块和 Swift 一样");
+    Check(got.Count == want.Count && got.Zip(want, (a, b) => Eq(a, b)).All(same => same), $"{msg.Length} 字节按 {size} 切：块和 Swift 一样");
     // 块序号模 128：超过 128 块时第 129 块的序号又是 0，两边的拼装器都会从头再来（和 Swift 一样），这种长度实际不会出现
     if (got.Count <= 128) Check(Eq(rebuilt, msg), $"{msg.Length} 字节按 {size} 切：拼回来一样");
     else Check(!Eq(rebuilt, msg), $"{msg.Length} 字节按 {size} 切成 {got.Count} 块（> 128）：和 Swift 一样拼不回原消息");

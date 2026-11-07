@@ -95,24 +95,13 @@ internal sealed class RuleEditor : Form
     /// 「删除这条规则？」取消 / 删除
     static bool ConfirmDelete(IWin32Window owner)
     {
-        var cancel = new TaskDialogButton("取消");
-        var remove = new TaskDialogButton("删除");
-        var page = new TaskDialogPage
-        {
-            Caption = "删除规则",
-            Heading = "删除这条规则？",
-            Text = "删掉以后，这条规则不再自动盖上幕布。",
-            Buttons = { cancel, remove },
-            DefaultButton = cancel,
-            Icon = TaskDialogIcon.Warning,
-        };
-        return TaskDialog.ShowDialog(owner, page) == remove;
+        return WarningDialog.Confirm(owner, "删除规则", "删除这条规则？", "删掉以后，这条规则不再自动盖上幕布。", "删除");
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle, page.Theme.Dark);
+        DarkMode.Apply(this, page.Theme);
     }
 
     protected override void OnDpiChanged(DpiChangedEventArgs e)
@@ -157,7 +146,7 @@ internal sealed class RuleEditor : Form
     void BuildPage(PageView v)
     {
         var rule = Rule;
-        var name = new TextBox { Text = rule.Name, PlaceholderText = "名称", Font = v.BodyFont, AccessibleName = "名称" };
+        var name = new CueTextBox { Text = rule.Name, PlaceholderText = "名称", Font = v.BodyFont, AccessibleName = "名称" };
         name.TextChanged += (_, _) =>
         {
             rule.Name = name.Text;
@@ -239,7 +228,7 @@ internal sealed class RuleEditor : Form
                 list()?.Remove(item);
                 RebuildLater(null);
             }));
-        var box = new TextBox { Name = key, PlaceholderText = placeholder, Font = v.BodyFont, AccessibleName = placeholder };
+        var box = new CueTextBox { Name = key, PlaceholderText = placeholder, Font = v.BodyFont, AccessibleName = placeholder };
         void Add(string text)
         {
             var name = text.Trim();
@@ -277,7 +266,7 @@ internal sealed class RuleEditor : Form
         var names = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in Process.GetProcesses())
             using (p)
-                if (p.Id != self && p.MainWindowHandle != 0) names.Add(p.ProcessName);
+                if (p.Id != self && p.MainWindowHandle != IntPtr.Zero) names.Add(p.ProcessName);
         return names.ToList();
     }
 

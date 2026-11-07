@@ -1,7 +1,8 @@
 // Updater.cs —— 自动更新：检查、提示、下载、验签交给 WinSparkle，安装交给 install.ps1
 //
-// 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包：LockCurtainApp.exe（uiAccess 主程序）、
-// LockCurtain.exe（启动器）、WinSparkle.dll、install.ps1、LockCurtainCtl.exe（占位文件，为兼容 1.0.2 的更新器名字检查）），
+// 更新包是 Release 上的 LockCurtain-<版本>-win-<架构>.zip（windows/build.sh 打的包，两种架构内容一样：LockCurtainApp.exe（uiAccess 主程序）、
+// LockCurtain.exe（启动器）、依赖的 dll、x64\ 和 arm64\ 里的 WinSparkle.dll、install.ps1，
+// 加上给旧版更新器查名字的占位文件 WinSparkle.dll、LockCurtainCtl.exe），
 // appcast-windows.xml 里每个架构一个 enclosure，带 Ed25519 签名（release.sh 签）。
 // 测试版（版本号带 beta）编译时换成测试通道 beta-channel 上的 appcast-beta-windows.xml（windows/build.sh 决定，release-beta.sh 发），
 // WinSparkle 比版本时 1.0.4-beta.2 < 1.0.4-beta.3 < 1.0.4（windows/Tests/VersionOrderSelfTest）。
@@ -33,6 +34,15 @@ namespace LockCurtain;
 internal static unsafe class Updater
 {
     const string Dll = "WinSparkle.dll", Exe = "LockCurtainApp.exe";
+    /// 主程序是 AnyCPU：ARM64 上是 x64 仿真（用 x64 那份）；以后编原生 ARM64 版时用 arm64 那份。
+    /// 发布包里两种 WinSparkle.dll 都有（x64\、arm64\），按本进程的架构挑；根目录那个 WinSparkle.dll 只是给旧版更新器查名字的占位
+    static readonly string? ArchDir = RuntimeInformation.ProcessArchitecture switch
+    {
+        Architecture.X64 => "x64",
+        Architecture.Arm64 => "arm64",
+        _ => null,
+    };
+    static string? DllPath => ArchDir is { } a ? Path.Combine(Dir, a, Dll) : null;
     const string RegistryPath = @"Software\LockCurtain\WinSparkle";
     const int CheckIntervalSeconds = 24 * 60 * 60;
 
@@ -63,9 +73,9 @@ internal static unsafe class Updater
             Log.Write($"自动更新：以最高权限运行但不在 Program Files 里（{Dir}），不检查更新");
             return;
         }
-        if (!File.Exists(Path.Combine(Dir, Dll)))
+        if (DllPath is not { } dllPath || !File.Exists(dllPath))
         {
-            Log.Write($"自动更新：{Dir} 里没有 {Dll}，不检查更新");
+            Log.Write($"自动更新：没有 {RuntimeInformation.ProcessArchitecture} 的 {Dll}（{Dir}\\{ArchDir}），不检查更新");
             return;
         }
         Updater.idle = idle;
@@ -77,9 +87,12 @@ internal static unsafe class Updater
             Environment.SetEnvironmentVariable("TMP", UpdatesDir);
         }
 
-        // 只从 exe 旁边加载，不走系统的 DLL 搜索顺序
-        NativeLibrary.SetDllImportResolver(typeof(Updater).Assembly, (name, _, _) =>
-            name == Dll ? NativeLibrary.Load(Path.Combine(Dir, Dll)) : 0);
+        // 按完整路径加载，它依赖的 DLL 只从它自己的目录和 System32 找，不走系统的 DLL 搜索顺序
+        if (!WinSparkle.Load(dllPath))
+        {
+            Log.Write($"自动更新：加载 {dllPath} 失败（{Marshal.GetLastWin32Error()}），不检查更新");
+            return;
+        }
         win_sparkle_set_appcast_url(url);
         if (win_sparkle_set_eddsa_public_key(key) == 0)
         {
@@ -90,11 +103,16 @@ internal static unsafe class Updater
         // LockCurtain 只有中文界面。要写小写：wxWidgets 把 DLL 里的翻译名转成小写（zh_cn）后区分大小写地比，
         // 写 zh_CN（包括 WinSparkle 自己按系统语言挑的）匹配不上，显示英文
         win_sparkle_set_lang("zh_cn");
-        var config = new ConfigMethods { Read = &ConfigRead, Write = &ConfigWrite, Delete = &ConfigDelete };
+        var config = new ConfigMethods
+        {
+            Read = Marshal.GetFunctionPointerForDelegate(Keep.ConfigRead),
+            Write = Marshal.GetFunctionPointerForDelegate(Keep.ConfigWrite),
+            Delete = Marshal.GetFunctionPointerForDelegate(Keep.ConfigDelete),
+        };
         win_sparkle_set_config_methods(&config);
-        win_sparkle_set_can_shutdown_callback(&CanShutdown);
-        win_sparkle_set_shutdown_request_callback(&ShutdownRequest);
-        win_sparkle_set_user_run_installer_callback(&RunInstaller);
+        win_sparkle_set_can_shutdown_callback(Keep.CanShutdown);
+        win_sparkle_set_shutdown_request_callback(Keep.ShutdownRequest);
+        win_sparkle_set_user_run_installer_callback(Keep.RunInstaller);
         UseAppIconForDialogs();
         win_sparkle_init();
         Available = true;
@@ -163,7 +181,7 @@ internal static unsafe class Updater
         smallIcon = Icon.ExtractIcon(Environment.ProcessPath!, 0, SystemInformation.SmallIconSize.Width);
         bigIcon = Icon.ExtractIcon(Environment.ProcessPath!, 0, SystemInformation.IconSize.Width);
         uiThread = Native.GetCurrentThreadId();
-        SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, 0, &OnWindowShown, (uint)Environment.ProcessId, 0, WINEVENT_OUTOFCONTEXT);
+        SetWinEventHook(EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW, 0, Keep.OnWindowShown, (uint)Environment.ProcessId, 0, WINEVENT_OUTOFCONTEXT);
     }
 
     /// 旧版本就地换文件留下的 .old、.new，没装成的暂存目录，和 updates 里的下载
@@ -191,7 +209,7 @@ internal static unsafe class Updater
         if (Elevated && !Path.GetFullPath(package).StartsWith(UpdatesDir + @"\", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException($"更新包不在 {UpdatesDir} 里: {package}");
         // 缺文件的话 install.ps1 会在杀掉旧进程之后才失败，先在这里查一遍
-        string[] names = [Exe, "LockCurtain.exe", Dll, "install.ps1", "LockCurtainCtl.exe"];
+        string[] names = [Exe, "LockCurtain.exe", "install.ps1", "x64/" + Dll, "arm64/" + Dll];
         using (var zip = ZipFile.OpenRead(package))
             foreach (var name in names)
                 if (zip.GetEntry(name) is null) throw new InvalidDataException($"更新包里没有 {name}");
@@ -201,7 +219,6 @@ internal static unsafe class Updater
         Log.Write($"自动更新：已解压到 {stage}，退出时安装");
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     static void OnWindowShown(nint hook, uint eventType, nint hwnd, int objectId, int childId, uint thread, uint time)
     {
         if (objectId != OBJID_WINDOW || thread == uiThread || GetAncestor(hwnd, GA_ROOT) != hwnd) return;
@@ -211,14 +228,12 @@ internal static unsafe class Updater
 
     // MARK: - WinSparkle 的回调（在它自己的线程上）
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int CanShutdown()
     {
         try { return idle() ? 1 : 0; }
         catch { return 0; }
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void ShutdownRequest()
     {
         try { exit(); }
@@ -227,7 +242,6 @@ internal static unsafe class Updater
 
     /// 返回 1 表示已解压好、可以装（WinSparkle 接着请求退出，真正安装见 InstallPending），
     /// -1 时它提示「无法启动安装程序」
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int RunInstaller(char* path)
     {
         try
@@ -245,7 +259,6 @@ internal static unsafe class Updater
     /// UpdateTempDir 以最高权限运行时不存也不读，见文件头第 2 条
     static bool Skipped(string name) => Elevated && name == "UpdateTempDir";
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int ConfigRead(byte* name, char* buffer, nuint length, void* userData)
     {
         try
@@ -262,7 +275,6 @@ internal static unsafe class Updater
         catch { return 0; }
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void ConfigWrite(byte* name, char* value, void* userData)
     {
         try
@@ -275,7 +287,6 @@ internal static unsafe class Updater
         catch (Exception e) { Log.Write($"自动更新：写配置失败: {e.Message}"); }
     }
 
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void ConfigDelete(byte* name, void* userData)
     {
         try
@@ -289,40 +300,102 @@ internal static unsafe class Updater
     const uint EVENT_OBJECT_SHOW = 0x8002, WINEVENT_OUTOFCONTEXT = 0, WM_SETICON = 0x0080, GA_ROOT = 2;
     const int OBJID_WINDOW = 0;
     const nint ICON_SMALL = 0, ICON_BIG = 1;
+    delegate void WinEventProc(nint hook, uint eventType, nint hwnd, int objectId, int childId, uint thread, uint time);
     [DllImport("user32.dll")]
-    static extern nint SetWinEventHook(uint eventMin, uint eventMax, nint module,
-        delegate* unmanaged[Stdcall]<nint, uint, nint, int, int, uint, uint, void> callback, uint pid, uint thread, uint flags);
+    static extern nint SetWinEventHook(uint eventMin, uint eventMax, nint module, WinEventProc callback, uint pid, uint thread, uint flags);
     [DllImport("user32.dll")] static extern nint GetAncestor(nint hwnd, uint flags);
 
+    /// 交给原生代码的回调：委托必须一直有人引用，不然被回收后原生代码再调就崩
+    static class Keep
+    {
+        public static readonly WinEventProc OnWindowShown = Updater.OnWindowShown;
+        public static readonly ReadFn ConfigRead = Updater.ConfigRead;
+        public static readonly WriteFn ConfigWrite = Updater.ConfigWrite;
+        public static readonly DeleteFn ConfigDelete = Updater.ConfigDelete;
+        public static readonly IntCallback CanShutdown = Updater.CanShutdown;
+        public static readonly VoidCallback ShutdownRequest = Updater.ShutdownRequest;
+        public static readonly InstallerCallback RunInstaller = Updater.RunInstaller;
+    }
+
     // MARK: - WinSparkle.dll（include/winsparkle.h）
+    // 不用 DllImport：按完整路径 LoadLibraryEx，再 GetProcAddress 取函数（.NET Framework 没有 NativeLibrary）
+
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int ReadFn(byte* name, char* buffer, nuint length, void* userData);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void WriteFn(byte* name, char* value, void* userData);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void DeleteFn(byte* name, void* userData);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int IntCallback();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void VoidCallback();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int InstallerCallback(char* path);
 
     struct ConfigMethods
     {
-        public delegate* unmanaged[Cdecl]<byte*, char*, nuint, void*, int> Read;
-        public delegate* unmanaged[Cdecl]<byte*, char*, void*, void> Write;
-        public delegate* unmanaged[Cdecl]<byte*, void*, void> Delete;
+        public nint Read, Write, Delete;
         public void* UserData;
     }
 
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] static extern void win_sparkle_init();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] static extern void win_sparkle_cleanup();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    static extern void win_sparkle_set_appcast_url(string url);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    static extern int win_sparkle_set_eddsa_public_key(string key);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    static extern void win_sparkle_set_lang(string lang);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Unicode)]
-    static extern void win_sparkle_set_app_details(string company, string app, string version);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    static extern void win_sparkle_set_config_methods(ConfigMethods* methods);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    static extern void win_sparkle_set_can_shutdown_callback(delegate* unmanaged[Cdecl]<int> callback);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    static extern void win_sparkle_set_shutdown_request_callback(delegate* unmanaged[Cdecl]<void> callback);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)]
-    static extern void win_sparkle_set_user_run_installer_callback(delegate* unmanaged[Cdecl]<char*, int> callback);
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] static extern void win_sparkle_check_update_with_ui();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] static extern void win_sparkle_check_update_without_ui();
-    [DllImport(Dll, CallingConvention = CallingConvention.Cdecl)] static extern long win_sparkle_get_last_check_time();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void VoidFn();
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Ansi)] delegate void AnsiFn(string value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Ansi)] delegate int AnsiIntFn(string value);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl, CharSet = CharSet.Unicode)] delegate void DetailsFn(string company, string app, string version);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void ConfigFn(ConfigMethods* methods);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void SetCallbackFn(nint callback);
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long LongFn();
+
+    static class WinSparkle
+    {
+        public static VoidFn Init = null!, Cleanup = null!, CheckWithUi = null!, CheckWithoutUi = null!;
+        public static AnsiFn SetAppcastUrl = null!, SetLang = null!;
+        public static AnsiIntFn SetEdDSAPublicKey = null!;
+        public static DetailsFn SetAppDetails = null!;
+        public static ConfigFn SetConfigMethods = null!;
+        public static SetCallbackFn SetCanShutdown = null!, SetShutdownRequest = null!, SetUserRunInstaller = null!;
+        public static LongFn GetLastCheckTime = null!;
+
+        public static bool Load(string path)
+        {
+            const uint LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR = 0x100, LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x800;
+            var module = LoadLibraryExW(path, 0, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+            if (module == 0) return false;
+            try { Bind(module); return true; }
+            catch (EntryPointNotFoundException e) { Log.Write($"自动更新：{e.Message}"); return false; }
+        }
+
+        static void Bind(nint module)
+        {
+            T Get<T>(string name) where T : Delegate => Marshal.GetDelegateForFunctionPointer<T>(
+                GetProcAddress(module, name) is var p and not 0 ? p : throw new EntryPointNotFoundException($"{Dll}: {name}"));
+            Init = Get<VoidFn>("win_sparkle_init");
+            Cleanup = Get<VoidFn>("win_sparkle_cleanup");
+            SetAppcastUrl = Get<AnsiFn>("win_sparkle_set_appcast_url");
+            SetEdDSAPublicKey = Get<AnsiIntFn>("win_sparkle_set_eddsa_public_key");
+            SetLang = Get<AnsiFn>("win_sparkle_set_lang");
+            SetAppDetails = Get<DetailsFn>("win_sparkle_set_app_details");
+            SetConfigMethods = Get<ConfigFn>("win_sparkle_set_config_methods");
+            SetCanShutdown = Get<SetCallbackFn>("win_sparkle_set_can_shutdown_callback");
+            SetShutdownRequest = Get<SetCallbackFn>("win_sparkle_set_shutdown_request_callback");
+            SetUserRunInstaller = Get<SetCallbackFn>("win_sparkle_set_user_run_installer_callback");
+            CheckWithUi = Get<VoidFn>("win_sparkle_check_update_with_ui");
+            CheckWithoutUi = Get<VoidFn>("win_sparkle_check_update_without_ui");
+            GetLastCheckTime = Get<LongFn>("win_sparkle_get_last_check_time");
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern nint LoadLibraryExW(string path, nint file, uint flags);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+        static extern nint GetProcAddress(nint module, string name);
+    }
+
+    static void win_sparkle_init() => WinSparkle.Init();
+    static void win_sparkle_cleanup() => WinSparkle.Cleanup();
+    static void win_sparkle_set_appcast_url(string url) => WinSparkle.SetAppcastUrl(url);
+    static int win_sparkle_set_eddsa_public_key(string key) => WinSparkle.SetEdDSAPublicKey(key);
+    static void win_sparkle_set_lang(string lang) => WinSparkle.SetLang(lang);
+    static void win_sparkle_set_app_details(string company, string app, string version) => WinSparkle.SetAppDetails(company, app, version);
+    static void win_sparkle_set_config_methods(ConfigMethods* methods) => WinSparkle.SetConfigMethods(methods);
+    static void win_sparkle_set_can_shutdown_callback(IntCallback callback) => WinSparkle.SetCanShutdown(Marshal.GetFunctionPointerForDelegate(callback));
+    static void win_sparkle_set_shutdown_request_callback(VoidCallback callback) => WinSparkle.SetShutdownRequest(Marshal.GetFunctionPointerForDelegate(callback));
+    static void win_sparkle_set_user_run_installer_callback(InstallerCallback callback) => WinSparkle.SetUserRunInstaller(Marshal.GetFunctionPointerForDelegate(callback));
+    static void win_sparkle_check_update_with_ui() => WinSparkle.CheckWithUi();
+    static void win_sparkle_check_update_without_ui() => WinSparkle.CheckWithoutUi();
+    static long win_sparkle_get_last_check_time() => WinSparkle.GetLastCheckTime();
 }

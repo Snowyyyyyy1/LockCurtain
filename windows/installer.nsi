@@ -1,7 +1,7 @@
 ; installer.nsi —— LockCurtain 单文件安装器（Mac 上用 makensis 编，见 build.sh）
-; 双击即装：弹 UAC（管理员）→ 按 CPU 自动选 x64/ARM64 的那份 → 解压到临时目录 → 跑 install.ps1
+; 双击即装：弹 UAC（管理员）→ 解压 dist/win 到临时目录 → 跑 install.ps1
 ;（install.ps1 负责拷进 Program Files、本机自签证书、注册登录时以最高权限运行的计划任务、启动）。
-; 两种架构的产物都编进同一个 exe，运行时只解压匹配 CPU 的那一份。
+; 程序是 .NET Framework 4.8 的 AnyCPU，x64 和 ARM64 用同一份文件（WinSparkle.dll 两种都带，程序按自己的架构挑）。
 ; VERSION 由 build.sh 用 -DVERSION 传进来。
 Unicode true
 Name "LockCurtain"
@@ -21,25 +21,15 @@ ShowInstDetails hide
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 Section "Install"
-  SetOutPath "$TEMP\LockCurtainSetup"
-  ${If} ${IsNativeARM64}
-    DetailPrint "架构：ARM64"
-    File "dist/win-arm64/LockCurtain.exe"
-    File "dist/win-arm64/LockCurtainApp.exe"
-    File "dist/win-arm64/LockCurtainCtl.exe"
-    File "dist/win-arm64/WinSparkle.dll"
-    File "dist/win-arm64/install.ps1"
-  ${ElseIf} ${IsNativeAMD64}
-    DetailPrint "架构：x64"
-    File "dist/win-x64/LockCurtain.exe"
-    File "dist/win-x64/LockCurtainApp.exe"
-    File "dist/win-x64/LockCurtainCtl.exe"
-    File "dist/win-x64/WinSparkle.dll"
-    File "dist/win-x64/install.ps1"
-  ${Else}
+  ${IfNot} ${IsNativeARM64}
+  ${AndIfNot} ${IsNativeAMD64}
     MessageBox MB_ICONSTOP "LockCurtain 需要 64 位 Windows（x64 或 ARM64）。"
     Abort
   ${EndIf}
+  ; 上次没装完留下的文件先清掉，免得 install.ps1 把旧文件一起装进去
+  RMDir /r "$TEMP\LockCurtainSetup"
+  SetOutPath "$TEMP\LockCurtainSetup"
+  File /r "dist/win/*"
 
   DetailPrint "正在安装…"
   ; 安装器 stub 是 x86，在 64 位 Windows（x64/ARM64）上直接跑 powershell 会被 WOW64

@@ -383,10 +383,11 @@ internal sealed class PhoneLink
 
     void NotifyPhones() => PhonesChanged?.Invoke();
 
-    /// 设置 › 手机 打开时：没配过手机也看一眼蓝牙（开着没有、能不能用），不扫描也不连
+    /// 设置 › 手机 打开时：没配过手机也看一眼蓝牙（开着没有、能不能用），不扫描也不连。
+    /// 已经知道蓝牙用不了就不再试：失败会通知页面重建，重建又调这里，不拦住就一直循环
     public void Probe()
     {
-        if (!initialized) _ = InitializeAsync();
+        if (!initialized && !unsupported) _ = InitializeAsync();
     }
 
     /// 这台手机连着：记一下「上次连上」（force：刚认出 / 刚断开时一定写，平时每分钟最多一次）
@@ -771,7 +772,7 @@ internal sealed class PhoneLink
             {
                 if (m.CompanyId != AppleCompanyId || m.Data.Length < 17) continue;
                 var data = ReadBuffer(m.Data);
-                if (data[0] == 0x01) overflow = data[1..17];
+                if (data[0] == 0x01) overflow = data.Slice(1..17);
             }
             var address = args.BluetoothAddress;
             if (!ours && overflow == null && !peerAddresses.Contains(address)) return;

@@ -50,7 +50,7 @@ internal sealed record PairRequest(Guid PhoneID, byte[] Sid, byte[] Ya)
     {
         PairingCrypto.Check(b, Kind.PairRequest);
         if (b.Length != Length) throw new WireException("wrongLength");
-        return new(PairingCrypto.Id(b, 2), b[18..34], b[34..66]);
+        return new(PairingCrypto.Id(b, 2), b.Slice(18..34), b.Slice(34..66));
     }
 }
 
@@ -63,7 +63,7 @@ internal sealed record PairResponse(byte[] Sid, byte[] Yb, byte[] Tag)
     {
         PairingCrypto.Check(b, Kind.PairResponse);
         if (b.Length != Length) throw new WireException("wrongLength");
-        return new(b[2..18], b[18..50], b[50..114]);
+        return new(b.Slice(2..18), b.Slice(18..50), b.Slice(50..114));
     }
 }
 
@@ -76,7 +76,7 @@ internal sealed record PairConfirm(Guid PhoneID, byte[] Sid, byte[] Tag)
     {
         PairingCrypto.Check(b, Kind.PairConfirm);
         if (b.Length != Length) throw new WireException("wrongLength");
-        return new(PairingCrypto.Id(b, 2), b[18..34], b[34..98]);
+        return new(PairingCrypto.Id(b, 2), b.Slice(18..34), b.Slice(34..98));
     }
 }
 
@@ -100,7 +100,7 @@ internal sealed record CommandEnvelope(Guid PhoneID, ulong Counter, string Comma
         string text;
         try { text = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(b, 27, len); }
         catch (DecoderFallbackException) { throw new WireException("badText"); }
-        return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), text, b[(27 + len)..]);
+        return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), text, b.Slice((27 + len)..));
     }
 }
 
@@ -114,7 +114,7 @@ internal sealed record Ack(Guid PhoneID, ulong Counter, AckStatus Status, byte[]
         PairingCrypto.Check(b, Kind.Ack);
         if (b.Length != 27 && b.Length != 27 + 32) throw new WireException("wrongLength");
         if (b[26] > 5) throw new WireException("wrongLength");
-        return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), (AckStatus)b[26], b.Length == 59 ? b[27..] : null);
+        return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), (AckStatus)b[26], b.Length == 59 ? b.Slice(27..) : null);
     }
 }
 
@@ -144,17 +144,17 @@ internal sealed record PhoneAnswer(bool IsLiftNow, PresenceStatus Status, Guid P
                 if (b[head] > 2) throw new WireException("wrongLength");
                 liftNow = false;
                 status = (PresenceStatus)b[head];
-                mac = b[(head + 1)..];
+                mac = b.Slice((head + 1)..);
                 break;
             case Kind.LiftNow:
                 if (b.Length != head + 32) throw new WireException("wrongLength");
                 liftNow = true;
-                mac = b[head..];
+                mac = b.Slice(head..);
                 break;
             default:
                 throw new WireException("wrongKind");
         }
-        return new(liftNow, status, PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), b[26..42], mac);
+        return new(liftNow, status, PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), b.Slice(26..42), mac);
     }
 }
 
@@ -196,8 +196,29 @@ internal static class PairingCrypto
 
     // MARK: - 小工具
 
-    public static byte[] IdBytes(Guid id) => id.ToByteArray(bigEndian: true);
-    public static Guid Id(byte[] b, int offset) => new(b.AsSpan(offset, 16), bigEndian: true);
+    /// Guid 的大端字节（RFC 4122 的顺序，和 Swift 的 UUID 一样）。Guid.ToByteArray() 前三段是小端，翻过来。
+    /// 不用 .NET 8 的 ToByteArray(bigEndian:)：主程序是 .NET Framework 4.8，没有这个重载
+    public static byte[] IdBytes(Guid id)
+    {
+        var b = id.ToByteArray();
+        SwapGuidFields(b);
+        return b;
+    }
+
+    public static Guid Id(byte[] b, int offset)
+    {
+        var t = new byte[16];
+        Array.Copy(b, offset, t, 0, 16);
+        SwapGuidFields(t);
+        return new Guid(t);
+    }
+
+    static void SwapGuidFields(byte[] b)
+    {
+        Array.Reverse(b, 0, 4);
+        Array.Reverse(b, 4, 2);
+        Array.Reverse(b, 6, 2);
+    }
     /// 和 Swift 的 uuidString 一样：大写
     public static string IdString(Guid id) => id.ToString("D").ToUpperInvariant();
 
@@ -234,7 +255,7 @@ internal static class PairingCrypto
     public static byte[] PairAbort(Guid phoneID, byte[] sid) => Bytes.Concat(Header(Kind.PairAbort), IdBytes(phoneID), sid);
 
     public static (Guid PhoneID, byte[] Sid)? DecodePairAbort(byte[] b) =>
-        Is(b, Kind.PairAbort) && b.Length == 2 + 16 + 16 ? (Id(b, 2), b[18..34]) : null;
+        Is(b, Kind.PairAbort) && b.Length == 2 + 16 + 16 ? (Id(b, 2), b.Slice(18..34)) : null;
 
     public static byte[] PairAccepted(Guid phoneID, byte[] sid, byte[] key)
     {
@@ -243,8 +264,8 @@ internal static class PairingCrypto
     }
 
     public static bool VerifyPairAccepted(byte[] b, Guid phoneID, byte[] sid, byte[] key) =>
-        Is(b, Kind.PairAccepted) && b.Length == 2 + 16 + 16 + 32 && Id(b, 2) == phoneID && Eq(b[18..34], sid)
-        && HmacValid(b[34..], b[..34], key);
+        Is(b, Kind.PairAccepted) && b.Length == 2 + 16 + 16 + 32 && Id(b, 2) == phoneID && Eq(b.Slice(18..34), sid)
+        && HmacValid(b.Slice(34..), b.Slice(..34), key);
 
     public static byte[] PairReject(PairRejectReason reason) => [.. Header(Kind.PairReject), (byte)reason];
 
@@ -341,7 +362,7 @@ internal static class PairingCrypto
     }
 
     public static (ulong Seq, bool Closed)? OpenState(byte[] b, Guid phoneID, byte[] key) =>
-        Is(b, Kind.State) && b.Length == 2 + 16 + 8 + 1 + 32 && Id(b, 2) == phoneID && HmacValid(b[27..], b[..27], key)
+        Is(b, Kind.State) && b.Length == 2 + 16 + 8 + 1 + 32 && Id(b, 2) == phoneID && HmacValid(b.Slice(27..), b.Slice(..27), key)
             ? (UInt64(b, 18), b[26] == 1) : null;
 
     public static byte[] MakeRevoke(Guid phoneID, byte[] key)
@@ -351,7 +372,7 @@ internal static class PairingCrypto
     }
 
     public static bool VerifyRevoke(byte[] b, Guid phoneID, byte[] key) =>
-        Is(b, Kind.Revoke) && b.Length == 2 + 16 + 32 && Id(b, 2) == phoneID && HmacValid(b[18..], b[..18], key);
+        Is(b, Kind.Revoke) && b.Length == 2 + 16 + 32 && Id(b, 2) == phoneID && HmacValid(b.Slice(18..), b.Slice(..18), key);
 
     // MARK: - 保持唤醒的现状（protocol v3，kind 0x0F）
     //   ver | 0x0F | phoneID(16) | seq(8, BE) | mode(1) | endsAt(8, BE unix 秒, 0 = 没有) | len(1) | appName(UTF-8, ≤ 64) | mac(32)
@@ -368,7 +389,7 @@ internal static class PairingCrypto
         if (bytes.Length <= maxBytes) return bytes;
         var end = maxBytes;
         while (end > 0 && (bytes[end] & 0xC0) == 0x80) end--;
-        return bytes[..end];
+        return bytes.Slice(..end);
     }
 
     public static byte[] MakeKeepAwakeState(Guid phoneID, ulong seq, byte mode, ulong endsAt, string appName, byte[] key)
@@ -385,7 +406,7 @@ internal static class PairingCrypto
         if (!Is(b, Kind.KeepAwakeState) || b.Length < head + 1 + 32) return null;
         var len = b[head];
         if (len > MaxKeepAwakeAppBytes || b.Length != head + 1 + len + 32) return null;
-        if (Id(b, 2) != phoneID || !HmacValid(b[(head + 1 + len)..], b[..(head + 1 + len)], key)) return null;
+        if (Id(b, 2) != phoneID || !HmacValid(b.Slice((head + 1 + len)..), b.Slice(..(head + 1 + len)), key)) return null;
         string app;
         try { app = new UTF8Encoding(false, throwOnInvalidBytes: true).GetString(b, head + 1, len); }
         catch (DecoderFallbackException) { return null; }
@@ -404,8 +425,8 @@ internal static class PairingCrypto
     }
 
     public static byte[]? OpenPoll(byte[] b, Guid phoneID, byte[] key) =>
-        Is(b, Kind.Poll) && b.Length == 2 + 16 + 16 + 32 && Id(b, 2) == phoneID && HmacValid(b[34..], b[..34], key)
-            ? b[18..34] : null;
+        Is(b, Kind.Poll) && b.Length == 2 + 16 + 16 + 32 && Id(b, 2) == phoneID && HmacValid(b.Slice(34..), b.Slice(..34), key)
+            ? b.Slice(18..34) : null;
 
     public static byte[]? SealPresence(PresenceStatus status, byte[] nonce, Guid phoneID, ulong counter, byte[] key)
     {
@@ -431,7 +452,7 @@ internal static class PairingCrypto
 
     public static (ulong Counter, LiftStatus Status)? OpenLiftResult(byte[] b, Guid phoneID, byte[] key) =>
         Is(b, Kind.LiftResult) && b.Length == 2 + 16 + 8 + 1 + 32 && Id(b, 2) == phoneID && b[26] <= 3
-        && HmacValid(b[27..], b[..27], key)
+        && HmacValid(b.Slice(27..), b.Slice(..27), key)
             ? (UInt64(b, 18), (LiftStatus)b[26]) : null;
 }
 
@@ -450,7 +471,7 @@ internal static class PairingFraming
         {
             var end = Math.Min(message.Length, start + room);
             var last = end == message.Length;
-            o.Add([(byte)((index & 0x7F) | (last ? 0x80 : 0)), .. message[start..end]]);
+            o.Add([(byte)((index & 0x7F) | (last ? 0x80 : 0)), .. message.Slice(start..end)]);
             index++;
             start = end;
         } while (start < message.Length);

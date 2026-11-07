@@ -1,15 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <!-- 和主程序一样用 Windows 自带的 .NET Framework 4.8：编出来十几 KB（以前自带 .NET 10 运行时，37 MB） -->
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <LangVersion>latest</LangVersion>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <AssemblyName>LockCurtain</AssemblyName>
     <RootNamespace>LockCurtain</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\LockCurtain\ControlProtocol.cs" Link="ControlProtocol.cs" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" />
   </ItemGroup>
 </Project>

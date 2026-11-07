@@ -116,6 +116,9 @@ internal sealed class PageView : Panel
     {
         var scroll = AutoScrollPosition;
         SuspendLayout();
+        // 窗口不在前台时重建（比如点「配对手机…」，配对窗口刚弹到前面、手机页跟着刷新）：先放掉窗口记着的焦点控件。
+        // 不然那个控件被 Dispose 时 WinForms 把焦点交给下一个控件，SetFocus 会把这个窗口抢回前台，盖住刚弹出的窗口
+        if (FindForm() is { } form && Form.ActiveForm != form) form.ActiveControl = null;
         foreach (var c in Controls.Cast<Control>().ToList()) c.Dispose();
         groups.Clear();
         DisposeFonts();

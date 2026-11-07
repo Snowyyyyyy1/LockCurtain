@@ -19,7 +19,8 @@ internal static class ControlProtocol
             using var pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut);
             pipe.Connect(timeoutMs);
             if (pipe.GetAccessControl().GetOwner(typeof(SecurityIdentifier)) != CurrentUser) return null;
-            pipe.Write(Encoding.UTF8.GetBytes(cmd + "\n"));
+            var bytes = Encoding.UTF8.GetBytes(cmd + "\n");
+            pipe.Write(bytes, 0, bytes.Length);
             pipe.Flush();
             using var reader = new StreamReader(pipe, Encoding.UTF8);
             return reader.ReadLine();

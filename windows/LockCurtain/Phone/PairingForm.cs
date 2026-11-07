@@ -22,6 +22,9 @@ internal sealed class PairingForm : Form
     public PairingForm(PhoneLink link)
     {
         this.link = link;
+        // 布局挂起到构造完：.NET Framework 一设 AutoScaleDimensions 就立刻按 DPI 缩放，那时还没设的尺寸（下面的 ClientSize、
+        // 按钮和标签的大小、边距）就不会跟着放大，200% 缩放下窗口只有一半大。挂起时缩放留到 ResumeLayout，一起放大（设计器生成的代码也是这样）
+        SuspendLayout();
         Text = "配对手机";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = MinimizeBox = false;
@@ -82,12 +85,13 @@ internal sealed class PairingForm : Form
             link.Stop();
         };
         Render();
+        ResumeLayout();
     }
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle, theme.Dark);
+        DarkMode.Apply(this, theme);
     }
 
     void Style(Label l, float size, FontStyle style, Color? color, string? family = null)
@@ -160,18 +164,8 @@ internal sealed class PairingForm : Form
     /// 「撤销配对」：先确认，只撤这一台（protocol v3 §4）。撤完那一行直接消失，不再弹「已撤销」（copy §16.1）
     public static void ConfirmUnpair(PhoneLink link, Guid phoneID, IWin32Window? owner = null)
     {
-        var cancel = new TaskDialogButton("取消");
-        var revoke = new TaskDialogButton("撤销配对");
-        var page = new TaskDialogPage
-        {
-            Caption = "撤销配对",
-            Heading = "撤销这台手机的配对？",
-            Text = "撤销后，这台手机要重新输码才能再盖上幕布。其他手机的配对不受影响。",
-            Buttons = { cancel, revoke },
-            DefaultButton = cancel,
-            Icon = TaskDialogIcon.Warning,
-        };
-        var picked = owner != null ? TaskDialog.ShowDialog(owner, page) : TaskDialog.ShowDialog(page, TaskDialogStartupLocation.CenterScreen);
-        if (picked == revoke) link.Unpair(phoneID);
+        if (WarningDialog.Confirm(owner, "撤销配对", "撤销这台手机的配对？",
+                "撤销后，这台手机要重新输码才能再盖上幕布。其他手机的配对不受影响。", "撤销配对"))
+            link.Unpair(phoneID);
     }
 }

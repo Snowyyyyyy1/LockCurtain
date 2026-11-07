@@ -1,14 +1,16 @@
 #!/bin/bash
 # build.sh —— 在 Mac 上交叉编译 Windows 版
 #
-# 输出两个自带 .NET 运行时的单文件 exe，目标机器不用装 .NET：
-#   dist/win-arm64/ 和 dist/win-x64/ 里各有：
-#     LockCurtain.exe      入口启动器（计划任务和双击都从它起主程序），非 uiAccess
-#     LockCurtainApp.exe   uiAccess 主程序（install.ps1 给它签名）
-# 每个目录里再放自动更新用的 WinSparkle.dll、install.ps1，和占位文件 LockCurtainCtl.exe
-#（为兼容 1.0.2 的更新器，它写死要求更新包里有这个名字），一起打成 dist/LockCurtain-<版本>-<架构>.zip：
+# 主程序和启动器都编成 .NET Framework 4.8（Windows 10 1903 起自带，目标机器不用装 .NET，包里也不用带运行时）、AnyCPU：
+# x64 和 ARM64 用同一份文件。dist/win/ 里是：
+#     LockCurtain.exe        入口启动器（计划任务和双击都从它起主程序），非 uiAccess
+#     LockCurtainApp.exe     uiAccess 主程序（install.ps1 给它签名），旁边是它的 .config 和依赖的 dll
+#     x64\WinSparkle.dll、arm64\WinSparkle.dll   自动更新，主程序按自己进程的架构挑（AnyCPU 在 ARM64 上是 x64 仿真，用的是 x64 那份）
+#     install.ps1
+#     WinSparkle.dll、LockCurtainCtl.exe   占位文件，给旧版更新器查名字用（见下面打包处）
+# 打成 dist/LockCurtain-<版本>-win-x64.zip 和 -win-arm64.zip（内容一样，名字照旧：旧版更新器按架构找包，README 也按架构写），
 # 发到 GitHub Release，也是自动更新下载的包（LockCurtain/Updater.cs）。
-#   dist/LockCurtain-<版本>-setup.exe  单文件安装器（双击即装，自动识别 x64/ARM64），需 makensis（brew install makensis）
+#   dist/LockCurtain-<版本>-setup.exe  单文件安装器（双击即装），需 makensis（brew install makensis）
 #
 # 版本号读仓库根目录的 VERSION。环境变量：
 #   LOCKCURTAIN_EDDSA_PUBLIC_KEY   自动更新验签的公钥（release.sh 传进来）；没有时编出来的版本不检查更新
@@ -16,7 +18,7 @@
 #                                  带 beta 的版本读测试通道的 appcast-beta-windows.xml（release-beta.sh 发），
 #                                  会自动更新到更新的测试版和正式版；不带 beta 的读正式的 appcast-windows.xml
 #   LOCKCURTAIN_APPCAST_URL        测试用：换掉更新清单的地址（默认按上一条）
-# 需要 .NET SDK 10（brew install dotnet）。第一次会从 NuGet 下载 Windows 的运行时包，从 GitHub 下载 WinSparkle。
+# 需要 .NET SDK 10（brew install dotnet，只用它的编译器，编出来的是 .NET Framework 4.8 程序）。第一次会从 NuGet 下载依赖，从 GitHub 下载 WinSparkle。
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -50,43 +52,41 @@ if [ ! -f "$WINSPARKLE_ZIP" ]; then
 fi
 echo "$WINSPARKLE_SHA256  $WINSPARKLE_ZIP" | shasum -a 256 -c --quiet -
 
-for rid in ${LOCKCURTAIN_RIDS:-win-arm64 win-x64}; do
-  echo "[$rid] publish $VERSION"
-  # WinSparkle.dll 不打进单文件：打进去会在运行时解压到普通权限能写的临时目录，以最高权限加载就成了提权漏洞
-  dotnet publish LockCurtain/LockCurtain.csproj -c Release -r "$rid" --self-contained \
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-    -p:EnableCompressionInSingleFile=true -p:DebugType=none \
-    -p:Version="$VERSION" -p:EdDSAPublicKey="${LOCKCURTAIN_EDDSA_PUBLIC_KEY:-}" \
-    ${APPCAST_URL:+-p:AppcastUrl="$APPCAST_URL"} \
-    -o "dist/$rid" | tail -1
-  case "$rid" in win-arm64) arch=ARM64 ;; win-x64) arch=x64 ;; esac
-  unzip -p "$WINSPARKLE_ZIP" "WinSparkle-$WINSPARKLE/$arch/Release/WinSparkle.dll" > "dist/$rid/WinSparkle.dll"
-  # 不带 uiAccess 的入口启动器（AssemblyName=LockCurtain → LockCurtain.exe）：计划任务 ShellExecute 起主程序，也给 agent 发命令
-  dotnet publish LockCurtainCtl/LockCurtainCtl.csproj -c Release -r "$rid" --self-contained \
-    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
-    -p:EnableCompressionInSingleFile=true -p:DebugType=none -p:Version="$VERSION" \
-    -o "dist/$rid-ctl" | tail -1
-  cp "dist/$rid-ctl/LockCurtain.exe" "dist/$rid/"
-  rm -rf "dist/$rid-ctl"
-  # LockCurtainCtl.exe 只是占位：1.0.2 的更新器写死要求更新包里有这个名字，但只查存在、不执行也不校验内容
-  #（1.0.2 的 Updater.cs：zip.GetEntry(name) 查名 + 整包 ExtractToDirectory，没人运行它；1.0.3 里它是死重）。
-  # 所以放个几十字节的占位文件，别再拷一份 ~50MB 的启动器，省掉每个包约 34MB。
-  printf '%s\n' 'LockCurtain compat placeholder. The 1.0.2 updater requires a zip entry named LockCurtainCtl.exe (presence only); nothing executes it. See windows/build.sh.' > "dist/$rid/LockCurtainCtl.exe"
-  cp install.ps1 "dist/$rid/"
+OUT=dist/win
+rm -rf "$OUT" dist/win-x64 dist/win-arm64 dist/ctl
+echo "[win] publish $VERSION"
+dotnet publish LockCurtain/LockCurtain.csproj -c Release -p:DebugType=none \
+  -p:AllowedReferenceRelatedFileExtensions=none -p:GenerateDocumentationFile=false \
+  -p:Version="$VERSION" -p:EdDSAPublicKey="${LOCKCURTAIN_EDDSA_PUBLIC_KEY:-}" \
+  ${APPCAST_URL:+-p:AppcastUrl="$APPCAST_URL"} \
+  -o "$OUT" | tail -1
+# 不带 uiAccess 的入口启动器（AssemblyName=LockCurtain → LockCurtain.exe）：计划任务 ShellExecute 起主程序，也给 agent 发命令
+dotnet publish LockCurtainCtl/LockCurtainCtl.csproj -c Release -p:DebugType=none -p:Version="$VERSION" \
+  -o dist/ctl | tail -1
+cp dist/ctl/LockCurtain.exe dist/ctl/LockCurtain.exe.config "$OUT/"
+rm -rf dist/ctl
+# WinSparkle.dll 放在子目录里按完整路径加载，不打进 exe：解压到普通权限能写的临时目录再以最高权限加载，就成了提权漏洞
+for arch in x64 arm64; do
+  case "$arch" in arm64) src=ARM64 ;; x64) src=x64 ;; esac
+  mkdir -p "$OUT/$arch"
+  unzip -p "$WINSPARKLE_ZIP" "WinSparkle-$WINSPARKLE/$src/Release/WinSparkle.dll" > "$OUT/$arch/WinSparkle.dll"
+done
+# 占位文件：1.0.0 起的更新器都要求包里有 WinSparkle.dll，1.0.2 起还要 LockCurtainCtl.exe。1.0.2 起只查名字在不在；
+# 1.0.0/1.0.1 会把 WinSparkle.dll 就地换进安装目录，接着启动器发现没有 LockCurtainApp.exe，跑 install.ps1 自愈，
+# 这期间没人加载它。install.ps1 不装这两个文件
+for name in LockCurtainCtl.exe WinSparkle.dll; do
+  printf '%s\n' "LockCurtain compat placeholder. Older updaters require a zip entry named $name (presence only); nothing uses it. See windows/build.sh." > "$OUT/$name"
+done
+cp install.ps1 "$OUT/"
+for rid in win-x64 win-arm64; do
   zip="dist/LockCurtain-$VERSION-$rid.zip"
   rm -f "$zip"
-  (cd "dist/$rid" && zip -qX "../$(basename "$zip")" LockCurtainApp.exe LockCurtain.exe WinSparkle.dll install.ps1 LockCurtainCtl.exe)
-  ls -lh "dist/$rid/LockCurtainApp.exe" "dist/$rid/LockCurtain.exe" "$zip" | awk '{print "  " $5, $9}'
+  (cd "$OUT" && zip -qrX "../$(basename "$zip")" .)
 done
+ls -lh "$OUT/LockCurtainApp.exe" "$OUT/LockCurtain.exe" "dist/LockCurtain-$VERSION-win-x64.zip" | awk '{print "  " $5, $9}'
 
-# 把两种架构的产物打成一个「自动识别 CPU」的单文件安装器（NSIS）。
-# File 命令编译期把两份都塞进同一个 exe，运行时按 ${IsNativeARM64} 只解压匹配的那份，再跑 install.ps1。
-# 需要 makensis（brew install makensis）。只有同时编了 x64 和 ARM64 才产出。
-if [ -d dist/win-x64 ] && [ -d dist/win-arm64 ]; then
-  setup="dist/LockCurtain-$VERSION-setup.exe"
-  rm -f "$setup"
-  makensis -DVERSION="$VERSION" installer.nsi | tail -2
-  ls -lh "$setup" | awk '{print "  " $5, $9}'
-else
-  echo "[setup] 跳过单文件安装器：需要同时构建 win-x64 和 win-arm64"
-fi
+# 单文件安装器（NSIS）：解压 dist/win 到临时目录再跑 install.ps1
+setup="dist/LockCurtain-$VERSION-setup.exe"
+rm -f "$setup"
+makensis -DVERSION="$VERSION" installer.nsi | tail -2
+ls -lh "$setup" | awk '{print "  " $5, $9}'

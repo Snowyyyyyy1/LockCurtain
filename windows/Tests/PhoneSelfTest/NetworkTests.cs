@@ -148,7 +148,7 @@ internal static class NetworkTests
         var n2 = NonceFrom(pc, phone, key)!;
         check(Net(pc, "away", phone, 4, key, n1) is { Accepted: false, Reason: RejectReason.BadNonce }, "网络：同一个 nonce 用第二次 → 拒绝");
         check(Net(pc, "awake:1h", phone, 5, key, n2) is { Accepted: true, Command: "awake:1h" }, "网络：另一个 nonce 的 awake:1h 收下");
-        check(Net(pc, "away", phone, 6, key, Key()[..16]) is { Accepted: false, Reason: RejectReason.BadNonce }, "网络：电脑没发过的 nonce → 拒绝");
+        check(Net(pc, "away", phone, 6, key, Key().Slice(..16)) is { Accepted: false, Reason: RejectReason.BadNonce }, "网络：电脑没发过的 nonce → 拒绝");
         var n3 = NonceFrom(pc, phone, key)!;
         check(Net(pc, "name:小明", phone, 7, key, n3) is { Accepted: true, Command: "name:小明" }, "网络：name: 收下");
 
@@ -579,9 +579,11 @@ internal static class NetworkTests
         var refusedConnect = false;
         try
         {
+            // 不用带 CancellationToken 的 ConnectAsync：.NET Framework（主程序的运行时）没有，这个测试两边都要能编
             using var late = new TcpClient();
-            using var cts = new CancellationTokenSource(2000);
-            await late.ConnectAsync(IPAddress.Loopback, port, cts.Token);
+            var connect = late.ConnectAsync(IPAddress.Loopback, port);
+            if (await Task.WhenAny(connect, Task.Delay(2000)) != connect) throw new OperationCanceledException();
+            await connect;
         }
         catch (Exception e) when (e is SocketException or OperationCanceledException) { refusedConnect = true; }
         check(refusedConnect, "关：端口不再接受连接");
@@ -600,7 +602,7 @@ internal static class NetworkTests
         check(await WaitFor(async () => (await gw.RunAsync(() => gw.Status)).State == GatewayState.Stopped), "再关：Stopped");
 
         // 端口被占：持久化端口换一个；Failed 的状态
-        using var blocker = new TcpListener(IPAddress.Loopback, 0);
+        var blocker = new TcpListener(IPAddress.Loopback, 0);   // .NET Framework 的 TcpListener 不是 IDisposable，最后手动 Stop
         blocker.Start();
         var busy = ((IPEndPoint)blocker.LocalEndpoint).Port;
         var fixedPort = new MemoryPortStore { Port = busy };
@@ -610,6 +612,7 @@ internal static class NetworkTests
         var s2 = await gw2.RunAsync(() => gw2.Status);
         // 端口在 49200–49999 之外（系统分配的），所以 PersistedPort 会先换成范围内的；这里只验证：要么在范围里监听上了，要么明确 Failed
         check(ended && (s2.State == GatewayState.Failed || s2.Port is >= 49200 and <= 49999), "占用：存着的端口不在范围里 → 换成范围内的端口监听，或明确 Failed");
+        blocker.Stop();
         gw2.Stop();
         await WaitFor(async () => (await gw2.RunAsync(() => gw2.Status)).State == GatewayState.Stopped);
     }

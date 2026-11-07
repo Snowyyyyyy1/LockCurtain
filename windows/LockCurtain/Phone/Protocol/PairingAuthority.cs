@@ -26,7 +26,7 @@ internal sealed record PairingRecord(byte[] Key, ulong LastCounter)
     public byte[] Encoded() => Bytes.Concat(Key, PairingCrypto.BigEndian(LastCounter));
 
     public static PairingRecord? Decode(byte[] b) =>
-        b.Length == 40 ? new PairingRecord(b[..32], PairingCrypto.UInt64(b, 32)) : null;
+        b.Length == 40 ? new PairingRecord(b.Slice(..32), PairingCrypto.UInt64(b, 32)) : null;
 }
 
 internal interface IPairingRecordStore

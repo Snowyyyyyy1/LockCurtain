@@ -2,28 +2,42 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <!-- 带 Windows SDK 版本号才能用 WinRT 的蓝牙 API（配对手机，Phone/PhoneLink.cs）；最低支持 Windows 10 2004（按地址类型连接要 19041） -->
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <!-- .NET Framework 4.8 是 Windows 10 1903 起自带的，发布包不用再带运行时（以前自带 .NET 10，单个包 76 MB）。
+         AnyCPU、不偏好 32 位：x64 上是 x64；ARM64 上一律是 x64 仿真（原生 ARM64 要 PlatformTarget=ARM64 + net481，暂不做）。
+         最低支持 Windows 10 2004（蓝牙按地址类型连接要 19041） -->
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <LangVersion>latest</LangVersion>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- 在 Mac 上用 Tools/make-icon.swift 生成（见文件头），和 Mac 的 App 图标同一张图 -->
     <ApplicationIcon>LockCurtain.ico</ApplicationIcon>
     <AssemblyName>LockCurtainApp</AssemblyName>
     <RootNamespace>LockCurtain</RootNamespace>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Management" Version="10.0.14" />
-    <!-- 配对手机：CPace 的 X25519 / Elligator2（Phone/Protocol/CPace.cs），钥匙用 DPAPI 存（Phone/PhoneStore.cs） -->
+    <Reference Include="System.Management" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Runtime.WindowsRuntime" />
+    <!-- 只在编译时生成 Index/Range/init 等新语法要的类型（源码生成器，不进发布包） -->
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" />
+    <!-- WinRT 的蓝牙 API（配对手机，Phone/PhoneLink.cs）：只是编译时的元数据，运行时由系统提供 -->
+    <PackageReference Include="Microsoft.Windows.SDK.Contracts" Version="10.0.19041.1" />
+    <!-- 设置、规则、配对记录的 JSON 和 .NET 10 版同一个库，文件格式不变 -->
+    <PackageReference Include="System.Text.Json" Version="10.0.0" />
+    <!-- 配对手机：CPace 的 X25519 / Elligator2（Phone/Protocol/CPace.cs） -->
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
   </ItemGroup>
 
   <!-- 自动更新（Updater.cs）：公钥由 build.sh 从 LOCKCURTAIN_EDDSA_PUBLIC_KEY 传进来，没有就不检查更新；

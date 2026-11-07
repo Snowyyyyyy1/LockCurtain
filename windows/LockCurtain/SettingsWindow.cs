@@ -1,7 +1,7 @@
 // SettingsWindow.cs —— 设置窗口，对应 Mac 版 SettingsWindow.swift
 //
 // 左边是页面列表，右边是当前页（PageView.cs）。改动立即写进 Settings / RuleStore，没有「保存」按钮。
-// 深浅色跟着系统（Program.cs 里 Application.SetColorMode），底色和卡片用 Win11 设置的配色。
+// 深浅色跟着系统（DarkMode.Apply），底色和卡片用 Win11 设置的配色。
 //
 // 侧栏顺序和 Mac 版一致（Colo A1）：通用 / 手机 / 离开模式 / 保持唤醒 / 规则 / 远程控制 / 权限。和 Mac 版的差别：
 //   通用      没有「在 Dock 中显示」和「锁屏时也盖上幕布」：Windows 的锁屏界面在安全桌面上，幕布盖不上去
@@ -157,7 +157,7 @@ internal sealed class SettingsWindow : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle, theme.Dark);
+        DarkMode.Apply(this, theme);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
@@ -306,7 +306,7 @@ internal sealed class SettingsWindow : Form
     /// 遮罩文字的输入框：每改一个字就存，「恢复默认」该不该显示跟着变，所以重排
     static TextBox CurtainTextBox(PageView v, string name, string text, Action<string> save)
     {
-        var box = new TextBox { Text = text, PlaceholderText = "不显示", Font = v.BodyFont, Width = v.S(300), AccessibleName = name };
+        var box = new CueTextBox { Text = text, PlaceholderText = "不显示", Font = v.BodyFont, Width = v.S(300), AccessibleName = name };
         box.TextChanged += (_, _) =>
         {
             save(box.Text);

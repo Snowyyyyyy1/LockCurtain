@@ -142,8 +142,8 @@ internal sealed class CurtainRule
 /// 一次检查时采集到的系统状态
 internal sealed record RuleFacts(
     double IdleSeconds,
-    IReadOnlySet<string> Running,
-    IReadOnlySet<string> SleepBlockers,
+    ISet<string> Running,
+    ISet<string> SleepBlockers,
     DateTime Now,
     bool OnACPower)
 {

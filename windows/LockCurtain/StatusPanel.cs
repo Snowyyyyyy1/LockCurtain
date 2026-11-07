@@ -86,7 +86,7 @@ internal sealed class StatusPanel : Form
         // Win11 上圆角；更早的系统不认这两个属性，保持直角
         int round = Native.DWMWCP_ROUND;
         Native.DwmSetWindowAttribute(Handle, Native.DWMWA_WINDOW_CORNER_PREFERENCE, ref round, sizeof(int));
-        Native.UseDarkTitleBar(Handle, Application.IsDarkModeEnabled);
+        DarkMode.Apply(this, Theme.Current());
     }
 
     protected override void OnDeactivate(EventArgs e)
@@ -364,7 +364,7 @@ internal sealed class SleepBar : Control, IWideRow
             x += TextRenderer.MeasureText(text, small, Size.Empty, Line).Width + S(18);
         }
 
-        float X(DateTime t) => (float)(Width * Math.Clamp((t - from) / SleepHistory.Window, 0, 1));
+        float X(DateTime t) => (float)(Width * Math.Clamp((double)(t - from).Ticks / SleepHistory.Window.Ticks, 0, 1));
     }
 }
 

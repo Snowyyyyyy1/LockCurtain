@@ -34,8 +34,10 @@ static class Program
         using var mutex = new Mutex(true, @"Local\LockCurtain", out var first);
         if (!first) return args.Contains("--preview") ? ControlClient.Send("preview") : 0;
 
-        ApplicationConfiguration.Initialize();
-        Application.SetColorMode(SystemColorMode.System);    // 设置窗口跟着系统深浅色走
+        // 每显示器 DPI（PerMonitorV2）由 app.manifest 声明、App.config 打开 WinForms 的支持（.NET Framework 没有 SetHighDpiMode）。
+        // 深浅色：.NET Framework 没有 Application.SetColorMode，标准控件由 DarkMode.Apply 逐个换成深色（见 DarkMode.cs）
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
         Application.ThreadException += (_, e) => Log.Write($"未处理异常: {e.Exception}");
         AppDomain.CurrentDomain.UnhandledException += (_, e) => Log.Write($"未处理异常: {e.ExceptionObject}");

@@ -1,10 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- 手机配对协议的自测：plain net10.0，在 Mac 上就能跑（cd windows/Tests/PhoneSelfTest && dotnet run）。
-       编进主程序的同一份源文件（LockCurtain/Phone/Protocol），和 Swift 算的 vectors.json 逐字节核对。 -->
+  <!-- 手机配对协议的自测：net10.0 在 Mac 上就能跑（cd windows/Tests/PhoneSelfTest && dotnet run -f net10.0）。
+       编进主程序的同一份源文件（LockCurtain/Phone/Protocol），和 Swift 算的 vectors.json 逐字节核对。
+       net48 是主程序真正用的运行时（带 Compat48.cs 的补丁），只能在 Windows 上跑：dotnet build -f net48，把 bin/…/net48 拷过去运行。 -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net10.0;net48</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>LockCurtain.Phone</RootNamespace>
@@ -21,6 +24,14 @@
 
   <ItemGroup>
     <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <Compile Include="../../LockCurtain/Compat48.cs" />
+    <Using Include="LockCurtain" />
+    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" />
+    <PackageReference Include="System.Text.Json" Version="10.0.0" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 
 </Project>

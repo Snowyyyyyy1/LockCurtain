@@ -21,7 +21,7 @@ void Check(bool cond, string name)
 DateTime At(int day, int h, int m = 0) => new(2026, 10, day, h, m, 0);
 
 /// 进程名在调用方规范化（RuleFacts 约定里面存的已经是规范化后的名字）
-IReadOnlySet<string> Norm(IEnumerable<string>? names) =>
+ISet<string> Norm(IEnumerable<string>? names) =>
     (names ?? Array.Empty<string>()).Select(RuleFacts.Normalize).ToHashSet();
 
 RuleFacts Facts(double idle = 0, IEnumerable<string>? running = null, IEnumerable<string>? blockers = null,

@@ -9,7 +9,7 @@
 // 主程序是 uiAccess，普通进程 CreateProcess 它会被拒（0x800702E4），只能 ShellExecute，所以要有这个启动器。
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace LockCurtain;
 
@@ -51,9 +51,11 @@ static class CtlProgram
             }
         }
         Console.WriteLine(reply);
-        try { return JsonDocument.Parse(reply).RootElement.GetProperty("ok").GetBoolean() ? 0 : 1; }
-        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { return 1; }
+        // 回复是主程序 ControlServer 用 System.Text.Json 写的一行 JSON；启动器是 .NET Framework，不带 JSON 库，只看 ok 字段
+        return OkTrue.IsMatch(reply) ? 0 : 1;
     }
+
+    static readonly Regex OkTrue = new(@"""ok""\s*:\s*true\b");
 
     static int Launch()
     {

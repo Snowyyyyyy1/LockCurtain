@@ -85,7 +85,7 @@ internal static class Wallpaper
     {
         foreach (var candidate in new[] { path, Transcoded })
         {
-            if (string.IsNullOrEmpty(candidate)) continue;
+            if (candidate is not { Length: > 0 }) continue;
             try
             {
                 var info = new FileInfo(candidate);

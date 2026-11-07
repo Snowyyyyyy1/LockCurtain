@@ -107,7 +107,7 @@ internal readonly struct Field25519
             }
             for (var i = 0; i < 15; i++) t[i] += 38 * t[i + 16];
         }
-        var o = t[..16];
+        var o = t.Slice(..16);
         Carry(o);
         Carry(o);
         return new Field25519(o);
@@ -258,6 +258,15 @@ internal static class CPace
 
 internal static class Bytes
 {
+    /// 数组的一段，拷成新数组（等于 a[range]）。主程序是 .NET Framework 4.8，数组的 a[x..y] 编译不了（缺 RuntimeHelpers.GetSubArray）
+    public static T[] Slice<T>(this T[] array, Range range)
+    {
+        var (offset, length) = range.GetOffsetAndLength(array.Length);
+        var result = new T[length];
+        Array.Copy(array, offset, result, 0, length);
+        return result;
+    }
+
     public static byte[] Concat(params byte[][] parts)
     {
         var o = new byte[parts.Sum(p => p.Length)];

@@ -82,7 +82,7 @@ internal static class ProcessInfo
         if (titles.TryGetValue(path, out var title)) return title;
         try { title = FileVersionInfo.GetVersionInfo(path).FileDescription?.Trim(); }
         catch (FileNotFoundException) { }
-        if (string.IsNullOrEmpty(title)) title = Path.GetFileNameWithoutExtension(path);
+        if (title is not { Length: > 0 }) title = Path.GetFileNameWithoutExtension(path);
         return titles[path] = title;
     }
 

@@ -111,13 +111,10 @@ if [ $DO_WIN = 1 ]; then
   echo "== Windows $VERSION"
   rm -f windows/dist/LockCurtain-"$VERSION"-*
   windows/build.sh | grep -E "^\[|zip|setup"
-  # 编进主程序的 appcast 地址和公钥（AssemblyMetadata，单文件 exe 里是压缩的，看 obj 里的 dll）
-  TFM="$(sed -n 's:.*<TargetFramework>\(.*\)</TargetFramework>.*:\1:p' windows/LockCurtain/LockCurtain.csproj)"
-  for rid in win-x64 win-arm64; do
-    dll="windows/LockCurtain/obj/Release/$TFM/$rid/LockCurtainApp.dll"
-    grep -aqF "$BETA_FEED/appcast-beta-windows.xml" "$dll" || { echo "$dll 里没有测试通道地址"; exit 1; }
-    grep -aqF "$LOCKCURTAIN_EDDSA_PUBLIC_KEY" "$dll" || { echo "$dll 里没有公钥"; exit 1; }
-  done
+  # 编进主程序的 appcast 地址和公钥（AssemblyMetadata，UTF-8 明文存在 exe 里；两种架构是同一个 exe）
+  exe="windows/dist/win/LockCurtainApp.exe"
+  grep -aqF "$BETA_FEED/appcast-beta-windows.xml" "$exe" || { echo "$exe 里没有测试通道地址"; exit 1; }
+  grep -aqF "$LOCKCURTAIN_EDDSA_PUBLIC_KEY" "$exe" || { echo "$exe 里没有公钥"; exit 1; }
   cp "windows/dist/$W64" "windows/dist/$WA" "windows/dist/$SETUP" "$OUT/"
   ASSETS+=("$OUT/$SETUP" "$OUT/$W64" "$OUT/$WA"); FEEDS+=("$OUT/appcast-beta-windows.xml")
 fi

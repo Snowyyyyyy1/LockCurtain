@@ -58,7 +58,7 @@ internal sealed class GuideForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        Native.UseDarkTitleBar(Handle, theme.Dark);
+        DarkMode.Apply(this, theme);
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

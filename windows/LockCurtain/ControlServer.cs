@@ -53,12 +53,12 @@ internal sealed class ControlServer
                 Log.Write($"ControlServer 建不了管道（另一个实例在提供服务？）: {e.Message}");
                 return;
             }
-            await using (pipe)
+            using (pipe)
             {
                 try
                 {
                     await pipe.WaitForConnectionAsync(cts.Token);
-                    using var reader = new StreamReader(pipe, Encoding.UTF8, leaveOpen: true);
+                    using var reader = new StreamReader(pipe, Encoding.UTF8, false, 1024, leaveOpen: true);
                     var cmd = (await reader.ReadLineAsync(cts.Token))?.Trim() ?? "";
                     var reply = await RunOnUi(cmd);
                     Log.Write($"control: {cmd} -> {JsonSerializer.Serialize(reply)}");
