@@ -617,6 +617,8 @@ Console.WriteLine("== 本地：配对规则 ==");
 }
 
 Console.WriteLine();
+await NetworkTests.Run((ok, name) => Check(ok, name));
+
 Console.WriteLine(failures == 0 ? $"全部通过：{total} 项" : $"{failures} / {total} 项没通过");
 return failures == 0 ? 0 : 1;
 
