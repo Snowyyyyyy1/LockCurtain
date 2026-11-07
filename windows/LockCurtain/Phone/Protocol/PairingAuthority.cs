@@ -8,6 +8,14 @@
 // Windows 版的配对窗口文案（task brief §8）定的码规则和 Mac 不同：
 //   * 一个码最多错 3 次（Mac 是一个窗口 5 次），错满或过期就作废，窗口显示「这几个数作废了，点「换一个码」重新来。」；
 //   * 「换一个码」总能换出新码（次数重新算）。每换一次都要人在电脑前点一下，在线猜码的次数仍然受人手限制。
+//
+// 走网络（Transport.Network，对照 Mac 的 PairingAuthority）：同样的签名 / 计数，但
+//   * 只认已确认配上的手机（钥匙在存储里），不看握手刚过、还没确认的 pending；
+//   * 签名和计数验过之后命令还要在白名单里（NetworkPolicy，默认拒绝：只有 ping / away / awake:* / name:），
+//     撤下 / 解除配对 / 预览 / 设置 / 配对 / Presence / LiftNow 一律拒绝（签名的 Ack 5，计数照记，重放不了）；
+//   * 除 ping 外命令必须是 n1:<nonce>:<命令>，nonce 是电脑刚发的签名 Poll（NetworkPollMessage）里的，只能用一次、有寿命（90 秒），
+//     每台手机最多同时留 4 个；
+//   * 配对消息（PairRequest / PairConfirm / PairAbort）、Presence、LiftNow 走网络：在验签之前就拒绝，不动码、不耗计数、够不到 LiftGate。
 // 日志只写步骤和结果，不写码、不写钥匙。
 
 namespace LockCurtain.Phone;
@@ -50,7 +58,8 @@ internal enum PairOutcomeKind { Responded, Accepted, Rejected, Aborted, NoCode, 
 /// Reply：要回给手机的消息（Aborted 没有）；PhoneID：Accepted 时是哪台
 internal sealed record PairOutcome(PairOutcomeKind Kind, byte[]? Reply, int AttemptsLeft, Guid? PhoneID = null);
 
-internal enum RejectReason { Malformed, UnknownPhone, BadSignature, Replay, StoreFailed }
+/// NetworkForbidden：走网络不许这条命令 / 这类消息；BadNonce：网络命令的 nonce 缺、不对、用过或过期
+internal enum RejectReason { Malformed, UnknownPhone, BadSignature, Replay, StoreFailed, NetworkForbidden, BadNonce }
 
 internal sealed record CommandOutcome(bool Accepted, string Command, Guid? PhoneID, ulong Counter, bool ConfirmedPairing,
                                       byte[]? Ack, RejectReason Reason = default);
@@ -64,6 +73,14 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
 {
     /// 一个码最多错几次
     public const int MaxCodeAttempts = 3;
+
+    /// 网络问询 nonce 的寿命、每台手机最多同时留几个（和 Mac 一样）
+    public static readonly TimeSpan NetworkNonceLifetime = TimeSpan.FromSeconds(90);
+    public const int NetworkNonceLimit = 4;
+    /// 测试可以换时钟
+    public Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
+    /// 每台手机发出去、还没用的网络 nonce（旧的在前）
+    readonly Dictionary<Guid, List<(byte[] Nonce, DateTime IssuedAt)>> networkNonces = new();
 
     public IPairingRecordStore Store => store;
     /// 现在有效的码；空 = 没有码可配
@@ -122,8 +139,14 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
     // MARK: - 握手
 
     /// 握手消息（PairRequest / PairConfirm / PairAbort）都从这里进
-    public PairOutcome HandlePair(byte[] data)
+    public PairOutcome HandlePair(byte[] data, Transport via = Transport.Bluetooth)
     {
+        // 配对只走蓝牙：不碰码、不碰握手状态，调用方应当断开
+        if (via != Transport.Bluetooth)
+        {
+            log("pair message over network refused");
+            return Malformed();
+        }
         switch (PairingCrypto.KindOf(data))
         {
             case Kind.PairRequest: return HandleRequest(data);
@@ -239,10 +262,12 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
         RejectReason.UnknownPhone => "unknown phone",
         RejectReason.BadSignature => "bad signature",
         RejectReason.Replay => "old counter (replay)",
+        RejectReason.NetworkForbidden => "not allowed on network",
+        RejectReason.BadNonce => "network nonce missing, stale or reused",
         _ => "store write failed",
     };
 
-    public CommandOutcome HandleCommand(byte[] data)
+    public CommandOutcome HandleCommand(byte[] data, Transport via = Transport.Bluetooth)
     {
         CommandEnvelope e;
         try { e = CommandEnvelope.Decode(data); }
@@ -252,33 +277,58 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
             return new(false, "", null, 0, false, null, RejectReason.Malformed);
         }
         var id = e.PhoneID;
-        CommandOutcome Reject(RejectReason reason, AckStatus status)
+        CommandOutcome Reject(RejectReason reason, AckStatus status, byte[]? key = null)
         {
             log($"command rejected from {Who(id)}: {Describe(reason)} (counter {e.Counter})");
-            return new(false, "", id, e.Counter, false, PairingCrypto.MakeAck(id, e.Counter, status, null), reason);
+            return new(false, "", id, e.Counter, false, PairingCrypto.MakeAck(id, e.Counter, status, key), reason);
         }
 
         var stored = store.Load(id);
-        var isPending = stored == null && pending.ContainsKey(id);
-        var record = stored ?? (pending.TryGetValue(id, out var k) ? new PairingRecord(k, 0) : null);
+        var network = via == Transport.Network;
+        // 网络只认已经确认配上的手机，不看刚握手、还没确认的 pending
+        var isPending = !network && stored == null && pending.ContainsKey(id);
+        var record = stored ?? (!network && pending.TryGetValue(id, out var k) ? new PairingRecord(k, 0) : null);
         if (record == null) return Reject(RejectReason.UnknownPhone, AckStatus.UnknownOrBadSignature);
         if (!PairingCrypto.VerifyCommand(e, record.Key)) return Reject(RejectReason.BadSignature, AckStatus.UnknownOrBadSignature);
         if (e.Counter <= record.LastCounter) return Reject(RejectReason.Replay, AckStatus.Replay);
         if (!store.Save(record with { LastCounter = e.Counter }, id)) return Reject(RejectReason.StoreFailed, AckStatus.Malformed);
+        var command = e.Command;
+        if (network)
+        {
+            // 签名和计数已过（计数已记），再看白名单：签了名的撤下也一样拒绝
+            var parsed = NetworkCommand.Unwrap(e.Command);
+            var inner = parsed?.Command ?? e.Command;
+            if (parsed is not { } p || !NetworkPolicy.Allows(inner))
+            {
+                log($"network command from {Who(id)} refused: not on the allow-list");
+                return Reject(RejectReason.NetworkForbidden, AckStatus.NotAllowedOnNetwork, record.Key);
+            }
+            // ping 不用 nonce（它是拿 nonce 的办法）；带了就照样核对。其余必须带，nonce 只用一次
+            if (inner.ToLowerInvariant() != "ping" || p.Nonce != null)
+                if (p.Nonce is not { } nonce || !ConsumeNetworkNonce(nonce, id))
+                    return Reject(RejectReason.BadNonce, AckStatus.Replay);
+            command = inner;
+        }
         if (isPending)
         {
             pending.Remove(id);
             log($"pairing confirmed with {Who(id)} (first signed command verified, key stored)");
         }
-        log($"command accepted from {Who(id)}: \"{e.Command}\" counter {e.Counter}");
-        return new(true, e.Command, id, e.Counter, isPending, PairingCrypto.MakeAck(id, e.Counter, AckStatus.Accepted, record.Key));
+        log($"command accepted from {Who(id)}: \"{command}\" counter {e.Counter}{(network ? " (network)" : "")}");
+        return new(true, command, id, e.Counter, isPending, PairingCrypto.MakeAck(id, e.Counter, AckStatus.Accepted, record.Key));
     }
 
     // MARK: - 撤下幕布：手机的回答
 
     /// 只认已经确认配上的手机（钥匙在存储里）；和命令共用同一个计数
-    public AnswerOutcome HandleAnswer(byte[] data)
+    public AnswerOutcome HandleAnswer(byte[] data, Transport via = Transport.Bluetooth)
     {
+        // 走网络一律拒绝：在验签之前就返回，不耗计数，LiftGate / OnLift 都够不到
+        if (via != Transport.Bluetooth)
+        {
+            log("answer over network refused (lift is bluetooth-only)");
+            return new(null, RejectReason.NetworkForbidden, null);
+        }
         PhoneAnswer a;
         try { a = PhoneAnswer.Decode(data); }
         catch (WireException)
@@ -298,6 +348,37 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
         if (!store.Save(record with { LastCounter = a.Counter }, id)) return Reject(RejectReason.StoreFailed);
         return new(a, default, id);
     }
+
+    // MARK: - 网络 nonce（防止被扣住的命令事后再送到）
+
+    /// 发一条签名的 Poll 给走网络的手机，里面的 nonce 记下来（单次、有寿命）。不进 LiftGate。手机不认识（没配上）返回 null
+    public byte[]? NetworkPollMessage(Guid phoneID)
+    {
+        if (store.Load(phoneID) == null) return null;
+        var nonce = PairingCrypto.MakeNonce();
+        if (PollMessage(nonce, phoneID) is not { } message) return null;
+        var now = Clock();
+        var list = networkNonces.GetValueOrDefault(phoneID)?.Where(n => now - n.IssuedAt < NetworkNonceLifetime).ToList() ?? [];
+        list.Add((nonce, now));
+        if (list.Count > NetworkNonceLimit) list.RemoveRange(0, list.Count - NetworkNonceLimit);
+        networkNonces[phoneID] = list;
+        return message;
+    }
+
+    /// 用掉一个 nonce：没发过、用过了、过期了都是 false
+    bool ConsumeNetworkNonce(byte[] nonce, Guid phoneID)
+    {
+        var now = Clock();
+        if (!networkNonces.TryGetValue(phoneID, out var list)) return false;
+        var index = list.FindIndex(n => n.Nonce.AsSpan().SequenceEqual(nonce));
+        if (index < 0) return false;
+        var entry = list[index];
+        list.RemoveAt(index);
+        return now - entry.IssuedAt < NetworkNonceLifetime;
+    }
+
+    /// 这台手机的网络 nonce 都作废（断开 / 撤销时）
+    public void DropNetworkNonces(Guid phoneID) => networkNonces.Remove(phoneID);
 
     public byte[]? PollMessage(byte[] nonce, Guid phoneID) =>
         store.Load(phoneID) is { } r ? PairingCrypto.MakePoll(nonce, phoneID, r.Key) : null;
@@ -331,6 +412,7 @@ internal sealed class PairingAuthority(IPairingRecordStore store, Action<string>
         var notice = store.Load(phoneID) is { } r ? PairingCrypto.MakeRevoke(phoneID, r.Key) : null;
         store.Delete(phoneID);
         pending.Remove(phoneID);
+        networkNonces.Remove(phoneID);
         log($"pairing deleted for {Who(phoneID)}");
         return notice;
     }

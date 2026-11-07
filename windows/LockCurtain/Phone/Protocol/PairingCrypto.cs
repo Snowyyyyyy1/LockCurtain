@@ -33,7 +33,8 @@ internal enum Kind : byte
 }
 
 /// MissingPermission（protocol v3）：没做，电脑缺一个权限（Mac 没给辅助功能时拒绝盖上）。和 Accepted 一样带签名
-internal enum AckStatus : byte { Accepted = 0, UnknownOrBadSignature = 1, Replay = 2, Malformed = 3, MissingPermission = 4 }
+/// NotAllowedOnNetwork（走网络，Mac 1.0.4-beta.7 起）：没做，这条命令走网络不被允许（撤下 / 解除配对 / 预览 / 设置等只能走蓝牙）。带签名
+internal enum AckStatus : byte { Accepted = 0, UnknownOrBadSignature = 1, Replay = 2, Malformed = 3, MissingPermission = 4, NotAllowedOnNetwork = 5 }
 internal enum PresenceStatus : byte { Locked = 0, Unlocked = 1, Off = 2 }
 internal enum LiftStatus : byte { Lifted = 0, TooFar = 1, Refused = 2, NotCovered = 3 }
 internal enum PairRejectReason : byte { WrongCode = 1, NoCode = 2 }
@@ -112,7 +113,7 @@ internal sealed record Ack(Guid PhoneID, ulong Counter, AckStatus Status, byte[]
     {
         PairingCrypto.Check(b, Kind.Ack);
         if (b.Length != 27 && b.Length != 27 + 32) throw new WireException("wrongLength");
-        if (b[26] > 4) throw new WireException("wrongLength");
+        if (b[26] > 5) throw new WireException("wrongLength");
         return new(PairingCrypto.Id(b, 2), PairingCrypto.UInt64(b, 18), (AckStatus)b[26], b.Length == 59 ? b[27..] : null);
     }
 }
@@ -319,8 +320,8 @@ internal static class PairingCrypto
 
     public static bool VerifyCommand(CommandEnvelope e, byte[] key) => HmacValid(e.Mac, e.SignedPartBytes, key);
 
-    /// 带签名的收据：0（收下）和 4（缺权限，没做）。别的状态不签（电脑不认识这台手机 / 签名不对时也没法签）
-    public static bool IsSignedAckStatus(AckStatus s) => s is AckStatus.Accepted or AckStatus.MissingPermission;
+    /// 带签名的收据：0（收下）、4（缺权限，没做）和 5（走网络不许，没做）。别的状态不签（电脑不认识这台手机 / 签名不对时也没法签）
+    public static bool IsSignedAckStatus(AckStatus s) => s is AckStatus.Accepted or AckStatus.MissingPermission or AckStatus.NotAllowedOnNetwork;
 
     public static byte[] MakeAck(Guid phoneID, ulong counter, AckStatus status, byte[]? key)
     {
