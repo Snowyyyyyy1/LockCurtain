@@ -291,3 +291,10 @@ internal static class PhoneLog
         }
     }
 }
+
+/// 网络监听的端口存在 settings.json（Settings.PhoneNetworkPort）
+internal sealed class SettingsPortStore : INetworkPortStore
+{
+    public int? Load() => Settings.Current.PhoneNetworkPort;
+    public void Save(int port) => Settings.Update(s => s.PhoneNetworkPort = port);
+}

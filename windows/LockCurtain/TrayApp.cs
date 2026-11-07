@@ -81,6 +81,8 @@ internal sealed partial class TrayApp : ApplicationContext
         server.Start();
         ruleEngine.Start();
         if (phone.IsPaired) phone.Prepare();
+        // 「让手机走网络连这台电脑」：默认关；开过的下次启动接着监听（只在用户自己打开过的情况下）
+        if (Settings.Current.PhoneOverNetwork) phone.SetNetworkEnabled(true);
         Updater.Start(idle: () => overlay.Mode == null, exit: () => ui.Post(_ => ExitAfterUpdate(), null));
         keepAwake.Restore();
         Log.Write($"LockCurtain started, stealth={stealth}, locked={Session.QueryLocked()?.ToString() ?? "unknown"}");

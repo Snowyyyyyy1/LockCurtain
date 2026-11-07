@@ -37,9 +37,9 @@ internal static class UiText
     /// 右键菜单「保持唤醒 ▸」在跑时置灰的那一行剩下的时间：还剩 1 小时 20 分；不到一分钟是「不到 1 分钟」（copy v15 §17.3）
     public static string Remaining(TimeSpan span) => span < TimeSpan.FromMinutes(1) ? "不到 1 分钟" : $"还剩 {Duration(span)}";
 
-    /// 已配对那一行的第二行：「已连上」/「没连上 · 上次连上：3 小时前」（没记过就只有「没连上」）
-    public static string PhoneStatus(bool connected, DateTime? lastSeenUtc, DateTime nowUtc, TimeZoneInfo? local = null) =>
-        connected ? "已连上"
+    /// 已配对那一行的第二行：「已连上 · 网络」「已连上 · 蓝牙」（不知道走哪条就只有「已连上」）/「没连上 · 上次连上：3 小时前」（没记过就只有「没连上」）
+    public static string PhoneStatus(bool connected, DateTime? lastSeenUtc, DateTime nowUtc, TimeZoneInfo? local = null, LockCurtain.Phone.PhonePath? path = null) =>
+        connected ? LockCurtain.Phone.PhonePathRules.ConnectedText(path)
         : lastSeenUtc is { } seen ? $"没连上 · 上次连上：{Ago(seen, nowUtc, local)}"
         : "没连上";
 

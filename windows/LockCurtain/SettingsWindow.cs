@@ -368,15 +368,17 @@ internal sealed class SettingsWindow : Form
             v.Section().Item(warning, "蓝牙关了，手机连不上。", null, controls: v.MakeButton("打开蓝牙设置", OpenBluetoothSettings));
 
         var phones = phone.Phones;
-        if (phones.Count == 0)
+        // 没有配对的手机时是空状态页；但走网络的开关还开着的话照样露出来，不然关不掉（和 Mac 一样）
+        if (phones.Count == 0 && !phone.NetworkEnabled)
         {
             v.Section().Item(phoneIcon, "还没配对手机",
                              "配对以后，手机上能盖上幕布、走近时撤下幕布，还能开关保持唤醒。\n手机上先装 LockCurtain。");
             v.Section().Bare().Controls("", null, v.MakeButton("配对手机…", showPairing, prominent: true));
             return;
         }
-        var list = v.Section("已配对的手机");
         var now = DateTime.UtcNow;
+        var list = v.Section("已配对的手机");
+        if (phones.Count == 0) list = v.Section();
         foreach (var p in phones)
         {
             var id = p.ID;
@@ -386,13 +388,37 @@ internal sealed class SettingsWindow : Form
                 // 「iPhone · 11 月 4 日配上」：日期次要颜色，同一行
                 Title = p.Name,
                 TitleNote = UiText.PhoneTitleParts(p.Name, p.PairedAt).Note,
-                Detail = UiText.PhoneStatus(p.Connected, p.LastSeen, now),
+                Detail = UiText.PhoneStatus(p.Connected, p.LastSeen, now, path: p.Path),
                 DetailDot = p.Connected ? v.ConnectedDot : v.DisconnectedDot,
                 Controls = [v.MakeButton("撤销配对", () => PairingForm.ConfirmUnpair(phone, id, this))],
             });
         }
         v.Section("", () => "手机能做的：盖上幕布；你走近、手机解锁着时撤下幕布；开关保持唤醒。").Bare()
             .Controls("", null, v.MakeButton("配对手机…", showPairing));
+        BuildPhoneNetwork(v);
+    }
+
+    /// 走网络：开关 + 打开后每个本机地址一行（等宽 ip:port + 拷贝）。文案：Camo copy v15.13 §18.2 / §18.6（NetworkText）
+    void BuildPhoneNetwork(PageView v)
+    {
+        var g = v.Section("网络", () => NetworkText.Allowed + "\n" + NetworkText.Tailscale);
+        g.Toggle(NetworkText.Switch, () => phone.NetworkEnabled, on => phone.SetNetworkEnabled(on));
+        if (!phone.NetworkEnabled) return;
+        var status = phone.NetworkStatus;
+        if (status.State == GatewayState.Failed)
+        {
+            g.Text(NetworkText.Failed);
+            return;
+        }
+        if (status.State != GatewayState.Listening) return;
+        var addresses = phone.NetworkAddresses;
+        if (addresses.Count == 0) g.Text(NetworkText.NoAddress);
+        foreach (var entry in addresses)
+        {
+            var line = entry.Text(status.Port);
+            // 网络类型（Wi-Fi / Tailscale / 以太网 / 其他）放在地址右边的值位置，次要色；Mac 是行首
+            g.Add(new PageView.Row { Title = line, MonoTitle = true, Value = entry.Label, Controls = [CopyButton(v, line)] });
+        }
     }
 
     static void OpenBluetoothSettings()
@@ -439,8 +465,7 @@ internal sealed class SettingsWindow : Form
     void BuildRemote(PageView v)
     {
         var line = CommandLine("away");
-        v.Section("命令行", () => "一行命令进，一行 JSON 出；成功时退出码 0。App 本身不监听任何网络端口，只接受本机当前用户的连接。"
-                                + "把 away 换成 hide、status、preview、settings，就是另外四个命令。照这行抄，别自己改。")
+        v.Section("命令行", () => NetworkText.RemoteFooter)
             .Add(new PageView.Row { Title = line, MonoTitle = true, Controls = [CopyButton(v, line)] });
     }
 

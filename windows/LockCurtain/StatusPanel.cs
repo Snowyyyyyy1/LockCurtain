@@ -151,7 +151,7 @@ internal sealed class StatusPanel : Form
         var rows = Rows();
         var next = string.Join("\n", rows.Select(r => $"{r.Display}|{r.Title}|{r.Reason}"))
                    + $"\n{blockers?.SystemCount}|{blockers == null}|{keepAwake.Mode}|{keepAwake.Detail()}|{picking}"
-                   + $"|{phone.IsPaired}|{phone.AnyConnected}";
+                   + $"|{phone.IsPaired}|{phone.AnyConnected}|{phone.ConnectedPath}";
         if (next == signature) return;
         signature = next;
 
@@ -194,7 +194,7 @@ internal sealed class StatusPanel : Form
         if (phone.IsPaired)
         {
             var connected = phone.AnyConnected;
-            phoneRow.Value = connected ? "已连上" : "没连上";
+            phoneRow.Value = connected ? PhonePathRules.ConnectedText(phone.ConnectedPath) : "没连上";
             phoneRow.ValueDot = connected ? v.ConnectedDot : v.DisconnectedDot;
         }
         else phoneRow.Controls = [v.MakeButton("配对手机", () => Run(pairPhone))];

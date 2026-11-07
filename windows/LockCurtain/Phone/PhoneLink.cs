@@ -30,6 +30,12 @@
 //   * 另外每 10 秒自检一次（配过就一直跑，不管早断）：扫描器没在跑 / 状态是 Aborted 或 Stopped 就重启；
 //     「睡着了」挂了超过 60 秒（漏了 Resume 事件）就当醒了；放出到点的不理地址；配过、没连着就（按退避）重连记得的地址。
 //
+// 走网络（可选，默认关，「设置 › 手机」里打开；对照 Mac 的 PhonePairing 里 NetworkGateway 的接线）：PhoneLink 另外拥有一个 NetworkGateway
+// （Phone/Network/NetworkGateway.cs，TCP 监听），建在同一个 PairingAuthority 上（同一份钥匙、同一份计数）。网络上只放行
+// away / awake:* / name: / 读状态，撤下、解除配对、预览、设置、配对一律只走蓝牙（权威端回签名的 Ack 5）。网关的命令回调接到和蓝牙命令
+// 一样的处理（away 走 OnCommand、awake:* 走 OnAwake、name: 走同一个存名字的函数）；幕布 / 保持唤醒状态变了，蓝牙和网络两边都报。
+// 一台手机两条链路都连着时，界面上算蓝牙（PhonePathRules.Resolve）。网关的回调都在 UI 线程上（它的调度器就是 UI 线程）。
+//
 // 手机撤下幕布：幕布盖着、手机连着并认过身份时，每 2 秒往手机收件箱写一条签名的问询（Poll + 新 nonce），手机回签名的
 // Presence（此刻解锁着 / 锁着 / 关着）。签名和计数由 PairingAuthority 验，撤不撤由 LiftGate 判（新鲜、边沿、近），
 // 撤就调 OnLift（只撤 LockCurtain 的遮罩，不碰 Windows 锁屏，也绝不解锁 Windows），再回手机一条签名的 LiftResult。
@@ -66,7 +72,7 @@ internal enum PhonePhase
 }
 
 /// 设置 › 手机 那一页的一行
-internal sealed record PhoneInfo(Guid ID, string Name, DateTime? PairedAt, DateTime? LastSeen, bool Connected);
+internal sealed record PhoneInfo(Guid ID, string Name, DateTime? PairedAt, DateTime? LastSeen, bool Connected, PhonePath? Path = null);
 
 internal sealed class PhoneLink
 {
@@ -224,6 +230,8 @@ internal sealed class PhoneLink
     {
         this.ui = ui;
         authority = new PairingAuthority(store ?? new DpapiPairingStore(), PhoneLog.Write);
+        gateway = new NetworkGateway(authority, TaskScheduler.FromCurrentSynchronizationContext(), new SettingsPortStore());
+        WireGateway();
         roster.Prune(authority.PairedPhoneIDs.ToList());
         tick.Tick += (_, _) => Tick();
         health.Tick += (_, _) => HealthCheck();
@@ -241,25 +249,137 @@ internal sealed class PhoneLink
 
     public bool IsPaired => authority.IsPaired;
 
+    // MARK: - 走网络
+
+    readonly NetworkGateway gateway;
+    /// 「让手机走网络连这台电脑」开着没有（Settings.PhoneOverNetwork；启动时由 TrayApp 按设置调 SetNetworkEnabled）
+    public bool NetworkEnabled { get; private set; }
+    /// 监听状态；没开时是 Stopped
+    public GatewayStatus NetworkStatus => NetworkEnabled ? gateway.Status : GatewayStatus.Stopped;
+    /// 本机的网络地址（开着、在监听才有）；加上端口就是手机里要填的 ip:port
+    public IReadOnlyList<NetworkAddressEntry> NetworkAddresses => NetworkEnabled ? gateway.Addresses : [];
+    public int? NetworkPort => NetworkEnabled ? gateway.Port : null;
+    /// 走网络连着、认过身份的手机
+    public IReadOnlyList<NetworkGateway.Peer> NetworkPeers => NetworkEnabled ? gateway.Peers : [];
+    /// 正在处理网络手机的 awake:* 命令：保持唤醒变了先不用单独报给网络手机（网关处理完自己报一次）
+    bool handlingNetworkAwake;
+
+    /// 打开 / 关掉「让手机走网络连这台电脑」：存进设置，起 / 停监听。关掉会断开所有网络手机
+    public void SetNetworkEnabled(bool enabled)
+    {
+        if (Settings.Current.PhoneOverNetwork != enabled) Settings.Update(s => s.PhoneOverNetwork = enabled);
+        if (enabled == NetworkEnabled)
+        {
+            // 已经开着但监听失败了（比如睡眠醒来以后）：再起一次
+            if (enabled && gateway.Status.State == GatewayState.Failed) { gateway.Stop(); gateway.Start(); }
+            return;
+        }
+        NetworkEnabled = enabled;
+        if (enabled)
+        {
+            PhoneLog.Write("phone network: switched on");
+            gateway.Start();
+        }
+        else
+        {
+            PhoneLog.Write("phone network: switched off");
+            gateway.Stop();
+        }
+        NotifyPhones();
+    }
+
+    /// 睡眠醒来：监听没起来就再起一次；网卡可能变了，地址重新列
+    void NetworkAfterWake()
+    {
+        if (!NetworkEnabled) return;
+        if (gateway.Status.State == GatewayState.Failed) { gateway.Stop(); gateway.Start(); }
+        gateway.RefreshAddresses();
+    }
+
+    /// 网关的回调（都在 UI 线程）：状态 / 地址 / 连着的手机；命令接到和蓝牙命令同一批处理函数
+    void WireGateway()
+    {
+        gateway.Log = s => PhoneLog.Write("net: " + s);
+        gateway.MaxNameBytes = PhoneName.MaxBytes;
+        gateway.CurtainClosed = () => curtainClosed;
+        gateway.KeepAwakeState = () => KeepAwakeSnapshot?.Invoke() ?? KeepAwakeWireState.Off;
+        gateway.OnCommand = HandleNetworkCommand;
+        gateway.OnStatusChanged = () => { if (NetworkEnabled) NotifyPhones(); };
+        gateway.OnAddressesChanged = () => { if (NetworkEnabled) NotifyPhones(); };
+        var before = new HashSet<Guid>();
+        gateway.OnPeersChanged = () =>
+        {
+            var now = NetworkEnabled ? gateway.Peers.Select(p => p.PhoneID).ToHashSet() : [];
+            // 走网络的手机断了：和蓝牙一样记一次「上次连上」
+            foreach (var id in before.Except(now)) NoteSeen(id, DateTime.UtcNow, force: true);
+            before = now;
+            NotifyPhones();
+        };
+        gateway.OnPeerIdentified = id => NoteSeen(id, DateTime.UtcNow, force: true);
+    }
+
+    /// 网络上放行的命令（网关已经验过签名、查过白名单、先回过收据）：away / awake:* / name:。
+    /// 和蓝牙一样的处理；这里再查一次 NetworkPolicy，万一网关放过别的也不执行
+    void HandleNetworkCommand(string command, Guid phoneID)
+    {
+        if (!NetworkPolicy.Allows(command))
+        {
+            PhoneLog.Write($"net: command from {Who(phoneID)} not allowed over network; ignored");
+            return;
+        }
+        if (command.StartsWith(PhoneName.Prefix, StringComparison.Ordinal))
+        {
+            ApplyName(command, phoneID);
+            return;
+        }
+        var lower = command.ToLowerInvariant();
+        if (lower.StartsWith(AwakeRequest.Prefix, StringComparison.Ordinal))
+        {
+            if (AwakeRequest.Parse(lower) is not { } request)
+            {
+                PhoneLog.Write($"command \"{lower}\" from {Who(phoneID)} not understood; ignored");
+                return;
+            }
+            PhoneLog.Write($"keep-awake request from {Who(phoneID)}: {lower} (network)");
+            // 网关自己会把新的保持唤醒状态推给网络手机；这里的 ReportKeepAwake 只补上蓝牙那边
+            handlingNetworkAwake = true;
+            try { OnAwake?.Invoke(request); }
+            finally { handlingNetworkAwake = false; }
+            return;
+        }
+        if (lower == "away" && OnCommand is { } run) _ = run("away");
+    }
+
     /// 蓝牙开着没有：null = 还不知道（没初始化）
     public bool? BluetoothOn => radioOn;
     /// 这台电脑没有能用的低功耗蓝牙
     public bool BluetoothUnsupported => unsupported;
 
     /// 配上的手机（钥匙在存储里的），按配上的先后
-    public IReadOnlyList<PhoneInfo> Phones =>
-        authority.PairedPhoneIDs
-            .Select(id =>
-            {
-                var e = roster.Get(id);
-                return new PhoneInfo(id, e?.Name ?? PhoneName.Default, e?.PairedAt, e?.LastSeen, IsConnected(id));
-            })
-            .OrderBy(p => p.PairedAt ?? DateTime.MinValue).ThenBy(p => p.ID)
-            .ToList();
+    public IReadOnlyList<PhoneInfo> Phones
+    {
+        get
+        {
+            var network = NetworkPeers.Select(p => p.PhoneID).ToHashSet();
+            return authority.PairedPhoneIDs
+                .Select(id =>
+                {
+                    var e = roster.Get(id);
+                    var path = PhonePathRules.Resolve(IsConnected(id), network.Contains(id));
+                    return new PhoneInfo(id, e?.Name ?? PhoneName.Default, e?.PairedAt, e?.LastSeen, path != null, path);
+                })
+                .OrderBy(p => p.PairedAt ?? DateTime.MinValue).ThenBy(p => p.ID)
+                .ToList();
+        }
+    }
 
     bool IsConnected(Guid id) => peers.Values.Any(p => p.PhoneID == id && p.Subscribed && !p.Closed);
 
-    public bool AnyConnected => peers.Values.Any(p => p.PhoneID != null && p.Subscribed && !p.Closed && authority.Store.Load(p.PhoneID.Value) != null);
+    /// 有认过身份的手机连着（蓝牙或网络）
+    public bool AnyConnected => Phones.Any(p => p.Connected);
+
+    /// 连着的手机走的链路：都是蓝牙 / 都是网络就是它，混着（或没连着）是 null
+    public PhonePath? ConnectedPath => PhonePathRules.Common(Phones.Where(p => p.Path != null).Select(p => p.Path!.Value));
 
     void NotifyPhones() => PhonesChanged?.Invoke();
 
@@ -421,6 +541,8 @@ internal sealed class PhoneLink
     public void UnpairAll()
     {
         var notices = authority.RevokeAll();
+        // 走网络连着的也收到签名的撤销通知，发完断开
+        foreach (var (id, notice) in notices) gateway.NotifyRevoked(id, notice);
         foreach (var peer in peers.Values)
         {
             if (peer.PhoneID is not { } id) continue;
@@ -451,6 +573,8 @@ internal sealed class PhoneLink
     {
         PhoneLog.Write($"unpair requested on this computer for {Who(phoneID)}");
         var notice = authority.Revoke(phoneID);
+        // 走网络连着的也收到签名的撤销通知，发完断开
+        gateway.NotifyRevoked(phoneID, notice);
         foreach (var peer in peers.Values)
         {
             if (peer.PhoneID != phoneID) continue;
@@ -488,6 +612,7 @@ internal sealed class PhoneLink
         keepAwakeReports++;
         foreach (var peer in peers.Values.ToList())
             if (peer.PhoneID is { } id && peer.Subscribed) SendKeepAwake(peer, id);
+        if (!handlingNetworkAwake) gateway.ReportKeepAwake();
     }
 
     void SendKeepAwake(Peer peer, Guid id)
@@ -508,6 +633,7 @@ internal sealed class PhoneLink
         foreach (var g in gates.Values)
             if (closed) g.Covered(now); else g.Uncovered();
         PhoneLog.Write($"lift: curtain {(closed ? "covered" : "uncovered")}");
+        gateway.ReportCurtain(closed);
         foreach (var peer in peers.Values)
             if (peer.PhoneID is { } id && authority.StateMessage(closed, id) is { } m) Send(m, peer);
     }
@@ -1148,6 +1274,7 @@ internal sealed class PhoneLink
         lastCandidateTry.Clear();
         ResetBackoffs("system resume");
         Resume();
+        NetworkAfterWake();
     }
 
     /// 每 10 秒（配过就一直跑，不管早断）：漏了 Resume 的「睡着了」超过 60 秒就当醒了；扫描器没在跑 / Aborted / Stopped 就重启；
@@ -1433,17 +1560,21 @@ internal sealed class PhoneLink
         }
     }
 
+    /// name:<手机名>（蓝牙和网络共用）：存起来给「手机」页显示
+    void ApplyName(string command, Guid phoneID)
+    {
+        if (PhoneName.Clean(command[PhoneName.Prefix.Length..]) is not { } name) return;
+        roster.SetName(phoneID, name);
+        PhoneLog.Write($"phone {Who(phoneID)} name updated ({System.Text.Encoding.UTF8.GetByteCount(name)} bytes)");
+        NotifyPhones();
+    }
+
     void Handle(string command, Guid phoneID, Peer peer)
     {
         // 名字照原样存（不改大小写）
         if (command.StartsWith(PhoneName.Prefix, StringComparison.Ordinal))
         {
-            if (PhoneName.Clean(command[PhoneName.Prefix.Length..]) is { } name)
-            {
-                roster.SetName(phoneID, name);
-                PhoneLog.Write($"phone {Who(phoneID)} name updated ({System.Text.Encoding.UTF8.GetByteCount(name)} bytes)");
-                NotifyPhones();
-            }
+            ApplyName(command, phoneID);
             return;
         }
         switch (command.ToLowerInvariant())
@@ -1456,7 +1587,7 @@ internal sealed class PhoneLink
             case "unpair":
                 // 收据（签名的 Ack 0）已经在 Receive 里先排进写队列；再删钥匙，写完断开
                 PhoneLog.Write($"phone {Who(phoneID)} asked to unpair");
-                authority.Revoke(phoneID);
+                gateway.NotifyRevoked(phoneID, authority.Revoke(phoneID));
                 peer.PhoneID = null;
                 ForgetPhone(phoneID);
                 peer.DisconnectAfterWrites = true;

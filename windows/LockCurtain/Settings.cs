@@ -40,6 +40,10 @@ internal sealed class Settings
     public KeepAwakeSaved? KeepAwake { get; set; }
     /// 每天自动检查一次更新（Updater.cs），发现新版本时提示
     public bool AutoCheckUpdates { get; set; } = true;
+    /// 「让手机走网络连这台电脑」：默认关，用户在「设置 › 手机」里手动打开才监听（Mac 版 phoneNet.enabled）
+    public bool PhoneOverNetwork { get; set; }
+    /// 监听用的端口：49200–49999 里挑一个存着，以后一直用（Mac 版 phoneNet.port）；null = 还没挑过
+    public int? PhoneNetworkPort { get; set; }
     /// 「开始用 LockCurtain」弹过了（第一次打开时弹一次，见 GuideForm.cs）
     public bool GuideShown { get; set; }
 
