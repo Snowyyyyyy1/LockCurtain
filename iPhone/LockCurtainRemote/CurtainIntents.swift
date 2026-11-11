@@ -61,6 +61,29 @@ struct PreviewCurtainIntent: AppIntent {
     }
 }
 
+/// 切换幕布：盖着就撤下，没盖就盖上。盖上那边和「盖上幕布」一样在后台；
+/// 撤下那边要面容 / 密码，LAContext 在后台弹不出来，所以到那一步才把 App 带到前台（.foreground(.dynamic)）
+struct ToggleCurtainIntent: AppIntent {
+    static let title: LocalizedStringResource = "切换幕布"
+    static let description = IntentDescription("盖着就撤下，没盖就盖上。撤下时要先过面容或密码。")
+    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
+    /// 盖上不用验证；撤下在 perform 里每次另外验证，和「撤下幕布」一样
+    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let result = await IntentCurtainRunner.live.toggle {
+            do {
+                try await continueInForeground(alwaysConfirm: false)
+            } catch {
+                return .cancelled
+            }
+            return await OwnerAuthenticator.authenticate()
+        }
+        return try finish(result.action, result.outcome)
+    }
+}
+
 /// 保持唤醒的几项就是 App 里菜单的那几项（KeepAwakeChoice）
 extension KeepAwakeChoice: AppEnum {
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "保持唤醒"
@@ -114,6 +137,14 @@ struct CurtainShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "撤下幕布",
             systemImageName: "curtains.open"
+        )
+        AppShortcut(
+            intent: ToggleCurtainIntent(),
+            phrases: [
+                "Toggle the curtain with \(.applicationName)",
+            ],
+            shortTitle: "切换幕布",
+            systemImageName: "switch.2"
         )
         AppShortcut(
             intent: PreviewCurtainIntent(),

@@ -212,6 +212,7 @@ struct CurtainIntentTests {
         case .lift: "没撤下："
         case .preview: "没能预览："
         case .keepAwake: "没能保持唤醒："
+        case .toggle: "没能切换幕布："
         }
     }
 
@@ -534,6 +535,95 @@ struct CurtainIntentTests {
         }
         #expect(await covered.run(.lift) { .passed } == .lifted)
         #expect(coveredLink.calls.contains("lift"))
+    }
+
+    // MARK: 切换
+
+    @Test
+    func toggleCoversWhenOpenWithoutAskingForFaceID() async {
+        let (runner, link, _, _) = Self.rig { link, clock in
+            link.connect(.network, phase: .open)
+            link.lastStateAt = clock.now
+        }
+        var asked = 0
+        let result = await runner.toggle { asked += 1; return .passed }
+        #expect(result.action == .cover)
+        #expect(result.outcome == .covered)
+        #expect(asked == 0)
+        #expect(link.calls.contains("cover") && !link.calls.contains("lift"))
+        #expect(IntentCopy.text(kind: result.action, outcome: result.outcome) == "盖上了。")
+    }
+
+    @Test
+    func toggleLiftsWhenCoveredAndAuthenticatesFirst() async {
+        let (runner, link, _, _) = Self.rig { link, clock in
+            link.connect(.bluetooth, phase: .closed)
+            link.lastStateAt = clock.now
+        }
+        var asked = 0
+        let result = await runner.toggle { asked += 1; return .passed }
+        #expect(result == (.lift, .lifted))
+        #expect(asked == 1)
+        #expect(link.calls.contains("lift") && !link.calls.contains("cover"))
+
+        for (auth, expected) in [(IntentAuthResult.cancelled, IntentFailure.authCancelled), (.failed, .authFailed)] {
+            let (runner, link, _, _) = Self.rig { link, clock in
+                link.connect(.bluetooth, phase: .closed)
+                link.lastStateAt = clock.now
+            }
+            let result = await runner.toggle { auth }
+            #expect(result == (.lift, .failed(expected)))
+            #expect(!link.calls.contains("lift"))
+            #expect(IntentCopy.text(kind: result.action, outcome: result.outcome).hasPrefix("没撤下："))
+        }
+    }
+
+    @Test
+    func toggleDoesNotTrustAStaleStateFromBeforeItConnected() async {
+        // 没连着时手机上那份是上次记下的：要电脑这次新报的
+        let (silent, silentLink, _, _) = Self.rig { link, clock in
+            link.snapshot.phase = .closed
+            link.lastStateAt = clock.now.addingTimeInterval(-600)
+            clock.events.append((1, { [unowned link] in link.connect(.bluetooth, phase: .closed) }))
+        }
+        let unknown = await silent.toggle { .passed }
+        #expect(unknown == (.toggle, .failed(.stateUnknown)))
+        #expect(silentLink.calls.contains("requestState"))
+        #expect(!silentLink.calls.contains("lift") && !silentLink.calls.contains("cover"))
+        #expect(IntentCopy.text(kind: unknown.action, outcome: unknown.outcome) == "没能切换幕布：电脑没有回应。")
+
+        // 电脑新报来「开着」：盖上
+        let (fresh, freshLink, _, _) = Self.rig { link, clock in
+            link.snapshot.phase = .closed
+            link.lastStateAt = clock.now.addingTimeInterval(-600)
+            link.stateAfterRequest = .open
+            clock.events.append((1, { [unowned link] in link.connect(.bluetooth, phase: .closed) }))
+        }
+        #expect(await fresh.toggle { .passed } == (.cover, .covered))
+        #expect(freshLink.calls.contains("cover"))
+    }
+
+    @Test
+    func toggleOnNetworkOnlyCoversButWillNotLift() async {
+        var asked = 0
+        let (runner, link, _, _) = Self.rig(address: true) { link, clock in
+            link.connect(.network, phase: .closed)
+            link.lastStateAt = clock.now
+        }
+        let result = await runner.toggle { asked += 1; return .passed }
+        #expect(result == (.lift, .failed(.liftOnNetwork)))
+        #expect(asked == 0) // 撤不了就不弹面容
+        #expect(!link.calls.contains("lift"))
+    }
+
+    @Test
+    func toggleFailsHonestlyBeforeKnowingWhatToDo() async {
+        let (unpaired, _, _, _) = Self.rig(paired: false)
+        #expect(await unpaired.toggle { .passed } == (.toggle, .failed(.notPaired)))
+        let (off, _, _, _) = Self.rig { link, _ in link.snapshot.connection = .bluetoothOff }
+        let result = await off.toggle { .passed }
+        #expect(result == (.toggle, .failed(.bluetoothOff)))
+        #expect(IntentCopy.text(kind: result.action, outcome: result.outcome) == "没能切换幕布：手机的蓝牙关着，打开再试。")
     }
 
     @Test

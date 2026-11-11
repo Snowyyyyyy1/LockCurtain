@@ -21,6 +21,8 @@ enum CurtainIntentKind: String, CaseIterable, Sendable {
     case lift
     case preview
     case keepAwake
+    /// 切换：盖着就撤下，没盖就盖上。先按盖上的规矩等路；定下来之后失败的话用盖上 / 撤下自己的说法
+    case toggle
 
     /// 只能走蓝牙（撤下要电脑量近不近；预览不在网络白名单里）
     var needsBluetooth: Bool { self == .lift || self == .preview }
@@ -281,6 +283,7 @@ enum IntentCopy {
         case .lift: "没撤下："
         case .preview: "没能预览："
         case .keepAwake: "没能保持唤醒："
+        case .toggle: "没能切换幕布："
         }
     }
 }
@@ -361,6 +364,7 @@ final class IntentCurtainRunner {
 
     private func perform(_ kind: CurtainIntentKind, choice: KeepAwakeChoice,
                          authenticate: (() async -> IntentAuthResult)?) async -> IntentOutcome {
+        if kind == .toggle { return await performToggle(authenticate: authenticate ?? { .failed }).outcome }
         guard env.isPaired() else { return .failed(.notPaired) }
 
         let link = env.makeLink()
@@ -405,7 +409,78 @@ final class IntentCurtainRunner {
             }
         case .lift:
             return await lift(link)
+        case .toggle:
+            return .failed(.stateUnknown) // 上面已经转给 performToggle，到不了这里
         }
+    }
+
+    /// 切换：先连上、拿到电脑报来的幕布状态，没盖就盖上（后台，不弹任何东西）；
+    /// 盖着就撤下：这时才调 `authenticate`（快捷指令里先把 App 带到前台再过面容 / 密码），规矩和「撤下幕布」一样。
+    /// 返回真正做的是哪一个（.cover / .lift；还没定下来就失败是 .toggle），说的话用它的前缀
+    func toggle(authenticate: () async -> IntentAuthResult) async -> (action: CurtainIntentKind, outcome: IntentOutcome) {
+        let started = env.now()
+        env.log("intent toggle start, address saved \(env.hasNetworkAddress())")
+        let result = await performToggle(authenticate: authenticate)
+        let seconds = env.now().timeIntervalSince(started)
+        env.log("intent toggle done: \(result.action.rawValue) \(Self.describe(result.outcome)) after \(String(format: "%.1f", seconds)) s")
+        return result
+    }
+
+    private func performToggle(authenticate: () async -> IntentAuthResult) async -> (action: CurtainIntentKind, outcome: IntentOutcome) {
+        guard env.isPaired() else { return (.toggle, .failed(.notPaired)) }
+
+        let link = env.makeLink()
+        // 开始时就连着（App 开着）：之后电脑每变一次都会报，手上那份就是现在的
+        let wasConnected = link.snapshot.connection == .connected
+        let sessionStart = env.now()
+        let token = link.beginIntentSession(allowNetwork: env.hasNetworkAddress())
+        defer { link.endIntentSession(token) }
+        link.activate()
+
+        var path: LinkPath
+        switch await waitForPath(.toggle, link: link) {
+        case .failed(let failure): return (.toggle, .failed(failure))
+        case .ready(let ready): path = ready
+        }
+        // 手机上开头那一份可能是上次记下的（LastKnown），不算：要电脑这次连上之后签名报来的
+        guard await awaitFreshState(link, trustExisting: wasConnected, since: sessionStart) else { return (.toggle, .failed(.stateUnknown)) }
+        let covered = link.snapshot.phase != .open
+        env.log("intent toggle path: \(path == .bluetooth ? "bluetooth" : "network"), curtain \(covered ? "covered" : "open")")
+
+        if !covered {
+            return (.cover, await retryOnPathSwitch(link: link, first: path) { IntentPlan.outcome(cover: await link.cover()) })
+        }
+
+        // 撤下只认蓝牙：只有网络通着就按撤下的规矩再等一会儿蓝牙，还不来就如实说，不白白弹面容
+        if path != .bluetooth {
+            switch await waitForPath(.lift, link: link) {
+            case .failed(let failure): return (.lift, .failed(failure))
+            case .ready(let ready): path = ready
+            }
+        }
+        switch await authenticate() {
+        case .passed: break
+        case .cancelled: return (.lift, .failed(.authCancelled))
+        case .failed: return (.lift, .failed(.authFailed))
+        }
+        if !env.isPhoneUnlocked() { return (.lift, .failed(.phoneLocked)) }
+        return (.lift, await lift(link))
+    }
+
+    /// 手上的幕布状态能不能信：一直连着时电脑报过就算；否则要这次开始之后新报来的，没有就问一次，最多等 stateWait
+    private func awaitFreshState(_ link: any CurtainIntentLink, trustExisting: Bool, since start: Date) async -> Bool {
+        func fresh() -> Bool {
+            guard let at = link.lastStateAt else { return false }
+            return trustExisting || at >= start
+        }
+        if fresh() { return true }
+        link.requestState()
+        var waited: TimeInterval = 0
+        while waited < IntentPlan.stateWait, !fresh() {
+            await env.sleep(IntentPlan.pollInterval)
+            waited += IntentPlan.pollInterval
+        }
+        return fresh()
     }
 
     private func waitForPath(_ kind: CurtainIntentKind, link: any CurtainIntentLink) async -> PathResult {
