@@ -212,7 +212,7 @@ struct CurtainIntentTests {
         case .lift: "没撤下："
         case .preview: "没能预览："
         case .keepAwake: "没能保持唤醒："
-        case .toggle: "没能切换幕布："
+        case .toggle: "幕布没动："
         }
     }
 
@@ -242,6 +242,8 @@ struct CurtainIntentTests {
             "手机锁着。", "要先解锁手机。", "要先过面容。", "面容或密码没通过。",
             // App 里已有、Camo 的列表里没有对应的几句（意思不变，放在前缀后面）
             "电脑上还缺一个权限。", "幕布已经是撤下的了。", "这次没撤下来，再按一次。",
+            // §20.7 v15.15：切换还没分出盖或撤、电脑没报状态
+            "电脑没说现在盖着没盖。",
         ]
         for kind in CurtainIntentKind.allCases {
             for failure in IntentFailure.allCases {
@@ -590,7 +592,7 @@ struct CurtainIntentTests {
         #expect(unknown == (.toggle, .failed(.stateUnknown)))
         #expect(silentLink.calls.contains("requestState"))
         #expect(!silentLink.calls.contains("lift") && !silentLink.calls.contains("cover"))
-        #expect(IntentCopy.text(kind: unknown.action, outcome: unknown.outcome) == "没能切换幕布：电脑没有回应。")
+        #expect(IntentCopy.text(kind: unknown.action, outcome: unknown.outcome) == "幕布没动：电脑没说现在盖着没盖。")
 
         // 电脑新报来「开着」：盖上
         let (fresh, freshLink, _, _) = Self.rig { link, clock in
@@ -623,7 +625,7 @@ struct CurtainIntentTests {
         let (off, _, _, _) = Self.rig { link, _ in link.snapshot.connection = .bluetoothOff }
         let result = await off.toggle { .passed }
         #expect(result == (.toggle, .failed(.bluetoothOff)))
-        #expect(IntentCopy.text(kind: result.action, outcome: result.outcome) == "没能切换幕布：手机的蓝牙关着，打开再试。")
+        #expect(IntentCopy.text(kind: result.action, outcome: result.outcome) == "幕布没动：手机的蓝牙关着，打开再试。")
     }
 
     @Test

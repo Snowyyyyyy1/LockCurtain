@@ -273,6 +273,7 @@ enum IntentCopy {
         case .alreadyUncovered: "幕布已经是撤下的了。" // App 里的句子，Camo 的列表里没有对应的；意思不变，放在前缀后面
         case .missingPermission: "电脑上还缺一个权限。" // §16.8 N2
         case .refused: kind == .lift ? "这次没撤下来，再按一次。" : "电脑没有接受这条命令。"
+        case .stateUnknown where kind == .toggle: "电脑没说现在盖着没盖。" // §20.7 v15.15
         case .noAnswer, .stateUnknown, .notDelivered: "电脑没有回应。"
         }
     }
@@ -283,7 +284,7 @@ enum IntentCopy {
         case .lift: "没撤下："
         case .preview: "没能预览："
         case .keepAwake: "没能保持唤醒："
-        case .toggle: "没能切换幕布："
+        case .toggle: "幕布没动："
         }
     }
 }

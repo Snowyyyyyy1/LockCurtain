@@ -65,7 +65,7 @@ struct PreviewCurtainIntent: AppIntent {
 /// 撤下那边要面容 / 密码，LAContext 在后台弹不出来，所以到那一步才把 App 带到前台（.foreground(.dynamic)）
 struct ToggleCurtainIntent: AppIntent {
     static let title: LocalizedStringResource = "切换幕布"
-    static let description = IntentDescription("盖着就撤下，没盖就盖上。撤下时要先过面容或密码。")
+    static let description = IntentDescription("没盖着就盖上；盖着就撤下，撤下要先过面容。")
     static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
     /// 盖上不用验证；撤下在 perform 里每次另外验证，和「撤下幕布」一样
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
