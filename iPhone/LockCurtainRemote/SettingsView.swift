@@ -129,7 +129,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 撤下前验证面容 (copy v13.4 §11)：脚注跟着开关变，关着那句就在开关正下面
+    /// 撤下前验证面容 (copy v15.16 §11)：脚注跟着开关变，关着那句就在开关正下面
     private var liftAuthSection: some View {
         Section {
             Toggle(
@@ -141,9 +141,9 @@ struct SettingsView: View {
             )
         } footer: {
             if model.liftNeedsFaceID {
-                Text("点「现在撤下」时先看你一眼，免得别人拿起你解锁着的手机就把幕布撤了。")
+                Text("撤下前先看你一眼，App 里的按钮和快捷指令都一样，免得别人拿起你解锁着的手机就把幕布撤了。")
             } else {
-                Text("关着的时候，拿到你解锁着的手机的人也能撤下幕布。")
+                Text("关着的时候，拿到你解锁着的手机、又在这台电脑旁边的人，也能撤下幕布。")
             }
         }
     }

@@ -77,7 +77,7 @@ struct CurtainIntentTests {
 
     final class LogBox { var lines: [String] = [] }
 
-    static func rig(paired: Bool = true, address: Bool = false, unlocked: Bool = true,
+    static func rig(paired: Bool = true, address: Bool = false, unlocked: Bool = true, needsFaceID: Bool = true,
                     configure: (FakeLink, Clock) -> Void = { _, _ in }) -> (IntentCurtainRunner, FakeLink, Clock, LogBox) {
         let clock = Clock()
         let link = FakeLink(clock: clock)
@@ -88,6 +88,7 @@ struct CurtainIntentTests {
             hasNetworkAddress: { address },
             makeLink: { link },
             isPhoneUnlocked: { unlocked },
+            liftNeedsFaceID: { needsFaceID },
             now: { clock.now },
             sleep: { clock.advance($0) },
             log: { logs.lines.append($0) })
@@ -475,6 +476,40 @@ struct CurtainIntentTests {
         }
         #expect(asked == 3)
         #expect(link.calls.filter { $0 == "lift" }.count == 3)
+    }
+
+    /// 「撤下前验证面容」关着：撤下幕布、切换的撤下都不调 authenticate；锁屏、只走蓝牙照旧
+    @Test
+    func liftSkipsFaceIDWhenSettingIsOffButStillNeedsUnlockAndBluetooth() async {
+        var asked = 0
+        let (runner, link, _, _) = Self.rig(needsFaceID: false) { link, _ in link.connect(.bluetooth, phase: .closed) }
+        #expect(await runner.run(.lift) { asked += 1; return .failed } == .lifted)
+        #expect(link.calls.contains("lift"))
+
+        let (toggler, toggleLink, _, _) = Self.rig(needsFaceID: false) { link, clock in
+            link.connect(.bluetooth, phase: .closed)
+            link.lastStateAt = clock.now
+        }
+        let toggled = await toggler.toggle { asked += 1; return .failed }
+        #expect(toggled == (.lift, .lifted))
+        #expect(toggleLink.calls.contains("lift"))
+        #expect(asked == 0)
+
+        let (locked, lockedLink, _, _) = Self.rig(unlocked: false, needsFaceID: false) { link, _ in link.connect(.bluetooth, phase: .closed) }
+        #expect(await locked.run(.lift) { asked += 1; return .passed } == .failed(.phoneLocked))
+        #expect(!lockedLink.calls.contains("lift"))
+
+        let (lockedToggle, lockedToggleLink, _, _) = Self.rig(unlocked: false, needsFaceID: false) { link, clock in
+            link.connect(.bluetooth, phase: .closed)
+            link.lastStateAt = clock.now
+        }
+        #expect(await lockedToggle.toggle { asked += 1; return .passed } == (.lift, .failed(.phoneLocked)))
+        #expect(!lockedToggleLink.calls.contains("lift"))
+
+        let (net, netLink, _, _) = Self.rig(address: true, needsFaceID: false) { link, _ in link.connect(.network, phase: .closed) }
+        #expect(await net.run(.lift) { asked += 1; return .passed } == .failed(.liftOnNetwork))
+        #expect(!netLink.calls.contains("lift"))
+        #expect(asked == 0)
     }
 
     @Test

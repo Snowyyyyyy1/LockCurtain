@@ -32,18 +32,25 @@ struct CoverCurtainIntent: AppIntent {
     }
 }
 
-/// 撤下幕布：每次都要面容 / 密码（不看 App 里「撤下前验证面容」的开关），手机解锁着、蓝牙连着、在电脑旁边才撤
+/// 撤下幕布：「撤下前验证面容」开着就每次面容 / 密码，关着就不弹；手机解锁着、蓝牙连着、在电脑旁边才撤
 struct LiftCurtainIntent: AppIntent {
     static let title: LocalizedStringResource = "撤下幕布"
-    static let description = IntentDescription("把幕布撤下来。每次要先过面容或密码。")
-    /// 验证面容 / 密码要界面（LAContext 在没有界面的后台进程里不让弹），所以这一个把 App 带到前台
-    static let supportedModes: IntentModes = .foreground
-    /// 系统先要求在这台手机上验证本人（锁屏时要解锁）；解锁着时系统不会再问，所以 perform 里每次另外验证一次
+    static let description = IntentDescription("把幕布撤下来。手机要解锁、在电脑旁边，默认先过面容。")
+    /// 验证面容 / 密码要界面（LAContext 在没有界面的后台进程里不让弹）：要面容时才把 App 带到前台，开关关着就在后台撤
+    static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
+    /// 系统先要求在这台手机上验证本人（锁屏时要解锁）；解锁着时系统不会再问，所以开关开着时 perform 里每次另外验证一次
     static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let outcome = await IntentCurtainRunner.live.run(.lift) { await OwnerAuthenticator.authenticate() }
+        let outcome = await IntentCurtainRunner.live.run(.lift) {
+            do {
+                try await continueInForeground(alwaysConfirm: false)
+            } catch {
+                return .cancelled
+            }
+            return await OwnerAuthenticator.authenticate()
+        }
         return try finish(.lift, outcome)
     }
 }
@@ -62,12 +69,12 @@ struct PreviewCurtainIntent: AppIntent {
 }
 
 /// 切换幕布：盖着就撤下，没盖就盖上。盖上那边和「盖上幕布」一样在后台；
-/// 撤下那边要面容 / 密码，LAContext 在后台弹不出来，所以到那一步才把 App 带到前台（.foreground(.dynamic)）
+/// 撤下那边要面容 / 密码时（「撤下前验证面容」开着），LAContext 在后台弹不出来，所以到那一步才把 App 带到前台（.foreground(.dynamic)）
 struct ToggleCurtainIntent: AppIntent {
     static let title: LocalizedStringResource = "切换幕布"
-    static let description = IntentDescription("没盖着就盖上；盖着就撤下，撤下要先过面容。")
+    static let description = IntentDescription("没盖着就盖上；盖着就撤下，撤下默认先过面容。")
     static let supportedModes: IntentModes = [.background, .foreground(.dynamic)]
-    /// 盖上不用验证；撤下在 perform 里每次另外验证，和「撤下幕布」一样
+    /// 盖上不用验证；撤下在 perform 里按开关另外验证，和「撤下幕布」一样
     static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
 
     @MainActor

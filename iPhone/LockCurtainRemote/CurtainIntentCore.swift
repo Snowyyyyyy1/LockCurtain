@@ -315,6 +315,8 @@ struct IntentEnvironment {
     var hasNetworkAddress: () -> Bool
     var makeLink: () -> any CurtainIntentLink
     var isPhoneUnlocked: () -> Bool
+    /// 「撤下前验证面容」（App 设置，存本机，默认开）：关着时撤下不调 authenticate；解锁、只走蓝牙照旧
+    var liftNeedsFaceID: () -> Bool = { true }
     var now: () -> Date
     var sleep: (TimeInterval) async -> Void
     var log: (String) -> Void
@@ -331,6 +333,7 @@ struct IntentEnvironment {
             return CurtainLinkHub.obtain(paired: paired, macName: paired ? UserDefaults.standard.string(forKey: "lc.macName") : nil)
         },
         isPhoneUnlocked: { UIApplication.shared.isProtectedDataAvailable },
+        liftNeedsFaceID: { LiftAuthSetting.isOn },
         now: { Date() },
         sleep: { try? await Task.sleep(for: .seconds($0)) },
         log: { Logger(subsystem: "LockCurtainRemote", category: "link").info("\($0, privacy: .public)") }
@@ -352,7 +355,7 @@ final class IntentCurtainRunner {
         case failed(IntentFailure)
     }
 
-    /// 做一件事，返回电脑真的回答了什么。`authenticate` 只有撤下用（每次都要，和 App 里的开关无关）
+    /// 做一件事，返回电脑真的回答了什么。`authenticate` 只有撤下用，而且只在「撤下前验证面容」开着时才调
     func run(_ kind: CurtainIntentKind, choice: KeepAwakeChoice = .always,
              authenticate: (() async -> IntentAuthResult)? = nil) async -> IntentOutcome {
         let started = env.now()
@@ -376,10 +379,12 @@ final class IntentCurtainRunner {
 
         if kind == .lift {
             // 面容 / 密码先过（连接在这段时间里照常往回连），没过什么都不做
-            switch await (authenticate?() ?? .failed) {
-            case .passed: break
-            case .cancelled: return .failed(.authCancelled)
-            case .failed: return .failed(.authFailed)
+            if env.liftNeedsFaceID() {
+                switch await (authenticate?() ?? .failed) {
+                case .passed: break
+                case .cancelled: return .failed(.authCancelled)
+                case .failed: return .failed(.authFailed)
+                }
             }
             if !env.isPhoneUnlocked() { return .failed(.phoneLocked) }
         }
@@ -459,10 +464,12 @@ final class IntentCurtainRunner {
             case .ready(let ready): path = ready
             }
         }
-        switch await authenticate() {
-        case .passed: break
-        case .cancelled: return (.lift, .failed(.authCancelled))
-        case .failed: return (.lift, .failed(.authFailed))
+        if env.liftNeedsFaceID() {
+            switch await authenticate() {
+            case .passed: break
+            case .cancelled: return (.lift, .failed(.authCancelled))
+            case .failed: return (.lift, .failed(.authFailed))
+            }
         }
         if !env.isPhoneUnlocked() { return (.lift, .failed(.phoneLocked)) }
         return (.lift, await lift(link))
